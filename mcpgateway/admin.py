@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -63,7 +63,7 @@ from mcpgateway.services.resource_service import ResourceNotFoundError, Resource
 from mcpgateway.services.root_service import RootService
 from mcpgateway.services.server_service import ServerNotFoundError, ServerService
 from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, ToolNotFoundError, ToolService
-from mcpgateway.utils.create_jwt_token import get_jwt_token
+from mcpgateway.utils.create_jwt_token import create_jwt_token, get_jwt_token
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.verify_credentials import require_auth, require_basic_auth
@@ -80,6 +80,23 @@ root_service = RootService()
 logger = logging.getLogger("mcpgateway")
 
 admin_router = APIRouter(prefix="/admin", tags=["Admin UI"])
+
+
+####################
+# Login Models     #
+####################
+class LoginRequest(BaseModel):
+    """Request model for admin login."""
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    """Response model for successful admin login."""
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
 
 ####################
 # Admin UI Routes  #
@@ -3806,3 +3823,67 @@ async def admin_test_gateway(request: GatewayTestRequest, user: str = Depends(re
         logger.warning(f"Gateway test failed: {e}")
         latency_ms = int((time.monotonic() - start_time) * 1000)
         return GatewayTestResponse(status_code=502, latency_ms=latency_ms, body={"error": "Request failed", "details": str(e)})
+####################
+# Login Endpoints  #
+####################
+@admin_router.post("/login", response_model=LoginResponse)
+async def admin_login(credentials: LoginRequest) -> LoginResponse:
+    """
+    Authenticate admin user and return JWT token.
+
+    This endpoint validates the provided username and password against the
+    configured admin credentials (BASIC_AUTH_USER and BASIC_AUTH_PASSWORD).
+    On successful authentication, it generates and returns a JWT token.
+
+    Args:
+        credentials: LoginRequest containing username and password
+
+    Returns:
+        LoginResponse: Contains access_token, token_type, and expires_in
+
+    Raises:
+        HTTPException: 401 Unauthorized if credentials are invalid
+    """
+    logger.debug(f"Login attempt for user: {credentials.username}")
+
+    # Validate credentials against configured admin user
+    if (credentials.username == settings.basic_auth_user and
+        credentials.password == settings.basic_auth_password):
+
+        # Generate JWT token with username as subject
+        token_data = {"sub": credentials.username}
+        token = await create_jwt_token(token_data)
+
+        logger.info(f"Successful login for user: {credentials.username}")
+
+        return LoginResponse(
+            access_token=token,
+            token_type="bearer",
+            expires_in=settings.token_expiry * 60  # Convert minutes to seconds
+        )
+    else:
+        logger.warning(f"Failed login attempt for user: {credentials.username}")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+
+@admin_router.post("/logout")
+async def admin_logout(user: str = Depends(require_auth)) -> Dict[str, str]:
+    """
+    Logout the current admin user.
+
+    This endpoint provides a logout mechanism for authenticated users.
+    The actual token invalidation should be handled client-side by
+    discarding the JWT token.
+
+    Args:
+        user: Authenticated user from require_auth dependency
+
+    Returns:
+        Dict with success message
+    """
+    logger.info(f"User logged out: {user}")
+    return {"message": "Logged out successfully"}
