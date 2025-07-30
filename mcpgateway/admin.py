@@ -62,9 +62,9 @@ from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayN
 from mcpgateway.services.prompt_service import PromptNotFoundError, PromptService
 from mcpgateway.services.resource_service import ResourceNotFoundError, ResourceService
 from mcpgateway.services.root_service import RootService
-from mcpgateway.services.server_service import ServerNotFoundError, ServerService
-from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, ToolNotFoundError, ToolService
-from mcpgateway.utils.create_jwt_token import get_jwt_token
+from mcpgateway.services.server_service import ServerError, ServerNotFoundError, ServerService
+from mcpgateway.services.tool_service import ToolError, ToolNotFoundError, ToolService
+from mcpgateway.utils.create_jwt_token import create_jwt_token, get_jwt_token
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.verify_credentials import require_auth, require_basic_auth
