@@ -22,6 +22,7 @@ gateway-specific extensions for federation support.
 # Standard
 import base64
 from datetime import datetime, timezone
+from enum import Enum
 import json
 import logging
 import re
@@ -549,8 +550,8 @@ class ToolUpdate(BaseModelWithConfigDict):
     name: Optional[str] = Field(None, description="Unique name for the tool")
     url: Optional[Union[str, AnyHttpUrl]] = Field(None, description="Tool endpoint URL")
     description: Optional[str] = Field(None, description="Tool description")
-    request_type: Optional[Literal["GET", "POST", "PUT", "DELETE", "PATCH", "SSE", "STDIO", "STREAMABLEHTTP"]] = Field(None, description="HTTP method to be used for invoking the tool")
     integration_type: Optional[Literal["MCP", "REST"]] = Field(None, description="Tool integration type")
+    request_type: Optional[Literal["GET", "POST", "PUT", "DELETE", "PATCH", "SSE", "STDIO", "STREAMABLEHTTP"]] = Field(None, description="HTTP method to be used for invoking the tool")
     headers: Optional[Dict[str, str]] = Field(None, description="Additional headers to send when invoking the tool")
     input_schema: Optional[Dict[str, Any]] = Field(None, description="JSON Schema for validating tool parameters")
     annotations: Optional[Dict[str, Any]] = Field(None, description="Tool annotations for behavior hints")
@@ -644,8 +645,8 @@ class ToolUpdate(BaseModelWithConfigDict):
         Raises:
             ValueError: When value is unsafe
         """
-        integration_type = values.config.get("integration_type", "MCP")
 
+        integration_type = values.data.get("integration_type", "MCP")
         if integration_type == "MCP":
             allowed = ["SSE", "STREAMABLEHTTP", "STDIO"]
         else:  # REST
@@ -1433,6 +1434,34 @@ class PromptCreate(BaseModel):
         return v
 
 
+class PromptExecuteArgs(BaseModel):
+    """
+    Schema for args executing a prompt
+
+    Attributes:
+        args (Dict[str, str]): Arguments for prompt execution.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    args: Dict[str, str] = Field(default_factory=dict, description="Arguments for prompt execution")
+
+    @field_validator("args")
+    @classmethod
+    def validate_args(cls, v: dict) -> dict:
+        """Ensure prompt arguments pass XSS validation
+
+        Args:
+            v (dict): Value to validate
+
+        Returns:
+            dict: Value if validated as safe
+        """
+        for val in v.values():
+            SecurityValidator.validate_no_xss(val, "Prompt execution arguments")
+        return v
+
+
 class PromptUpdate(BaseModelWithConfigDict):
     """Schema for updating an existing prompt.
 
@@ -1539,6 +1568,24 @@ class PromptInvocation(BaseModelWithConfigDict):
 
 
 # --- Gateway Schemas ---
+
+
+# --- Transport Type ---
+class TransportType(str, Enum):
+    """
+    Enumeration of supported transport mechanisms for communication between components.
+
+    Attributes:
+        SSE (str): Server-Sent Events transport.
+        HTTP (str): Standard HTTP-based transport.
+        STDIO (str): Standard input/output transport.
+        STREAMABLEHTTP (str): HTTP transport with streaming.
+    """
+
+    SSE = "SSE"
+    HTTP = "HTTP"
+    STDIO = "STDIO"
+    STREAMABLEHTTP = "STREAMABLEHTTP"
 
 
 class GatewayCreate(BaseModel):
@@ -1649,6 +1696,31 @@ class GatewayCreate(BaseModel):
         auth_value = cls._process_auth_fields(info)
 
         return auth_value
+
+    @field_validator("transport")
+    @classmethod
+    def validate_transport(cls, v: str) -> str:
+        """
+        Validates that the given transport value is one of the supported TransportType values.
+
+        Args:
+            v (str): The transport value to validate.
+
+        Returns:
+            str: The validated transport value if it is valid.
+
+        Raises:
+            ValueError: If the provided value is not a valid transport type.
+
+        Valid transport types are defined in the TransportType enum:
+            - SSE
+            - HTTP
+            - STDIO
+            - STREAMABLEHTTP
+        """
+        if v not in [t.value for t in TransportType]:
+            raise ValueError(f"Invalid transport type: {v}. Must be one of: {', '.join([t.value for t in TransportType])}")
+        return v
 
     @staticmethod
     def _process_auth_fields(info: ValidationInfo) -> Optional[Dict[str, Any]]:
@@ -1810,13 +1882,13 @@ class GatewayUpdate(BaseModelWithConfigDict):
         Raises:
             ValueError: If auth type is invalid
         """
-        auth_type = values.get("auth_type")
+
+        auth_type = values.data.get("auth_type")
 
         if auth_type == "basic":
             # For basic authentication, both username and password must be present
-            username = values.get("auth_username")
-            password = values.get("auth_password")
-
+            username = values.data.get("auth_username")
+            password = values.data.get("auth_password")
             if not username or not password:
                 raise ValueError("For 'basic' auth, both 'auth_username' and 'auth_password' must be provided.")
 
@@ -1825,7 +1897,7 @@ class GatewayUpdate(BaseModelWithConfigDict):
 
         if auth_type == "bearer":
             # For bearer authentication, only token is required
-            token = values.get("auth_token")
+            token = values.data.get("auth_token")
 
             if not token:
                 raise ValueError("For 'bearer' auth, 'auth_token' must be provided.")
@@ -1834,8 +1906,8 @@ class GatewayUpdate(BaseModelWithConfigDict):
 
         if auth_type == "authheaders":
             # For headers authentication, both key and value must be present
-            header_key = values.get("auth_header_key")
-            header_value = values.get("auth_header_value")
+            header_key = values.data.get("auth_header_key")
+            header_value = values.data.get("auth_header_value")
 
             if not header_key or not header_value:
                 raise ValueError("For 'headers' auth, both 'auth_header_key' and 'auth_header_value' must be provided.")
@@ -1961,6 +2033,11 @@ class GatewayRead(BaseModelWithConfigDict):
         """
         auth_type = values.auth_type
         auth_value_encoded = values.auth_value
+
+        # Skip validation logic if masked value
+        if auth_value_encoded == settings.masked_auth_value:
+            return values
+
         auth_value = decode_auth(auth_value_encoded)
         if auth_type == "basic":
             auth = auth_value.get("Authorization")
@@ -1984,6 +2061,40 @@ class GatewayRead(BaseModelWithConfigDict):
             values.auth_header_key, values.auth_header_value = k, v
 
         return values
+
+    def masked(self) -> "GatewayRead":
+        """
+        Return a masked version of the model instance with sensitive authentication fields hidden.
+
+        This method creates a dictionary representation of the model data and replaces sensitive fields
+        such as `auth_value`, `auth_password`, `auth_token`, and `auth_header_value` with a masked
+        placeholder value defined in `settings.masked_auth_value`. Masking is only applied if the fields
+        are present and not already masked.
+
+        Args:
+            None
+
+        Returns:
+            GatewayRead: A new instance of the GatewayRead model with sensitive authentication-related fields
+            masked to prevent exposure of sensitive information.
+
+        Notes:
+            - The `auth_value` field is only masked if it exists and its value is different from the masking
+            placeholder.
+            - Other sensitive fields (`auth_password`, `auth_token`, `auth_header_value`) are masked if present.
+            - Fields not related to authentication remain unchanged.
+        """
+        masked_data = self.model_dump()
+
+        # Only mask if auth_value is present and not already masked
+        if masked_data.get("auth_value") and masked_data["auth_value"] != settings.masked_auth_value:
+            masked_data["auth_value"] = settings.masked_auth_value
+
+        masked_data["auth_password"] = settings.masked_auth_value if masked_data.get("auth_password") else None
+        masked_data["auth_token"] = settings.masked_auth_value if masked_data.get("auth_token") else None
+        masked_data["auth_header_value"] = settings.masked_auth_value if masked_data.get("auth_header_value") else None
+
+        return GatewayRead.model_validate(masked_data)
 
 
 class FederatedTool(BaseModelWithConfigDict):
@@ -2051,9 +2162,10 @@ class RPCRequest(BaseModel):
         Raises:
             ValueError: When value is not safe
         """
-        if not re.match(r"^[a-zA-Z][a-zA-Z0-9_\.]*$", v):
+        SecurityValidator.validate_no_xss(v, "RPC method name")
+        if not re.match(settings.validation_tool_method_pattern, v):
             raise ValueError("Invalid method name format")
-        if len(v) > 128:  # MCP method name limit
+        if len(v) > settings.validation_max_method_length:
             raise ValueError("Method name too long")
         return v
 

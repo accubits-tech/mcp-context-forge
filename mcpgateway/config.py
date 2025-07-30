@@ -60,7 +60,7 @@ from fastapi import HTTPException
 import jq
 from jsonpath_ng.ext import parse
 from jsonpath_ng.jsonpath import JSONPath
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logging.basicConfig(
@@ -115,6 +115,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     auth_required: bool = True
     token_expiry: int = 10080  # minutes
+
+    require_token_expiration: bool = Field(default=False, description="Require all JWT tokens to have expiration claims")  # Default to flexible mode for backward compatibility
 
     #  Encryption key phrase for auth storage
     auth_encryption_secret: str = "my-test-salt"
@@ -277,6 +279,9 @@ class Settings(BaseSettings):
     health_check_interval: int = 60  # seconds
     health_check_timeout: int = 10  # seconds
     unhealthy_threshold: int = 5  # after this many failures, mark as Offline
+
+    # Validation Gateway URL
+    gateway_validation_timeout: int = 5  # seconds
 
     filelock_name: str = "gateway_service_leader.lock"
 
@@ -470,7 +475,8 @@ class Settings(BaseSettings):
             ...     print('error')
             error
         """
-        valid_types = {"http", "ws", "sse", "all"}
+        # valid_types = {"http", "ws", "sse", "all"}
+        valid_types = {"sse", "streamablehttp", "all", "http"}
         if self.transport_type not in valid_types:
             raise ValueError(f"Invalid transport type. Must be one of: {valid_types}")
 
@@ -493,7 +499,8 @@ class Settings(BaseSettings):
         r"<(script|iframe|object|embed|link|meta|base|form|img|svg|video|audio|source|track|area|map|canvas|applet|frame|frameset|html|head|body|style)\b|</*(script|iframe|object|embed|link|meta|base|form|img|svg|video|audio|source|track|area|map|canvas|applet|frame|frameset|html|head|body|style)>"
     )
 
-    validation_dangerous_js_pattern: str = r"javascript:|vbscript:|on\w+\s*=|data:.*script"
+    validation_dangerous_js_pattern: str = r"(?i)(?:^|\s|[\"'`<>=])(javascript:|vbscript:|data:\s*[^,]*[;\s]*(javascript|vbscript)|\bon[a-z]+\s*=|<\s*script\b)"
+
     validation_allowed_url_schemes: List[str] = ["http://", "https://", "ws://", "wss://"]
 
     # Character validation patterns
@@ -502,6 +509,7 @@ class Settings(BaseSettings):
     validation_safe_uri_pattern: str = r"^[a-zA-Z0-9_\-.:/?=&%]+$"
     validation_unsafe_uri_pattern: str = r'[<>"\'\\]'
     validation_tool_name_pattern: str = r"^[a-zA-Z][a-zA-Z0-9._-]*$"  # MCP tool naming
+    validation_tool_method_pattern: str = r"^[a-zA-Z][a-zA-Z0-9_\./-]*$"
 
     # MCP-compliant size limits (configurable via env)
     validation_max_name_length: int = 255
@@ -511,6 +519,8 @@ class Settings(BaseSettings):
     validation_max_json_depth: int = 10
     validation_max_url_length: int = 2048
     validation_max_rpc_param_size: int = 262144  # 256KB
+
+    validation_max_method_length: int = 128
 
     # Allowed MIME types
     validation_allowed_mime_types: List[str] = [
@@ -531,6 +541,9 @@ class Settings(BaseSettings):
 
     # Rate limiting
     validation_max_requests_per_minute: int = 60
+
+    # Masking value for all sensitive data
+    masked_auth_value: str = "*****"
 
 
 def extract_using_jq(data, jq_filter=""):

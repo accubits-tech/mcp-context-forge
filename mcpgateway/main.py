@@ -31,6 +31,7 @@ from contextlib import asynccontextmanager
 import json
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from urllib.parse import urlparse, urlunparse
 
 # Third-Party
 from fastapi import (
@@ -54,6 +55,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # First-Party
 from mcpgateway import __version__
@@ -77,11 +79,13 @@ from mcpgateway.schemas import (
     GatewayUpdate,
     JsonPathModifier,
     PromptCreate,
+    PromptExecuteArgs,
     PromptRead,
     PromptUpdate,
     ResourceCreate,
     ResourceRead,
     ResourceUpdate,
+    RPCRequest,
     ServerCreate,
     ServerRead,
     ServerUpdate,
@@ -90,7 +94,7 @@ from mcpgateway.schemas import (
     ToolUpdate,
 )
 from mcpgateway.services.completion_service import CompletionService
-from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayService
+from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNameConflictError, GatewayService
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.prompt_service import (
     PromptError,
@@ -128,7 +132,6 @@ from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.verify_credentials import require_auth, require_auth_override
 from mcpgateway.validation.jsonrpc import (
     JSONRPCError,
-    validate_request,
 )
 
 # Import the admin routes from the new module
@@ -476,6 +479,9 @@ app.add_middleware(DocsAuthMiddleware)
 # Add streamable HTTP middleware for /mcp routes
 app.add_middleware(MCPPathRewriteMiddleware)
 
+# Trust all proxies (or lock down with a list of host patterns)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
 
 # Set up Jinja2 templates and store in app state for later use
 templates = Jinja2Templates(directory=str(settings.templates_dir))
@@ -595,6 +601,42 @@ async def invalidate_resource_cache(uri: Optional[str] = None) -> None:
         resource_cache.delete(uri)
     else:
         resource_cache.clear()
+
+
+def get_protocol_from_request(request: Request) -> str:
+    """
+    Return "https" or "http" based on:
+     1) X-Forwarded-Proto (if set by a proxy)
+     2) request.url.scheme  (e.g. when Gunicorn/Uvicorn is terminating TLS)
+
+    Args:
+        request (Request): The FastAPI request object.
+
+    Returns:
+        str: The protocol used for the request, either "http" or "https".
+    """
+    forwarded = request.headers.get("x-forwarded-proto")
+    if forwarded:
+        # may be a comma-separated list; take the first
+        return forwarded.split(",")[0].strip()
+    return request.url.scheme
+
+
+def update_url_protocol(request: Request) -> str:
+    """
+    Update the base URL protocol based on the request's scheme or forwarded headers.
+
+    Args:
+        request (Request): The FastAPI request object.
+
+    Returns:
+        str: The base URL with the correct protocol.
+    """
+    parsed = urlparse(str(request.base_url))
+    proto = get_protocol_from_request(request)
+    new_parsed = parsed._replace(scheme=proto)
+    # urlunparse keeps netloc and path intact
+    return urlunparse(new_parsed).rstrip("/")
 
 
 # Protocol APIs #
@@ -919,8 +961,9 @@ async def sse_endpoint(request: Request, server_id: str, user: str = Depends(req
     """
     try:
         logger.debug(f"User {user} is establishing SSE connection for server {server_id}")
-        base_url = str(request.base_url).rstrip("/")
+        base_url = update_url_protocol(request)
         server_sse_url = f"{base_url}/servers/{server_id}"
+
         transport = SSETransport(base_url=server_sse_url)
         await transport.connect()
         await session_registry.add_session(transport.session_id, transport)
@@ -1590,7 +1633,13 @@ async def get_prompt(
         Rendered prompt or metadata.
     """
     logger.debug(f"User: {user} requested prompt: {name} with args={args}")
-    return await prompt_service.get_prompt(db, name, args)
+    try:
+        PromptExecuteArgs(args=args)
+        return await prompt_service.get_prompt(db, name, args)
+    except Exception as ex:
+        logger.error(f"Error retrieving prompt {name}: {ex}")
+        if isinstance(ex, ValueError):
+            return JSONResponse(content={"message": "Prompt execution arguments contains HTML tags that may cause security issues"}, status_code=422)
 
 
 @prompt_router.get("/{name}")
@@ -1759,6 +1808,8 @@ async def register_gateway(
             return JSONResponse(content={"message": "Unable to connect to gateway"}, status_code=502)
         if isinstance(ex, ValueError):
             return JSONResponse(content={"message": "Unable to process input"}, status_code=400)
+        if isinstance(ex, GatewayNameConflictError):
+            return JSONResponse(content={"message": "Gateway name already exists"}, status_code=400)
         if isinstance(ex, RuntimeError):
             return JSONResponse(content={"message": "Error during execution"}, status_code=500)
         return JSONResponse(content={"message": "Unexpected error"}, status_code=500)
@@ -1919,11 +1970,12 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user: str 
     try:
         logger.debug(f"User {user} made an RPC request")
         body = await request.json()
-        validate_request(body)
         method = body["method"]
         # rpc_id = body.get("id")
         params = body.get("params", {})
         cursor = params.get("cursor")  # Extract cursor parameter
+
+        RPCRequest(jsonrpc="2.0", method=method, params=params)  # Validate the request body against the RPCRequest model
 
         if method == "tools/list":
             tools = await tool_service.list_tools(db, cursor=cursor)
@@ -1979,6 +2031,8 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user: str 
     except JSONRPCError as e:
         return e.to_dict()
     except Exception as e:
+        if isinstance(e, ValueError):
+            return JSONResponse(content={"message": "Method invalid"}, status_code=422)
         logger.error(f"RPC error: {str(e)}")
         return {
             "jsonrpc": "2.0",
@@ -2055,7 +2109,8 @@ async def utility_sse_endpoint(request: Request, user: str = Depends(require_aut
     """
     try:
         logger.debug("User %s requested SSE connection", user)
-        base_url = str(request.base_url).rstrip("/")
+        base_url = update_url_protocol(request)
+
         transport = SSETransport(base_url=base_url)
         await transport.connect()
         await session_registry.add_session(transport.session_id, transport)
