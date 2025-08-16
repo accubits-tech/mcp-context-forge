@@ -307,7 +307,7 @@ services:
     restart: unless-stopped
     networks: [mcpnet]
     ports:
-      - "8888:8080"    # Map host port 8888 to container port 8080
+      - "8778:8080"    # Map host port 8888 to container port 8080
     command: ["-transport=sse", "-listen=0.0.0.0", "-port=8080", "-log-level=info"]
 
   ###############################################################################
