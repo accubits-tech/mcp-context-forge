@@ -143,7 +143,7 @@ services:
   redis:
     image: redis:latest
     ports:
-      - "6379:6379"      # expose only if you want host access
+      - "6779:6379"      # expose only if you want host access
     networks: [mcpnet]
 
 ###############################################################################
