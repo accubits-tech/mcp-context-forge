@@ -45,6 +45,7 @@ services:
       # - DATABASE_URL=mysql+pymysql://admin:${MARIADB_PASSWORD:-changeme}@mariadb:3306/mcp
       # - DATABASE_URL=mongodb://admin:${MONGO_PASSWORD:-changeme}@mongodb:27017/mcp
       - CACHE_TYPE=redis # backend for caching (memory, redis, database, or none)
+      - ALLOWED_ORIGINS=*
       - REDIS_URL=redis://redis:6379/0
       - JWT_SECRET_KEY=my-test-key
       - BASIC_AUTH_USER=admin
