@@ -91,9 +91,9 @@ graph TB
 
 | Feature | URL/Command | Actions | Expected Result | Status | Notes |
 |---------|-------------|---------|-----------------|--------|-------|
-| Start Time Server (No Auth) | `npx -y supergateway --stdio "uvx mcp_server_time -- --local-timezone=Europe/Dublin" --port 8101` | Launch MCP time server without auth | Server running on port 8101 | ☐ | SSE at http://localhost:8101/sse |
-| Start Time Server (Auth) | `npx -y supergateway --stdio "uvx mcp_server_time -- --local-timezone=Europe/Dublin" --port 8102 --auth-token secret123` | Launch MCP time server with auth | Server running on port 8102 | ☐ | Requires Bearer token |
-| Start Git Server | `npx -y supergateway --stdio "uvx mcp_server_git -- ." --port 8103` | Launch MCP git server | Server running on port 8103 | ☐ | Provides git operations |
+| Start Time Server (No Auth) | `python3 -m mcpgateway.translate --stdio "uvx mcp_server_time -- --local-timezone=Europe/Dublin" --expose-sse --port 8101` | Launch MCP time server without auth | Server running on port 8101 | ☐ | SSE at http://localhost:8101/sse |
+| Start Time Server (Auth) | `python3 -m mcpgateway.translate --stdio "uvx mcp_server_time -- --local-timezone=Europe/Dublin" --expose-sse --port 8102` | Launch MCP time server with auth | Server running on port 8102 | ☐ | Add Authorization header when registering |
+| Start Git Server | `python3 -m mcpgateway.translate --stdio "uvx mcp_server_git -- ." --expose-sse --port 8103` | Launch MCP git server | Server running on port 8103 | ☐ | Provides git operations |
 | Verify Time Server Health | `curl http://localhost:8101/health` | Check server status | `{"status":"healthy","uptime_seconds":XXX}` | ☐ | No auth endpoint |
 | Test Auth Server | `curl -H "Authorization: Bearer secret123" http://localhost:8102/sse` | Test SSE with auth | SSE stream starts (Ctrl+C to exit) | ☐ | Confirms auth working |
 
@@ -158,14 +158,14 @@ graph TB
 
 | Feature | URL | Commands | Expected Result | Status | Notes |
 |---------|-----|----------|-----------------|--------|-------|
-| Create REST Tool | `curl -X POST -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" -H "Content-Type: application/json" -d '{"name": "weather_api", "url": "https://api.openweathermap.org/data/2.5/weather", "description": "Get current weather data", "integrationType": "REST", "requestType": "GET", "headers": {"X-API-Key": "demo-key"}, "inputSchema": {"type": "object", "properties": {"q": {"type": "string", "description": "City name"}, "units": {"type": "string", "enum": ["metric", "imperial"]}}, "required": ["q"]}}' $GW_URL/tools \| jq` | Virtualize REST API | Success (201) | ☐ | REST as MCP tool |
+| Create REST Tool | `curl -X POST -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" -H "Content-Type: application/json" -d '{"name": "weather_api", "url": "https://api.openweathermap.org/data/2.5/weather", "description": "Get current weather data", "integrationType": "REST", "requestType": "GET", "headers": {"X-API-Key": "demo-key"}, "input_schema": {"type": "object", "properties": {"q": {"type": "string", "description": "City name"}, "units": {"type": "string", "enum": ["metric", "imperial"]}}, "required": ["q"]}}' $GW_URL/tools \| jq` | Virtualize REST API | Success (201) | ☐ | REST as MCP tool |
 
 ## 8. MCP Wrapper Testing
 
 | Feature | URL | Commands | Expected Result | Status | Notes |
 |---------|-----|----------|-----------------|--------|-------|
 | Install Package | `pip install mcp-contextforge-gateway` | Install for wrapper | Package installed | ☐ | If not already done |
-| Set Environment | `export MCP_SERVER_CATALOG_URLS="$GW_URL/servers/$TIME_SERVER_UUID" && export MCP_AUTH_TOKEN=$MCPGATEWAY_BEARER_TOKEN` | Configure wrapper | Environment set | ☐ | Point to virtual server |
+| Set Environment | `export MCP_SERVER_URL="$GW_URL/servers/$TIME_SERVER_UUID" && export MCP_AUTH=$MCPGATEWAY_BEARER_TOKEN` | Configure wrapper | Environment set | ☐ | Point to virtual server |
 | Test Wrapper Init | `echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \| python3 -m mcpgateway.wrapper 2>/dev/null \| jq` | Initialize via stdio | Returns capabilities with tools | ☐ | Stdio to HTTP bridge |
 | List Tools via Wrapper | `echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \| python3 -m mcpgateway.wrapper 2>/dev/null \| jq` | List tools via stdio | Returns tool list | ☐ | Wrapper functionality |
 
@@ -183,8 +183,8 @@ graph TB
       "command": "python",
       "args": ["-m", "mcpgateway.wrapper"],
       "env": {
-        "MCP_SERVER_CATALOG_URLS": "$GW_URL/servers/$TIME_SERVER_UUID",
-        "MCP_AUTH_TOKEN": "$MCPGATEWAY_BEARER_TOKEN"
+        "MCP_SERVER_URL": "$GW_URL/servers/$TIME_SERVER_UUID",
+        "MCP_AUTH": "$MCPGATEWAY_BEARER_TOKEN"
       }
     }
   }

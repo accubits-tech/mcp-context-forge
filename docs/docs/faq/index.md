@@ -16,7 +16,7 @@
     OCI image (Docker/Podman) - shares host network so localhost works:
 
     ```bash
-    podman run --network=host -p 4444:4444 ghcr.io/ibm/mcp-context-forge:latest
+    podman run --network=host -p 4444:4444 ghcr.io/ibm/mcp-context-forge:0.5.0
     ```
 
 ???+ example "🗂️ What URLs are available for the admin interface and API docs?"
@@ -66,7 +66,7 @@
 ???+ example "🪛 What are some advanced environment variables I can configure?"
     - Basic: `HOST`, `PORT`, `APP_ROOT_PATH`
     - Auth: `AUTH_REQUIRED`, `BASIC_AUTH_*`, `JWT_SECRET_KEY`
-    - Logging: `LOG_LEVEL`, `LOG_FORMAT`, `LOG_FILE`
+    - Logging: `LOG_LEVEL`, `LOG_FORMAT`, `LOG_TO_FILE`, `LOG_FILE`, `LOG_FOLDER`, `LOG_ROTATION_ENABLED`, `LOG_MAX_SIZE_MB`, `LOG_BACKUP_COUNT`
     - Transport: `TRANSPORT_TYPE`, `WEBSOCKET_PING_INTERVAL`, `SSE_RETRY_TIMEOUT`
     - Tools: `TOOL_TIMEOUT`, `MAX_TOOL_RETRIES`, `TOOL_RATE_LIMIT`, `TOOL_CONCURRENT_LIMIT`
     - Federation: `FEDERATION_ENABLED`, `FEDERATION_PEERS`, `FEDERATION_SYNC_INTERVAL`
@@ -108,7 +108,7 @@
     Include a persistent volume with your container or Kubernetes deployment. Ex:
 
     ```bash
-    docker run -v $(pwd)/data:/app ghcr.io/ibm/mcp-context-forge:latest
+    docker run -v $(pwd)/data:/app ghcr.io/ibm/mcp-context-forge:0.5.0
     ```
 
     For production use, we recommend PostgreSQL. A Docker Compose target with PostgreSQL and Redis is provided.
@@ -127,6 +127,18 @@
     ```
 
     The token is used for all API interactions and can be configured to expire using `-exp`.
+
+???+ tip "📥 How do I bulk import multiple tools at once?"
+    Use the `/admin/tools/import` endpoint to import up to 200 tools in a single request:
+
+    ```bash
+    curl -X POST http://localhost:4444/admin/tools/import \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "Content-Type: application/json" \
+      --data-binary @tools.json
+    ```
+
+    See the [Bulk Import guide](../manage/bulk-import.md) for details on format and error handling.
 
 ???+ example "🛡️ How do I enable TLS and configure CORS?"
     - Use `make podman-run-ssl` for self-signed certs or drop your own certificate under `certs`.
@@ -212,9 +224,9 @@
                    token=os.environ["MCPGATEWAY_BEARER_TOKEN"])
     ```
 
-???+ example "🦾 How do I connect GitHub's mcp-server-git via SuperGateway?"
+???+ example "🦾 How do I connect GitHub's mcp-server-git via Translate Bridge?"
     ```bash
-    npx -y supergateway --stdio "uvx mcp-server-git"
+    python3 -m mcpgateway.translate --stdio "uvx mcp-server-git" --expose-sse --port 9001
     ```
 
 ---

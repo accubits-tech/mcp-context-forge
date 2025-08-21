@@ -27,14 +27,16 @@ Examples:
 # Standard
 import asyncio
 from datetime import datetime, timezone
-import logging
 import mimetypes
+import os
 import re
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+import uuid
 
 # Third-Party
 import parse
-from sqlalchemy import delete, func, not_, select
+from sqlalchemy import case, delete, desc, Float, func, not_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -44,15 +46,23 @@ from mcpgateway.db import ResourceMetric
 from mcpgateway.db import ResourceSubscription as DbSubscription
 from mcpgateway.db import server_resource_association
 from mcpgateway.models import ResourceContent, ResourceTemplate, TextContent
-from mcpgateway.schemas import (
-    ResourceCreate,
-    ResourceMetrics,
-    ResourceRead,
-    ResourceSubscription,
-    ResourceUpdate,
-)
+from mcpgateway.observability import create_span
+from mcpgateway.schemas import ResourceCreate, ResourceMetrics, ResourceRead, ResourceSubscription, ResourceUpdate, TopPerformer
+from mcpgateway.services.logging_service import LoggingService
+from mcpgateway.utils.metrics_common import build_top_performers
 
-logger = logging.getLogger(__name__)
+# Plugin support imports (conditional)
+try:
+    # First-Party
+    from mcpgateway.plugins.framework import GlobalContext, PluginManager, ResourcePostFetchPayload, ResourcePreFetchPayload
+
+    PLUGINS_AVAILABLE = True
+except ImportError:
+    PLUGINS_AVAILABLE = False
+
+# Initialize logging service first
+logging_service = LoggingService()
+logger = logging_service.get_logger(__name__)
 
 
 class ResourceError(Exception):
@@ -98,10 +108,21 @@ class ResourceService:
     - Active/inactive status management
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the resource service."""
         self._event_subscribers: Dict[str, List[asyncio.Queue]] = {}
         self._template_cache: Dict[str, ResourceTemplate] = {}
+
+        # Initialize plugin manager if plugins are enabled
+        self._plugin_manager = None
+        if PLUGINS_AVAILABLE and os.getenv("PLUGINS_ENABLED", "false").lower() == "true":
+            try:
+                config_file = os.getenv("PLUGIN_CONFIG_FILE", "plugins/config.yaml")
+                self._plugin_manager = PluginManager(config_file)
+                logger.info(f"Plugin manager initialized for ResourceService with config: {config_file}")
+            except Exception as e:
+                logger.warning(f"Plugin manager initialization failed in ResourceService: {e}")
+                self._plugin_manager = None
 
         # Initialize mime types
         mimetypes.init()
@@ -115,6 +136,50 @@ class ResourceService:
         # Clear subscriptions
         self._event_subscribers.clear()
         logger.info("Resource service shutdown complete")
+
+    async def get_top_resources(self, db: Session, limit: int = 5) -> List[TopPerformer]:
+        """Retrieve the top-performing resources based on execution count.
+
+        Queries the database to get resources with their metrics, ordered by the number of executions
+        in descending order. Uses the resource URI as the name field for TopPerformer objects.
+        Returns a list of TopPerformer objects containing resource details and performance metrics.
+
+        Args:
+            db (Session): Database session for querying resource metrics.
+            limit (int): Maximum number of resources to return. Defaults to 5.
+
+        Returns:
+            List[TopPerformer]: A list of TopPerformer objects, each containing:
+                - id: Resource ID.
+                - name: Resource URI (used as the name field).
+                - execution_count: Total number of executions.
+                - avg_response_time: Average response time in seconds, or None if no metrics.
+                - success_rate: Success rate percentage, or None if no metrics.
+                - last_execution: Timestamp of the last execution, or None if no metrics.
+        """
+        results = (
+            db.query(
+                DbResource.id,
+                DbResource.uri.label("name"),  # Using URI as the name field for TopPerformer
+                func.count(ResourceMetric.id).label("execution_count"),  # pylint: disable=not-callable
+                func.avg(ResourceMetric.response_time).label("avg_response_time"),  # pylint: disable=not-callable
+                case(
+                    (
+                        func.count(ResourceMetric.id) > 0,  # pylint: disable=not-callable
+                        func.sum(case((ResourceMetric.is_success.is_(True), 1), else_=0)).cast(Float) / func.count(ResourceMetric.id) * 100,  # pylint: disable=not-callable
+                    ),
+                    else_=None,
+                ).label("success_rate"),
+                func.max(ResourceMetric.timestamp).label("last_execution"),  # pylint: disable=not-callable
+            )
+            .outerjoin(ResourceMetric)
+            .group_by(DbResource.id, DbResource.uri)
+            .order_by(desc("execution_count"))
+            .limit(limit)
+            .all()
+        )
+
+        return build_top_performers(results)
 
     def _convert_resource_to_read(self, resource: DbResource) -> ResourceRead:
         """
@@ -151,14 +216,31 @@ class ResourceService:
             "avg_response_time": avg_rt,
             "last_execution_time": last_time,
         }
+        resource_dict["tags"] = resource.tags or []
         return ResourceRead.model_validate(resource_dict)
 
-    async def register_resource(self, db: Session, resource: ResourceCreate) -> ResourceRead:
+    async def register_resource(
+        self,
+        db: Session,
+        resource: ResourceCreate,
+        created_by: Optional[str] = None,
+        created_from_ip: Optional[str] = None,
+        created_via: Optional[str] = None,
+        created_user_agent: Optional[str] = None,
+        import_batch_id: Optional[str] = None,
+        federation_source: Optional[str] = None,
+    ) -> ResourceRead:
         """Register a new resource.
 
         Args:
             db: Database session
             resource: Resource creation schema
+            created_by: User who created the resource
+            created_from_ip: IP address of the creator
+            created_via: Method used to create the resource (e.g., API, UI)
+            created_user_agent: User agent of the creator
+            import_batch_id: Optional batch ID for bulk imports
+            federation_source: Optional source of the resource if federated
 
         Returns:
             Created resource information
@@ -204,6 +286,14 @@ class ResourceService:
                 text_content=resource.content if is_text else None,
                 binary_content=(resource.content.encode() if is_text and isinstance(resource.content, str) else resource.content if isinstance(resource.content, bytes) else None),
                 size=len(resource.content) if resource.content else 0,
+                tags=resource.tags or [],
+                created_by=created_by,
+                created_from_ip=created_from_ip,
+                created_via=created_via,
+                created_user_agent=created_user_agent,
+                import_batch_id=import_batch_id,
+                federation_source=federation_source,
+                version=1,
             )
 
             # Add to DB
@@ -223,7 +313,7 @@ class ResourceService:
             db.rollback()
             raise ResourceError(f"Failed to register resource: {str(e)}")
 
-    async def list_resources(self, db: Session, include_inactive: bool = False) -> List[ResourceRead]:
+    async def list_resources(self, db: Session, include_inactive: bool = False, tags: Optional[List[str]] = None) -> List[ResourceRead]:
         """
         Retrieve a list of registered resources from the database.
 
@@ -236,6 +326,7 @@ class ResourceService:
             db (Session): The SQLAlchemy database session.
             include_inactive (bool): If True, include inactive resources in the result.
                 Defaults to False.
+            tags (Optional[List[str]]): Filter resources by tags. If provided, only resources with at least one matching tag will be returned.
 
         Returns:
             List[ResourceRead]: A list of resources represented as ResourceRead objects.
@@ -256,6 +347,16 @@ class ResourceService:
         query = select(DbResource)
         if not include_inactive:
             query = query.where(DbResource.is_active)
+
+        # Add tag filtering if tags are provided
+        if tags:
+            # Filter resources that have any of the specified tags
+            tag_conditions = []
+            for tag in tags:
+                tag_conditions.append(func.json_contains(DbResource.tags, f'"{tag}"'))
+            if tag_conditions:
+                query = query.where(func.or_(*tag_conditions))
+
         # Cursor-based pagination logic can be implemented here in the future.
         resources = db.execute(query).scalars().all()
         return [self._convert_resource_to_read(r) for r in resources]
@@ -298,49 +399,151 @@ class ResourceService:
         resources = db.execute(query).scalars().all()
         return [self._convert_resource_to_read(r) for r in resources]
 
-    async def read_resource(self, db: Session, uri: str) -> ResourceContent:
-        """Read a resource's content.
+    async def read_resource(self, db: Session, uri: str, request_id: Optional[str] = None, user: Optional[str] = None, server_id: Optional[str] = None) -> ResourceContent:
+        """Read a resource's content with plugin hook support.
 
         Args:
             db: Database session
             uri: Resource URI to read
+            request_id: Optional request ID for tracing
+            user: Optional user making the request
+            server_id: Optional server ID for context
 
         Returns:
             Resource content object
 
         Raises:
             ResourceNotFoundError: If resource not found
+            ResourceError: If blocked by plugin
 
         Examples:
             >>> from mcpgateway.services.resource_service import ResourceService
             >>> from unittest.mock import MagicMock
             >>> service = ResourceService()
             >>> db = MagicMock()
-            >>> uri = 'resource_uri'
+            >>> uri = 'http://example.com/resource.txt'
             >>> db.execute.return_value.scalar_one_or_none.return_value = MagicMock(content='test')
             >>> import asyncio
             >>> result = asyncio.run(service.read_resource(db, uri))
             >>> result == 'test'
             True
         """
-        # Check for template
-        if "{" in uri and "}" in uri:
-            return await self._read_template_resource(uri)
+        start_time = time.monotonic()
 
-        # Find resource
-        resource = db.execute(select(DbResource).where(DbResource.uri == uri).where(DbResource.is_active)).scalar_one_or_none()
+        # Create trace span for resource reading
+        with create_span(
+            "resource.read",
+            {
+                "resource.uri": uri,
+                "user": user or "anonymous",
+                "server_id": server_id,
+                "request_id": request_id,
+                "http.url": uri if uri.startswith("http") else None,
+                "resource.type": "template" if ("{" in uri and "}" in uri) else "static",
+            },
+        ) as span:
+            # Generate request ID if not provided
+            if not request_id:
+                request_id = str(uuid.uuid4())
 
-        if not resource:
-            # Check if inactive resource exists
-            inactive_resource = db.execute(select(DbResource).where(DbResource.uri == uri).where(not_(DbResource.is_active))).scalar_one_or_none()
+            original_uri = uri
+            contexts = None
 
-            if inactive_resource:
-                raise ResourceNotFoundError(f"Resource '{uri}' exists but is inactive")
+            # Call pre-fetch hooks if plugin manager is available
+            if self._plugin_manager and PLUGINS_AVAILABLE:
+                # Initialize plugin manager if needed
+                # pylint: disable=protected-access
+                if not self._plugin_manager._initialized:
+                    await self._plugin_manager.initialize()
+                # pylint: enable=protected-access
 
-            raise ResourceNotFoundError(f"Resource not found: {uri}")
+                # Create plugin context
+                global_context = GlobalContext(request_id=request_id, user=user, server_id=server_id)
 
-        # Return content
-        return resource.content
+                # Create pre-fetch payload
+                pre_payload = ResourcePreFetchPayload(uri=uri, metadata={})
+
+                # Execute pre-fetch hooks
+                try:
+                    pre_result, contexts = await self._plugin_manager.resource_pre_fetch(pre_payload, global_context)
+
+                    # Check if we should continue
+                    if not pre_result.continue_processing:
+                        # Plugin blocked the resource fetch
+                        if pre_result.violation:
+                            logger.warning(f"Resource blocked by plugin: {pre_result.violation.reason} (URI: {uri})")
+                            raise ResourceError(f"Resource blocked: {pre_result.violation.reason}")
+                        raise ResourceError("Resource fetch blocked by plugin")
+
+                    # Use modified URI if plugin changed it
+                    if pre_result.modified_payload:
+                        uri = pre_result.modified_payload.uri
+                        logger.debug(f"Resource URI modified by plugin: {original_uri} -> {uri}")
+                except ResourceError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error in resource pre-fetch hooks: {e}")
+                    # Continue without plugin processing if there's an error
+
+            # Original resource fetching logic
+            # Check for template
+            if "{" in uri and "}" in uri:
+                content = await self._read_template_resource(uri)
+            else:
+                # Find resource
+                resource = db.execute(select(DbResource).where(DbResource.uri == uri).where(DbResource.is_active)).scalar_one_or_none()
+
+                if not resource:
+                    # Check if inactive resource exists
+                    inactive_resource = db.execute(select(DbResource).where(DbResource.uri == uri).where(not_(DbResource.is_active))).scalar_one_or_none()
+
+                    if inactive_resource:
+                        raise ResourceNotFoundError(f"Resource '{uri}' exists but is inactive")
+
+                    raise ResourceNotFoundError(f"Resource not found: {uri}")
+
+                content = resource.content
+
+            # Call post-fetch hooks if plugin manager is available
+            if self._plugin_manager and PLUGINS_AVAILABLE:
+                # Create post-fetch payload
+                post_payload = ResourcePostFetchPayload(uri=original_uri, content=content)
+
+                # Execute post-fetch hooks
+                try:
+                    post_result, _ = await self._plugin_manager.resource_post_fetch(
+                        post_payload,
+                        global_context,
+                        contexts,  # Pass contexts from pre-fetch
+                    )
+
+                    # Check if we should continue
+                    if not post_result.continue_processing:
+                        # Plugin blocked the resource after fetching
+                        if post_result.violation:
+                            logger.warning(f"Resource content blocked by plugin: {post_result.violation.reason} (URI: {original_uri})")
+                            raise ResourceError(f"Resource content blocked: {post_result.violation.reason}")
+                        raise ResourceError("Resource content blocked by plugin")
+
+                    # Use modified content if plugin changed it
+                    if post_result.modified_payload:
+                        content = post_result.modified_payload.content
+                        logger.debug(f"Resource content modified by plugin for URI: {original_uri}")
+                except ResourceError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error in resource post-fetch hooks: {e}")
+                    # Continue with unmodified content if there's an error
+
+            # Set success attributes on span
+            if span:
+                span.set_attribute("success", True)
+                span.set_attribute("duration.ms", (time.monotonic() - start_time) * 1000)
+                if content:
+                    span.set_attribute("content.size", len(str(content)))
+
+            # Return content
+            return content
 
     async def toggle_resource_status(self, db: Session, resource_id: int, activate: bool) -> ResourceRead:
         """
@@ -498,6 +701,7 @@ class ResourceService:
         Raises:
             ResourceNotFoundError: If the resource is not found
             ResourceError: For other update errors
+            IntegrityError: If a database integrity error occurs.
             Exception: For unexpected errors
 
         Examples:
@@ -551,6 +755,9 @@ class ResourceService:
                 )
                 resource.size = len(resource_update.content)
 
+            # Update tags if provided
+            if resource_update.tags is not None:
+                resource.tags = resource_update.tags
             resource.updated_at = datetime.now(timezone.utc)
             db.commit()
             db.refresh(resource)
@@ -560,7 +767,10 @@ class ResourceService:
 
             logger.info(f"Updated resource: {uri}")
             return self._convert_resource_to_read(resource)
-
+        except IntegrityError as ie:
+            db.rollback()
+            logger.error(f"IntegrityErrors in group: {ie}")
+            raise ie
         except Exception as e:
             db.rollback()
             if isinstance(e, ResourceNotFoundError):
@@ -979,9 +1189,9 @@ class ResourceService:
         """
         total_executions = db.execute(select(func.count()).select_from(ResourceMetric)).scalar() or 0  # pylint: disable=not-callable
 
-        successful_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(ResourceMetric.is_success)).scalar() or 0  # pylint: disable=not-callable
+        successful_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(ResourceMetric.is_success.is_(True))).scalar() or 0  # pylint: disable=not-callable
 
-        failed_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(not_(ResourceMetric.is_success))).scalar() or 0  # pylint: disable=not-callable
+        failed_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(ResourceMetric.is_success.is_(False))).scalar() or 0  # pylint: disable=not-callable
 
         min_response_time = db.execute(select(func.min(ResourceMetric.response_time))).scalar()
 

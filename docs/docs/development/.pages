@@ -1,6 +1,7 @@
 nav:
   - index.md
   - developer-onboarding.md
+  - mcp-developer-guide-json-rpc.md
   - github.md
   - building.md
   - documentation.md
@@ -8,3 +9,4 @@ nav:
   - packaging.md
   - developer-workstation.md
   - doctest-coverage.md
+  - module-documentation.md

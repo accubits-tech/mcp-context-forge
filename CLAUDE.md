@@ -2,185 +2,342 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Never mention Claude or Claude Code in your PRs, diffs, etc.
+
 ## Project Overview
 
-MCP Context Forge is a production-grade gateway, registry, and proxy for the Model Context Protocol (MCP). It unifies REST, MCP, and A2A services with federation, virtual servers, retries, security, and an optional admin UI. The project is built with FastAPI and supports deployment via PyPI or Docker.
+MCP Gateway (ContextForge) is a production-grade gateway, proxy, and registry for Model Context Protocol (MCP) servers. It federates MCP and REST services, providing unified discovery, auth, rate-limiting, observability, virtual servers, multi-transport protocols, and an optional Admin UI.
 
-## Key Commands
+## Development Commands
 
-### Development Setup
+### Core Development Workflow
+
 ```bash
-# Create virtual environment and install dependencies
-make venv
-make install-dev    # Install with dev dependencies
-make install-db     # Install with Postgres and Redis support
+# Setup and Installation
+make venv            # Create virtual environment
+make install-dev     # Install with development dependencies
+make install-db      # Install with database adapters (Redis, PostgreSQL)
 
-# Activate virtual environment
-. ~/.venv/mcpgateway/bin/activate
+# Running the Gateway
+make dev             # Run with hot reload on port 8000 (uvicorn)
+make serve          # Run production server (gunicorn)
+mcpgateway --host 0.0.0.0 --port 4444  # Run directly via CLI
+
+# Testing
+make doctest         # Run all doctest
+make test            # Run all tests with coverage
+pytest tests/unit/   # Run specific test directory
+pytest -k "test_name" # Run specific test by name
+
+# Code Quality
+make lint            # Run all linters on mcpgateway/
+make lint-web        # Run linters for web files (html, js, css)
+make check-manifest  # Verify MANIFEST.in completeness
+
+# Build & Distribution
+make dist            # Build wheel and sdist packages
 ```
 
-### Running the Application
-```bash
-# Development server with auto-reload
-make dev            # Runs on http://localhost:8000
+### Authentication & Token Generation
 
-# Production server
-make serve          # Gunicorn on :4444
-make serve-ssl      # HTTPS with self-signed certs
+```bash
+# Generate JWT bearer token
+python3 -m mcpgateway.utils.create_jwt_token \
+    --username admin --exp 10080 --secret my-test-key
+
+# Export for API calls
+export MCPGATEWAY_BEARER_TOKEN=$(python3 -m mcpgateway.utils.create_jwt_token \
+    --username admin --exp 0 --secret my-test-key)
 ```
 
-### Testing
+### Working with MCP Servers
+
 ```bash
-# Run unit tests
-make test
+# Run mcpgateway.translate to expose stdio servers via HTTP/SSE
+python3 -m mcpgateway.translate \
+    --stdio "uvx mcp-server-git" --port 9000
 
-# Run tests with coverage
-make coverage
-
-# Run smoke test
-make smoketest
-
-# Run specific test types
-pytest tests/unit/          # Unit tests only
-pytest tests/integration/   # Integration tests
-pytest tests/e2e/          # End-to-end tests
-```
-
-### Code Quality
-```bash
-# Run all linters
-make lint
-
-# Individual linters
-make black          # Format code
-make isort          # Sort imports
-make ruff           # Fast Python linter
-make mypy           # Type checking
-make bandit         # Security scanning
-make flake8         # Style guide enforcement
-make pylint         # Code analysis
-```
-
-### Database Management
-```bash
-# Database migrations (uses Alembic)
-alembic upgrade head    # Apply migrations
-alembic revision --autogenerate -m "description"  # Create new migration
+# Run the stdio wrapper for MCP clients
+export MCP_AUTH=$MCPGATEWAY_BEARER_TOKEN
+export MCP_SERVER_URL=http://localhost:4444/servers/UUID/mcp
+python3 -m mcpgateway.wrapper
 ```
 
 ## Architecture Overview
 
 ### Core Components
 
-1. **FastAPI Application** (`mcpgateway/main.py`)
-   - Entry point for all HTTP/WebSocket traffic
-   - Handles MCP protocol operations
-   - Manages authentication, CORS, caching
+The gateway is built on **FastAPI** with **Pydantic** for validation and **SQLAlchemy** for persistence. Key architectural decisions are documented in `docs/docs/architecture/adr/`.
 
-2. **Services** (`mcpgateway/services/`)
-   - `gateway_service.py`: Gateway registration and federation
-   - `server_service.py`: MCP server connections and management
-   - `tool_service.py`: Tool discovery and invocation
-   - `resource_service.py`: Resource management
-   - `prompt_service.py`: Prompt template handling
-   - `completion_service.py`: AI completion operations
+### Directory Structure
 
-3. **Transports** (`mcpgateway/transports/`)
-   - WebSocket, SSE, stdio, and streamable HTTP support
-   - Protocol translation between different transport types
+- **`mcpgateway/`** - Main application code
+  - `main.py` - FastAPI application entry point
+  - `cli.py` - Command-line interface
+  - `models.py` - SQLAlchemy ORM models
+  - `schemas.py` - Pydantic schemas for validation
+  - `config.py` - Settings management via environment variables
+  - `admin.py` - Admin UI routes (HTMX + Alpine.js)
 
-4. **Models** (`mcpgateway/models.py`)
-   - SQLAlchemy ORM models for database entities
-   - Support for SQLite (default) and PostgreSQL
+- **`mcpgateway/services/`** - Business logic layer
+  - `gateway_service.py` - Federation and peer gateway management
+  - `server_service.py` - Virtual server composition
+  - `tool_service.py` - Tool registry and invocation
+  - `resource_service.py` - Resource caching and updates
+  - `prompt_service.py` - Prompt template management
 
-5. **Federation** (`mcpgateway/federation/`)
-   - Discovery of federated gateways
-   - Forward requests to remote gateways
+- **`mcpgateway/transports/`** - Protocol implementations
+  - `sse_transport.py` - Server-Sent Events
+  - `websocket_transport.py` - WebSocket bidirectional
+  - `stdio_transport.py` - Standard I/O for CLI tools
+  - `streamablehttp_transport.py` - HTTP streaming
 
-### Key Design Patterns
+- **`mcpgateway/plugins/`** - Plugin framework
+  - `framework/` - Plugin loader, manager, and registry
+  - Plugin configurations in `plugins/config.yaml`
 
-- **Async-first**: All I/O operations use asyncio
-- **Dependency Injection**: FastAPI's DI system for services
-- **Pluggable Backends**: Redis/in-memory caching, SQLite/PostgreSQL
-- **Transport Agnostic**: Unified handling of different MCP transports
+### Database & Caching
 
-### Configuration
+- **SQLite** default (`sqlite:///./mcp.db`)
+- **PostgreSQL** support via `psycopg2-binary`
+- **Redis** for distributed caching and federation
+- **Alembic** for database migrations (`mcpgateway/alembic/`)
 
-Environment variables (see `.env.example`):
-- `MCPGATEWAY_DATABASE_URL`: Database connection string
-- `MCPGATEWAY_REDIS_URL`: Redis connection (optional)
-- `MCPGATEWAY_AUTH_REQUIRED`: Enable authentication
-- `MCPGATEWAY_UI_ENABLED`: Enable admin UI
-- `MCPGATEWAY_LOG_LEVEL`: Logging verbosity
+### Service Federation
 
-### Testing Strategy
+The gateway supports multi-instance federation:
+- Auto-discovery via mDNS/Zeroconf
+- Manual peer registration via API
+- Health checks and automatic failover
+- Shared tool/resource catalogs across peers
 
-- **Unit Tests**: Test individual components in isolation
-- **Integration Tests**: Test service interactions
-- **E2E Tests**: Full workflow testing with real servers
-- **Playwright Tests**: UI automation testing
+### Virtual Servers
 
-### Common Development Workflows
+Virtual servers bundle tools, prompts, and resources:
+- Compose multiple MCP servers into one logical unit
+- Control tool visibility per virtual server
+- Support multiple protocol endpoints per server
 
-1. **Adding a New MCP Server**
-   - Register via Admin UI or API POST to `/servers`
-   - Test with `GET /tools` to verify discovery
+## Key Environment Variables
 
-2. **Debugging Transport Issues**
-   - Check logs with `MCPGATEWAY_LOG_LEVEL=DEBUG`
-   - Use transport-specific test endpoints
+```bash
+# Core Settings
+HOST=0.0.0.0
+PORT=4444
+DATABASE_URL=sqlite:///./mcp.db  # or postgresql://...
+REDIS_URL=redis://localhost:6379
 
-3. **Database Schema Changes**
-   - Modify models in `models.py`
-   - Generate migration with Alembic
-   - Test migration on dev database first
+# Authentication
+JWT_SECRET_KEY=your-secret-key
+BASIC_AUTH_USER=admin
+BASIC_AUTH_PASSWORD=changeme
+AUTH_REQUIRED=true
 
-## Important Notes
+# UI & Admin
+MCPGATEWAY_UI_ENABLED=true
+MCPGATEWAY_ADMIN_API_ENABLED=true
 
-- Current version (0.3.1) is alpha/beta - not production-ready
-- Always run linters before committing: `make lint`
-- Database files (*.db, *.sqlite) are gitignored
-- Use type hints throughout the codebase
-- Follow existing code style and patterns
+# Bulk Import (Admin UI feature)
+MCPGATEWAY_BULK_IMPORT_ENABLED=true      # Enable/disable bulk import endpoint
+MCPGATEWAY_BULK_IMPORT_MAX_TOOLS=200     # Maximum tools per import batch
+MCPGATEWAY_BULK_IMPORT_RATE_LIMIT=10     # Requests per minute limit
 
+# A2A (Agent-to-Agent) Features
+MCPGATEWAY_A2A_ENABLED=true              # Enable/disable A2A agent features
+MCPGATEWAY_A2A_MAX_AGENTS=100            # Maximum number of A2A agents allowed
+MCPGATEWAY_A2A_DEFAULT_TIMEOUT=30        # Default timeout for A2A HTTP requests (seconds)
+MCPGATEWAY_A2A_MAX_RETRIES=3             # Maximum retry attempts for A2A calls
+MCPGATEWAY_A2A_METRICS_ENABLED=true      # Enable/disable A2A metrics collection
 
+# Federation
+MCPGATEWAY_ENABLE_MDNS_DISCOVERY=true
+MCPGATEWAY_ENABLE_FEDERATION=true
 
-# GitHub Issue Creation
+# Logging (Dual Output Support)
+LOG_LEVEL=INFO
+LOG_TO_FILE=false  # Enable file logging (default: stdout/stderr only)
+LOG_ROTATION_ENABLED=false  # Enable log rotation when file logging is enabled
+LOG_MAX_SIZE_MB=1  # Max file size before rotation (MB)
+LOG_BACKUP_COUNT=5  # Number of backup files to keep
+LOG_FILE=mcpgateway.log  # Log filename (when file logging enabled)
+LOG_FOLDER=logs  # Log directory (when file logging enabled)
 
-You are an AI assistant tasked with creating well-structured GitHub issues for feature requests, bug reports, or improvement ideas. Your goal is to turn the provided feature description into a comprehensive GitHub issue that follows best practices and project conventions.
+# Dual Logging Features:
+# - Console logs: Human-readable text format (always enabled)
+# - File logs: Structured JSON format (when LOG_TO_FILE=true)
+# - All logs appear in both outputs: application, services, HTTP access logs
+# - File rotation: Configurable size-based rotation with backup retention
 
-First, you will be given a feature description and a repository URL. Here they are:
+# Development
+RELOAD=true  # For development hot-reload
+```
 
-<feature_description> #$ARGUMENTS </feature_description>
+## Testing Strategy
 
-Follow these steps to complete the task, make a todo list and think ultrahard:
+### Unit Tests
+- Located in `tests/unit/`
+- Cover all services, transports, and utilities
+- Use pytest fixtures for database and async testing
 
-### 1. Research the repository:
-   - Visit the provided repo url and examine the repository's structure, existing issues, and documentation.
-   - Look for any CONTRIBUTING.md, ISSUE_TEMPLATE.md, or similar files that contain guidelines for creating issues.
-   - Note the project's coding style, naming conventions, and any specific requirements for submitting issues.
+### Integration Tests
+- Located in `tests/integration/`
+- Test API endpoints and cross-service workflows
+- Mock external dependencies
 
-### 2. Research best practices:
-   - Search for current best practices in writing GitHub issues, focusing on clarity, completeness, and actionability.
-   - Look for examples of well-written issues in popular open-source projects for inspiration.
+### UI Tests
+- Located in `tests/playwright/`
+- Use Playwright for browser automation
+- Test admin UI interactions and real-time features
 
-### 3. Present a plan:
-   - Based on your research, outline a plan for creating the GitHub issue.
-   - Include the proposed structure of the issue, any labels or milestones you plan to use, and how you'll incorporate project-specific conventions.
-   - Present this plan in <plan> tags.
-   - Include the reference link to featurebase or any other link that has the source of the user request
-   *K for Command, *L for Cascade
+### Running Specific Tests
+```bash
+# Run tests for a specific module
+pytest tests/unit/mcpgateway/services/test_tool_service.py
 
-### 4. Create the GitHub issue:
-   - Once the plan is approved, draft the GitHub issue content.
-   - Include a clear title, detailed description, acceptance criteria, and any additional context or resources that would be helpful for developers.
-   - Use appropriate formatting (e.g., Markdown) to enhance readability.
-   - Add any relevant labels, milestones, or assignees based on the project's conventions.
+# Run with verbose output
+pytest -v tests/
 
-### 5. Final output:
-   - Present the complete GitHub issue content in <github_issue> tags.
-   - Do not include any explanations or notes outside of these tags in your final output.
+# Run with specific markers
+pytest -m "not slow"
+```
 
-Remember to think carefully about the feature description and how to best present it as a GitHub issue. Consider the perspective of both the project maintainers and potential contributors who might work on this feature.
+## Common Development Tasks
 
-Your final output should consist of only the content within the <github_issue> tags, ready to be copied and pasted directly into GitHub. Make sure to use the GitHub CLI `gh issue create` to create the actual issue after you generate. Assign either the label `bug` or `enhancement` based on the nature of the issue.
+### Adding a New MCP Server
+1. Start the server (e.g., via `mcpgateway.translate` for stdio servers)
+2. Register it as a gateway peer via POST `/gateways`
+3. Create a virtual server bundling its tools via POST `/servers`
+4. Access via the virtual server's SSE/WebSocket endpoints
+
+### Debugging Federation Issues
+1. Check peer health: `GET /gateways`
+2. Verify mDNS discovery: `MCPGATEWAY_ENABLE_MDNS_DISCOVERY=true`
+3. Check Redis connectivity if using distributed cache
+4. Review logs for connection errors
+
+### Plugin Development
+1. Create plugin in `plugins/your_plugin/`
+2. Add manifest in `plugin-manifest.yaml`
+3. Register in `plugins/config.yaml`
+4. Implement required hooks (pre/post request/response)
+
+## A2A (Agent-to-Agent) Integration
+
+The gateway supports A2A (Agent-to-Agent) compatible agents that can be integrated as tools within virtual servers. A2A agents represent external AI agents (e.g., OpenAI, Anthropic, custom agents) that support standardized Agent-to-Agent communication protocols.
+
+### A2A Agent Features
+
+- **Multi-Agent Support**: Support for different agent types (OpenAI, Anthropic, custom, etc.)
+- **Protocol Versioning**: A2A protocol version support for compatibility
+- **Authentication**: Flexible auth types (API key, OAuth, bearer tokens)
+- **Metrics & Monitoring**: Full metrics collection for agent interactions
+- **Virtual Server Integration**: Agents can be exposed as tools within virtual servers
+- **Tagging System**: Tag-based categorization and filtering
+- **Admin UI**: Dedicated tab in admin interface for agent management
+
+### A2A Agent Configuration
+
+```json
+{
+  "name": "my-assistant-agent",
+  "description": "Custom AI assistant for specific tasks",
+  "endpoint_url": "https://api.example.com/agent",
+  "agent_type": "custom",
+  "protocol_version": "1.0",
+  "capabilities": {
+    "chat": true,
+    "tools": false,
+    "streaming": true
+  },
+  "config": {
+    "max_tokens": 1000,
+    "temperature": 0.7
+  },
+  "auth_type": "api_key",
+  "auth_value": "your-api-key",
+  "tags": ["ai", "assistant", "production"]
+}
+```
+
+### A2A Agent Integration Workflow
+
+1. **Register Agent**: Add A2A agent via `/a2a` API or Admin UI
+2. **Associate with Server**: Include agent ID in virtual server's `associated_a2a_agents`
+3. **Auto-Tool Creation**: Gateway automatically creates tools for associated agents
+4. **Tool Invocation**: Tools can be invoked normally, routing calls to A2A agents
+5. **Metrics Collection**: All interactions are tracked with comprehensive metrics
+
+### A2A Configuration Options
+
+The A2A features can be configured via environment variables:
+
+```bash
+# Core A2A Settings
+MCPGATEWAY_A2A_ENABLED=true              # Master switch for A2A features
+MCPGATEWAY_A2A_MAX_AGENTS=100            # Limit on number of agents
+MCPGATEWAY_A2A_METRICS_ENABLED=true      # Enable metrics collection
+
+# Performance Settings
+MCPGATEWAY_A2A_DEFAULT_TIMEOUT=30        # HTTP timeout for agent calls (seconds)
+MCPGATEWAY_A2A_MAX_RETRIES=3             # Retry attempts for failed calls
+```
+
+**Configuration Effects:**
+
+- `MCPGATEWAY_A2A_ENABLED=false`: Completely disables A2A features
+  - A2A API endpoints return 404
+  - A2A tab hidden in admin UI
+  - A2A agents cannot be invoked as tools
+  - A2A metrics excluded from aggregations
+
+- `MCPGATEWAY_A2A_METRICS_ENABLED=false`: Disables metrics for A2A agents
+  - Agent interactions still work
+  - No performance data collected
+  - Metrics endpoints exclude A2A data
+
+**Security Considerations:**
+
+- A2A agents can access external endpoints
+- Credentials are stored encrypted in the database
+- Rate limiting applies to agent invocations
+- All interactions are logged for audit trails
+
+## API Endpoints Overview
+
+### Core MCP Operations
+- `POST /` - JSON-RPC endpoint for MCP protocol
+- `GET /servers/{id}/sse` - SSE transport for MCP
+- `WS /servers/{id}/ws` - WebSocket transport
+
+### Admin APIs (when enabled)
+- `GET/POST /tools` - Tool management
+- `GET/POST /resources` - Resource management
+- `GET/POST /prompts` - Prompt templates
+- `GET/POST /servers` - Virtual servers
+- `GET/POST /gateways` - Peer gateways
+- `GET/POST /a2a` - A2A (Agent-to-Agent) agent management
+- `GET /admin` - Admin UI dashboard
+
+### A2A Agent Management
+- `GET /a2a` - List A2A agents with filtering
+- `POST /a2a` - Register new A2A agent
+- `GET /a2a/{agent_id}` - Get specific agent details
+- `PUT /a2a/{agent_id}` - Update agent configuration
+- `DELETE /a2a/{agent_id}` - Remove agent
+- `POST /a2a/{agent_id}/toggle` - Enable/disable agent
+- `POST /a2a/{agent_name}/invoke` - Direct agent invocation
+
+# You have access to cli tools
+- You can use `gh` for github commands, e.g. gh issue view 586
+
+# To test everything:
+
+make autoflake isort black pre-commit
+make doctest test htmlcov smoketest lint-web flake8 bandit interrogate pylint verify
+
+# Rules
+- When using git commit always add a -s to sign commits
+- Don't include effor estimates, or 'phases'
+
+# TO test individual files, ensure you're activated the env first, ex:
+. /home/cmihai/.venv/mcpgateway/bin/activate && pytest --cov-report=annotate tests/unit/mcpgateway/test_translate.py

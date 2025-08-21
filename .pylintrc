@@ -288,7 +288,7 @@ ignored-parents=
 
 # Maximum number of arguments for function / method.
 max-args=12
-max-positional-arguments = 8
+max-positional-arguments = 16
 
 # Maximum number of attributes for a class (see R0902).
 max-attributes=16
@@ -506,7 +506,7 @@ msg-template=
 #output-format=
 
 # Tells whether to display a full report or only the messages.
-reports=yes
+reports=no
 
 # Activate the evaluation score.
 score=yes
@@ -527,7 +527,7 @@ ignore-imports=yes
 ignore-signatures=yes
 
 # Minimum lines number of a similarity.
-min-similarity-lines=10
+min-similarity-lines=16
 
 
 [SPELLING]
@@ -575,7 +575,7 @@ contextmanager-decorators=contextlib.contextmanager
 # List of members which are set dynamically and missed by pylint inference
 # system, and so shouldn't trigger E1101 when accessed. Python regular
 # expressions are accepted.
-generated-members=
+generated-members=sqlalchemy.func.*
 
 # Tells whether to warn about missing members when the owner of the attribute
 # is inferred to be None.

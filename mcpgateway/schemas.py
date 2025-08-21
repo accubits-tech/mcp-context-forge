@@ -39,6 +39,7 @@ from mcpgateway.models import Resource as MCPResource
 from mcpgateway.models import ResourceContent, TextContent
 from mcpgateway.models import Tool as MCPTool
 from mcpgateway.utils.services_auth import decode_auth, encode_auth
+from mcpgateway.validation.tags import validate_tags_field
 from mcpgateway.validators import SecurityValidator
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,31 @@ class PromptMetrics(BaseModelWithConfigDict):
     last_execution_time: Optional[datetime] = Field(None, description="Timestamp of the most recent invocation")
 
 
+class A2AAgentMetrics(BaseModelWithConfigDict):
+    """
+    Represents the performance and execution statistics for an A2A agent.
+
+    Attributes:
+        total_executions (int): Total number of agent interactions.
+        successful_executions (int): Number of successful agent interactions.
+        failed_executions (int): Number of failed agent interactions.
+        failure_rate (float): Failure rate (failed interactions / total interactions).
+        min_response_time (Optional[float]): Minimum response time in seconds.
+        max_response_time (Optional[float]): Maximum response time in seconds.
+        avg_response_time (Optional[float]): Average response time in seconds.
+        last_execution_time (Optional[datetime]): Timestamp of the most recent interaction.
+    """
+
+    total_executions: int = Field(..., description="Total number of agent interactions")
+    successful_executions: int = Field(..., description="Number of successful agent interactions")
+    failed_executions: int = Field(..., description="Number of failed agent interactions")
+    failure_rate: float = Field(..., description="Failure rate (failed interactions / total interactions)")
+    min_response_time: Optional[float] = Field(None, description="Minimum response time in seconds")
+    max_response_time: Optional[float] = Field(None, description="Maximum response time in seconds")
+    avg_response_time: Optional[float] = Field(None, description="Average response time in seconds")
+    last_execution_time: Optional[datetime] = Field(None, description="Timestamp of the most recent interaction")
+
+
 # --- JSON Path API modifier Schema
 
 
@@ -277,11 +303,11 @@ class AuthenticationValues(BaseModelWithConfigDict):
     auth_value: Optional[str] = Field(None, description="Encoded Authentication values")
 
     # Only For tool read and view tool
-    username: str = Field("", description="Username for basic authentication")
-    password: str = Field("", description="Password for basic authentication")
-    token: str = Field("", description="Bearer token for authentication")
-    auth_header_key: str = Field("", description="Key for custom headers authentication")
-    auth_header_value: str = Field("", description="Value for custom headers authentication")
+    username: Optional[str] = Field("", description="Username for basic authentication")
+    password: Optional[str] = Field("", description="Password for basic authentication")
+    token: Optional[str] = Field("", description="Bearer token for authentication")
+    auth_header_key: Optional[str] = Field("", description="Key for custom headers authentication")
+    auth_header_value: Optional[str] = Field("", description="Value for custom headers authentication")
 
 
 class ToolCreate(BaseModel):
@@ -293,8 +319,8 @@ class ToolCreate(BaseModel):
         name (str): Unique name for the tool.
         url (Union[str, AnyHttpUrl]): Tool endpoint URL.
         description (Optional[str]): Tool description.
-        integration_type (Literal["MCP", "REST"]): Tool integration type. 'MCP' for MCP-compliant tools, 'REST' for REST integrations.
-        request_type (Literal["GET", "POST", "PUT", "DELETE", "SSE", "STDIO", "STREAMABLEHTTP"]): HTTP method to be used for invoking the tool.
+        integration_type (Literal["REST", "MCP"]): Tool integration type - REST for individual endpoints, MCP for gateway-discovered tools.
+        request_type (Literal["GET", "POST", "PUT", "DELETE", "PATCH"]): HTTP method to be used for invoking the tool.
         headers (Optional[Dict[str, str]]): Additional headers to send when invoking the tool.
         input_schema (Optional[Dict[str, Any]]): JSON Schema for validating tool parameters. Alias 'inputSchema'.
         annotations (Optional[Dict[str, Any]]): Tool annotations for behavior hints such as title, readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
@@ -308,7 +334,7 @@ class ToolCreate(BaseModel):
     name: str = Field(..., description="Unique name for the tool")
     url: Union[str, AnyHttpUrl] = Field(None, description="Tool endpoint URL")
     description: Optional[str] = Field(None, description="Tool description")
-    integration_type: Literal["MCP", "REST"] = Field("MCP", description="Tool integration type: 'MCP' for MCP-compliant tools, 'REST' for REST integrations")
+    integration_type: Literal["REST", "MCP", "A2A"] = Field("REST", description="'REST' for individual endpoints, 'MCP' for gateway-discovered tools, 'A2A' for A2A agents")
     request_type: Literal["GET", "POST", "PUT", "DELETE", "PATCH", "SSE", "STDIO", "STREAMABLEHTTP"] = Field("SSE", description="HTTP method to be used for invoking the tool")
     headers: Optional[Dict[str, str]] = Field(None, description="Additional headers to send when invoking the tool")
     input_schema: Optional[Dict[str, Any]] = Field(default_factory=lambda: {"type": "object", "properties": {}}, description="JSON Schema for validating tool parameters", alias="inputSchema")
@@ -319,6 +345,20 @@ class ToolCreate(BaseModel):
     jsonpath_filter: Optional[str] = Field(default="", description="JSON modification filter")
     auth: Optional[AuthenticationValues] = Field(None, description="Authentication credentials (Basic or Bearer Token or custom headers) if required")
     gateway_id: Optional[str] = Field(None, description="id of gateway for the tool")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Tags for categorizing the tool")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings
+        """
+        return validate_tags_field(v)
 
     @field_validator("name")
     @classmethod
@@ -432,44 +472,53 @@ class ToolCreate(BaseModel):
             ValueError: When value is unsafe
 
         Examples:
-            >>> # Test MCP integration types
+            >>> # Test REST integration types with valid method
             >>> from pydantic import ValidationInfo
-            >>> info = type('obj', (object,), {'data': {'integration_type': 'MCP'}})
-            >>> ToolCreate.validate_request_type('SSE', info)
-            'SSE'
+            >>> info = type('obj', (object,), {'data': {'integration_type': 'REST'}})
+            >>> ToolCreate.validate_request_type('POST', info)
+            'POST'
 
             >>> # Test REST integration types
             >>> info = type('obj', (object,), {'data': {'integration_type': 'REST'}})
             >>> ToolCreate.validate_request_type('GET', info)
             'GET'
-            >>> ToolCreate.validate_request_type('POST', info)
-            'POST'
+
+            >>> # Test MCP integration types with valid transport
+            >>> info = type('obj', (object,), {'data': {'integration_type': 'MCP'}})
+            >>> ToolCreate.validate_request_type('SSE', info)
+            'SSE'
 
             >>> # Test invalid REST type
+            >>> info_rest = type('obj', (object,), {'data': {'integration_type': 'REST'}})
             >>> try:
-            ...     ToolCreate.validate_request_type('SSE', info)
+            ...     ToolCreate.validate_request_type('SSE', info_rest)
             ... except ValueError as e:
             ...     "not allowed for REST" in str(e)
             True
 
-            >>> # Test invalid MCP type
-            >>> info = type('obj', (object,), {'data': {'integration_type': 'MCP'}})
+            >>> # Test invalid integration type
+            >>> info = type('obj', (object,), {'data': {'integration_type': 'INVALID'}})
             >>> try:
             ...     ToolCreate.validate_request_type('GET', info)
             ... except ValueError as e:
-            ...     "not allowed for MCP" in str(e)
+            ...     "Unknown integration type" in str(e)
             True
         """
-        data = info.data
-        integration_type = data.get("integration_type")
 
-        if integration_type == "MCP":
-            allowed = ["SSE", "STREAMABLEHTTP", "STDIO"]
-        else:  # REST
+        integration_type = info.data.get("integration_type")
+
+        if integration_type not in ["REST", "MCP"]:
+            raise ValueError(f"Unknown integration type: {integration_type}")
+
+        if integration_type == "REST":
             allowed = ["GET", "POST", "PUT", "DELETE", "PATCH"]
+            if v not in allowed:
+                raise ValueError(f"Request type '{v}' not allowed for REST. Only {allowed} methods are accepted.")
+        elif integration_type == "MCP":
+            allowed = ["SSE", "STDIO", "STREAMABLEHTTP"]
+            if v not in allowed:
+                raise ValueError(f"Request type '{v}' not allowed for MCP. Only {allowed} transports are accepted.")
 
-        if v not in allowed:
-            raise ValueError(f"Request type '{v}' not allowed for {integration_type} integration")
         return v
 
     @model_validator(mode="before")
@@ -536,8 +585,39 @@ class ToolCreate(BaseModel):
                 encoded_auth = encode_auth({"Authorization": f"Bearer {values.get('auth_token', '')}"})
                 values["auth"] = {"auth_type": "bearer", "auth_value": encoded_auth}
             elif auth_type.lower() == "authheaders":
-                encoded_auth = encode_auth({values.get("auth_header_key", ""): values.get("auth_header_value", "")})
-                values["auth"] = {"auth_type": "authheaders", "auth_value": encoded_auth}
+                header_key = values.get("auth_header_key", "")
+                header_value = values.get("auth_header_value", "")
+                if header_key and header_value:
+                    encoded_auth = encode_auth({header_key: header_value})
+                    values["auth"] = {"auth_type": "authheaders", "auth_value": encoded_auth}
+                else:
+                    # Don't encode empty headers - leave auth empty
+                    values["auth"] = {"auth_type": "authheaders", "auth_value": None}
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def prevent_manual_mcp_creation(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Prevent manual creation of MCP tools via API.
+
+        MCP tools should only be created by the gateway service when discovering
+        tools from MCP servers. Users should add MCP servers via the Gateways interface.
+
+        Args:
+            values: The input values
+
+        Returns:
+            Dict[str, Any]: The validated values
+
+        Raises:
+            ValueError: If attempting to manually create MCP integration type
+        """
+        integration_type = values.get("integration_type")
+        if integration_type == "MCP":
+            raise ValueError("Cannot manually create MCP tools. Add MCP servers via the Gateways interface - tools will be auto-discovered and registered with integration_type='MCP'.")
+        if integration_type == "A2A":
+            raise ValueError("Cannot manually create A2A tools. Add A2A agents via the A2A interface - tools will be auto-created when agents are associated with servers.")
         return values
 
 
@@ -548,21 +628,51 @@ class ToolUpdate(BaseModelWithConfigDict):
     """
 
     name: Optional[str] = Field(None, description="Unique name for the tool")
+    custom_name: Optional[str] = Field(None, description="Custom name for the tool")
     url: Optional[Union[str, AnyHttpUrl]] = Field(None, description="Tool endpoint URL")
     description: Optional[str] = Field(None, description="Tool description")
-    integration_type: Optional[Literal["MCP", "REST"]] = Field(None, description="Tool integration type")
-    request_type: Optional[Literal["GET", "POST", "PUT", "DELETE", "PATCH", "SSE", "STDIO", "STREAMABLEHTTP"]] = Field(None, description="HTTP method to be used for invoking the tool")
+    integration_type: Optional[Literal["REST", "MCP", "A2A"]] = Field(None, description="Tool integration type")
+    request_type: Optional[Literal["GET", "POST", "PUT", "DELETE", "PATCH"]] = Field(None, description="HTTP method to be used for invoking the tool")
     headers: Optional[Dict[str, str]] = Field(None, description="Additional headers to send when invoking the tool")
     input_schema: Optional[Dict[str, Any]] = Field(None, description="JSON Schema for validating tool parameters")
     annotations: Optional[Dict[str, Any]] = Field(None, description="Tool annotations for behavior hints")
     jsonpath_filter: Optional[str] = Field(None, description="JSON path filter for rpc tool calls")
     auth: Optional[AuthenticationValues] = Field(None, description="Authentication credentials (Basic or Bearer Token or custom headers) if required")
     gateway_id: Optional[str] = Field(None, description="id of gateway for the tool")
+    tags: Optional[List[str]] = Field(None, description="Tags for categorizing the tool")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings or None if input is None
+        """
+        if v is None:
+            return None
+        return validate_tags_field(v)
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
         """Ensure tool names follow MCP naming conventions
+
+        Args:
+            v (str): Value to validate
+
+        Returns:
+            str: Value if validated as safe
+        """
+        return SecurityValidator.validate_tool_name(v)
+
+    @field_validator("custom_name")
+    @classmethod
+    def validate_custom_name(cls, v: str) -> str:
+        """Ensure custom tool names follow MCP naming conventions
 
         Args:
             v (str): Value to validate
@@ -646,11 +756,16 @@ class ToolUpdate(BaseModelWithConfigDict):
             ValueError: When value is unsafe
         """
 
-        integration_type = values.data.get("integration_type", "MCP")
-        if integration_type == "MCP":
-            allowed = ["SSE", "STREAMABLEHTTP", "STDIO"]
-        else:  # REST
+        integration_type = values.data.get("integration_type", "REST")
+
+        if integration_type == "REST":
             allowed = ["GET", "POST", "PUT", "DELETE", "PATCH"]
+        elif integration_type == "MCP":
+            allowed = ["SSE", "STDIO", "STREAMABLEHTTP"]
+        elif integration_type == "A2A":
+            allowed = ["POST"]  # A2A agents typically use POST
+        else:
+            raise ValueError(f"Unknown integration type: {integration_type}")
 
         if v not in allowed:
             raise ValueError(f"Request type '{v}' not allowed for {integration_type} integration")
@@ -693,8 +808,39 @@ class ToolUpdate(BaseModelWithConfigDict):
                 encoded_auth = encode_auth({"Authorization": f"Bearer {values.get('auth_token', '')}"})
                 values["auth"] = {"auth_type": "bearer", "auth_value": encoded_auth}
             elif auth_type.lower() == "authheaders":
-                encoded_auth = encode_auth({values.get("auth_header_key", ""): values.get("auth_header_value", "")})
-                values["auth"] = {"auth_type": "authheaders", "auth_value": encoded_auth}
+                header_key = values.get("auth_header_key", "")
+                header_value = values.get("auth_header_value", "")
+                if header_key and header_value:
+                    encoded_auth = encode_auth({header_key: header_value})
+                    values["auth"] = {"auth_type": "authheaders", "auth_value": encoded_auth}
+                else:
+                    # Don't encode empty headers - leave auth empty
+                    values["auth"] = {"auth_type": "authheaders", "auth_value": None}
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def prevent_manual_mcp_update(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Prevent updating tools to MCP integration type via API.
+
+        MCP tools should only be managed by the gateway service. Users should not
+        be able to change a REST tool to MCP type or vice versa manually.
+
+        Args:
+            values: The input values
+
+        Returns:
+            Dict[str, Any]: The validated values
+
+        Raises:
+            ValueError: If attempting to update to MCP integration type
+        """
+        integration_type = values.get("integration_type")
+        if integration_type == "MCP":
+            raise ValueError("Cannot update tools to MCP integration type. MCP tools are managed by the gateway service.")
+        if integration_type == "A2A":
+            raise ValueError("Cannot update tools to A2A integration type. A2A tools are managed by the A2A service.")
         return values
 
 
@@ -732,7 +878,24 @@ class ToolRead(BaseModelWithConfigDict):
     metrics: ToolMetrics
     name: str
     gateway_slug: str
-    original_name_slug: str
+    custom_name: str
+    custom_name_slug: str
+    tags: List[str] = Field(default_factory=list, description="Tags for categorizing the tool")
+
+    # Comprehensive metadata for audit tracking
+    created_by: Optional[str] = Field(None, description="Username who created this entity")
+    created_from_ip: Optional[str] = Field(None, description="IP address of creator")
+    created_via: Optional[str] = Field(None, description="Creation method: ui|api|import|federation")
+    created_user_agent: Optional[str] = Field(None, description="User agent of creation request")
+
+    modified_by: Optional[str] = Field(None, description="Username who last modified this entity")
+    modified_from_ip: Optional[str] = Field(None, description="IP address of last modifier")
+    modified_via: Optional[str] = Field(None, description="Modification method")
+    modified_user_agent: Optional[str] = Field(None, description="User agent of modification request")
+
+    import_batch_id: Optional[str] = Field(None, description="UUID of bulk import batch")
+    federation_source: Optional[str] = Field(None, description="Source gateway for federated entities")
+    version: Optional[int] = Field(1, description="Entity version for change tracking")
 
 
 class ToolInvocation(BaseModelWithConfigDict):
@@ -915,6 +1078,20 @@ class ResourceCreate(BaseModel):
     mime_type: Optional[str] = Field(None, description="Resource MIME type")
     template: Optional[str] = Field(None, description="URI template for parameterized resources")
     content: Union[str, bytes] = Field(..., description="Resource content (text or binary)")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Tags for categorizing the resource")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings
+        """
+        return validate_tags_field(v)
 
     @field_validator("uri")
     @classmethod
@@ -999,15 +1176,13 @@ class ResourceCreate(BaseModel):
 
         if isinstance(v, bytes):
             try:
-                v_str = v.decode("utf-8")
-
-                if re.search(SecurityValidator.DANGEROUS_HTML_PATTERN, v_str if isinstance(v, bytes) else v, re.IGNORECASE):
-                    raise ValueError("Content contains HTML tags that may cause display issues")
+                text = v.decode("utf-8")
             except UnicodeDecodeError:
                 raise ValueError("Content must be UTF-8 decodable")
         else:
-            if re.search(SecurityValidator.DANGEROUS_HTML_PATTERN, v if isinstance(v, bytes) else v, re.IGNORECASE):
-                raise ValueError("Content contains HTML tags that may cause display issues")
+            text = v
+        if re.search(SecurityValidator.DANGEROUS_HTML_PATTERN, text, re.IGNORECASE):
+            raise ValueError("Content contains HTML tags that may cause display issues")
 
         return v
 
@@ -1023,6 +1198,22 @@ class ResourceUpdate(BaseModelWithConfigDict):
     mime_type: Optional[str] = Field(None, description="Resource MIME type")
     template: Optional[str] = Field(None, description="URI template for parameterized resources")
     content: Optional[Union[str, bytes]] = Field(None, description="Resource content (text or binary)")
+    tags: Optional[List[str]] = Field(None, description="Tags for categorizing the resource")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings or None if input is None
+        """
+        if v is None:
+            return None
+        return validate_tags_field(v)
 
     @field_validator("name")
     @classmethod
@@ -1094,15 +1285,13 @@ class ResourceUpdate(BaseModelWithConfigDict):
 
         if isinstance(v, bytes):
             try:
-                v_str = v.decode("utf-8")
-
-                if re.search(SecurityValidator.DANGEROUS_HTML_PATTERN, v_str if isinstance(v, bytes) else v, re.IGNORECASE):
-                    raise ValueError("Content contains HTML tags that may cause display issues")
+                text = v.decode("utf-8")
             except UnicodeDecodeError:
                 raise ValueError("Content must be UTF-8 decodable")
         else:
-            if re.search(SecurityValidator.DANGEROUS_HTML_PATTERN, v if isinstance(v, bytes) else v, re.IGNORECASE):
-                raise ValueError("Content contains HTML tags that may cause display issues")
+            text = v
+        if re.search(SecurityValidator.DANGEROUS_HTML_PATTERN, text, re.IGNORECASE):
+            raise ValueError("Content contains HTML tags that may cause display issues")
 
         return v
 
@@ -1128,6 +1317,22 @@ class ResourceRead(BaseModelWithConfigDict):
     updated_at: datetime
     is_active: bool
     metrics: ResourceMetrics
+    tags: List[str] = Field(default_factory=list, description="Tags for categorizing the resource")
+
+    # Comprehensive metadata for audit tracking
+    created_by: Optional[str] = Field(None, description="Username who created this entity")
+    created_from_ip: Optional[str] = Field(None, description="IP address of creator")
+    created_via: Optional[str] = Field(None, description="Creation method: ui|api|import|federation")
+    created_user_agent: Optional[str] = Field(None, description="User agent of creation request")
+
+    modified_by: Optional[str] = Field(None, description="Username who last modified this entity")
+    modified_from_ip: Optional[str] = Field(None, description="IP address of last modifier")
+    modified_via: Optional[str] = Field(None, description="Modification method")
+    modified_user_agent: Optional[str] = Field(None, description="User agent of modification request")
+
+    import_batch_id: Optional[str] = Field(None, description="UUID of bulk import batch")
+    federation_source: Optional[str] = Field(None, description="Source gateway for federated entities")
+    version: Optional[int] = Field(1, description="Entity version for change tracking")
 
 
 class ResourceSubscription(BaseModelWithConfigDict):
@@ -1372,6 +1577,20 @@ class PromptCreate(BaseModel):
     description: Optional[str] = Field(None, description="Prompt description")
     template: str = Field(..., description="Prompt template text")
     arguments: List[PromptArgument] = Field(default_factory=list, description="List of arguments for the template")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Tags for categorizing the prompt")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings
+        """
+        return validate_tags_field(v)
 
     @field_validator("name")
     @classmethod
@@ -1473,6 +1692,23 @@ class PromptUpdate(BaseModelWithConfigDict):
     template: Optional[str] = Field(None, description="Prompt template text")
     arguments: Optional[List[PromptArgument]] = Field(None, description="List of arguments for the template")
 
+    tags: Optional[List[str]] = Field(None, description="Tags for categorizing the prompt")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings or None if input is None
+        """
+        if v is None:
+            return None
+        return validate_tags_field(v)
+
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
@@ -1552,7 +1788,23 @@ class PromptRead(BaseModelWithConfigDict):
     created_at: datetime
     updated_at: datetime
     is_active: bool
+    tags: List[str] = Field(default_factory=list, description="Tags for categorizing the prompt")
     metrics: PromptMetrics
+
+    # Comprehensive metadata for audit tracking
+    created_by: Optional[str] = Field(None, description="Username who created this entity")
+    created_from_ip: Optional[str] = Field(None, description="IP address of creator")
+    created_via: Optional[str] = Field(None, description="Creation method: ui|api|import|federation")
+    created_user_agent: Optional[str] = Field(None, description="User agent of creation request")
+
+    modified_by: Optional[str] = Field(None, description="Username who last modified this entity")
+    modified_from_ip: Optional[str] = Field(None, description="IP address of last modifier")
+    modified_via: Optional[str] = Field(None, description="Modification method")
+    modified_user_agent: Optional[str] = Field(None, description="User agent of modification request")
+
+    import_batch_id: Optional[str] = Field(None, description="UUID of bulk import batch")
+    federation_source: Optional[str] = Field(None, description="Source gateway for federated entities")
+    version: Optional[int] = Field(1, description="Entity version for change tracking")
 
 
 class PromptInvocation(BaseModelWithConfigDict):
@@ -1565,6 +1817,27 @@ class PromptInvocation(BaseModelWithConfigDict):
 
     name: str = Field(..., description="Name of prompt to use")
     arguments: Dict[str, str] = Field(default_factory=dict, description="Arguments for template rendering")
+
+
+# --- Global Config Schemas ---
+class GlobalConfigUpdate(BaseModel):
+    """Schema for updating global configuration.
+
+    Attributes:
+        passthrough_headers (Optional[List[str]]): List of headers allowed to be passed through globally
+    """
+
+    passthrough_headers: Optional[List[str]] = Field(default=None, description="List of headers allowed to be passed through globally")
+
+
+class GlobalConfigRead(BaseModel):
+    """Schema for reading global configuration.
+
+    Attributes:
+        passthrough_headers (Optional[List[str]]): List of headers allowed to be passed through globally
+    """
+
+    passthrough_headers: Optional[List[str]] = Field(default=None, description="List of headers allowed to be passed through globally")
 
 
 # --- Gateway Schemas ---
@@ -1604,6 +1877,7 @@ class GatewayCreate(BaseModel):
         auth_token (Optional[str]): Token for bearer authentication.
         auth_header_key (Optional[str]): Key for custom headers authentication.
         auth_header_value (Optional[str]): Value for custom headers authentication.
+        auth_headers (Optional[List[Dict[str, str]]]): List of custom headers for authentication.
         auth_value (Optional[str]): Alias for authentication value, used for better access post-validation.
     """
 
@@ -1613,18 +1887,37 @@ class GatewayCreate(BaseModel):
     url: Union[str, AnyHttpUrl] = Field(..., description="Gateway endpoint URL")
     description: Optional[str] = Field(None, description="Gateway description")
     transport: str = Field(default="SSE", description="Transport used by MCP server: SSE or STREAMABLEHTTP")
+    passthrough_headers: Optional[List[str]] = Field(default=None, description="List of headers allowed to be passed through from client to target")
 
     # Authorizations
-    auth_type: Optional[str] = Field(None, description="Type of authentication: basic, bearer, headers, or none")
+    auth_type: Optional[str] = Field(None, description="Type of authentication: basic, bearer, headers, oauth, or none")
     # Fields for various types of authentication
     auth_username: Optional[str] = Field(None, description="Username for basic authentication")
     auth_password: Optional[str] = Field(None, description="Password for basic authentication")
     auth_token: Optional[str] = Field(None, description="Token for bearer authentication")
     auth_header_key: Optional[str] = Field(None, description="Key for custom headers authentication")
     auth_header_value: Optional[str] = Field(None, description="Value for custom headers authentication")
+    auth_headers: Optional[List[Dict[str, str]]] = Field(None, description="List of custom headers for authentication")
+
+    # OAuth 2.0 configuration
+    oauth_config: Optional[Dict[str, Any]] = Field(None, description="OAuth 2.0 configuration including grant_type, client_id, encrypted client_secret, URLs, and scopes")
 
     # Adding `auth_value` as an alias for better access post-validation
     auth_value: Optional[str] = Field(None, validate_default=True)
+    tags: Optional[List[str]] = Field(default_factory=list, description="Tags for categorizing the gateway")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings
+        """
+        return validate_tags_field(v)
 
     @field_validator("name")
     @classmethod
@@ -1694,7 +1987,6 @@ class GatewayCreate(BaseModel):
 
         # Process the auth fields and generate auth_value based on auth_type
         auth_value = cls._process_auth_fields(info)
-
         return auth_value
 
     @field_validator("transport")
@@ -1760,17 +2052,66 @@ class GatewayCreate(BaseModel):
 
             return encode_auth({"Authorization": f"Bearer {token}"})
 
+        if auth_type == "oauth":
+            # For OAuth authentication, we don't encode anything here
+            # The OAuth configuration is handled separately in the oauth_config field
+            # This method is only called for traditional auth types
+            return None
+
         if auth_type == "authheaders":
-            # For headers authentication, both key and value must be present
+            # Support both new multi-headers format and legacy single header format
+            auth_headers = data.get("auth_headers")
+            if auth_headers and isinstance(auth_headers, list):
+                # New multi-headers format with enhanced validation
+                header_dict = {}
+                duplicate_keys = set()
+
+                for header in auth_headers:
+                    if not isinstance(header, dict):
+                        continue
+
+                    key = header.get("key")
+                    value = header.get("value", "")
+
+                    # Skip headers without keys
+                    if not key:
+                        continue
+
+                    # Track duplicate keys (last value wins)
+                    if key in header_dict:
+                        duplicate_keys.add(key)
+
+                    # Validate header key format (basic HTTP header validation)
+                    if not all(c.isalnum() or c in "-_" for c in key.replace(" ", "")):
+                        raise ValueError(f"Invalid header key format: '{key}'. Header keys should contain only alphanumeric characters, hyphens, and underscores.")
+
+                    # Store header (empty values are allowed)
+                    header_dict[key] = value
+
+                # Ensure at least one valid header
+                if not header_dict:
+                    raise ValueError("For 'headers' auth, at least one valid header with a key must be provided.")
+
+                # Warn about duplicate keys (optional - could log this instead)
+                if duplicate_keys:
+                    logging.warning(f"Duplicate header keys detected (last value used): {', '.join(duplicate_keys)}")
+
+                # Check for excessive headers (prevent abuse)
+                if len(header_dict) > 100:
+                    raise ValueError("Maximum of 100 headers allowed per gateway.")
+
+                return encode_auth(header_dict)
+
+            # Legacy single header format (backward compatibility)
             header_key = data.get("auth_header_key")
             header_value = data.get("auth_header_value")
 
             if not header_key or not header_value:
-                raise ValueError("For 'headers' auth, both 'auth_header_key' and 'auth_header_value' must be provided.")
+                raise ValueError("For 'headers' auth, either 'auth_headers' list or both 'auth_header_key' and 'auth_header_value' must be provided.")
 
             return encode_auth({header_key: header_value})
 
-        raise ValueError("Invalid 'auth_type'. Must be one of: basic, bearer, or headers.")
+        raise ValueError("Invalid 'auth_type'. Must be one of: basic, bearer, oauth, or headers.")
 
 
 class GatewayUpdate(BaseModelWithConfigDict):
@@ -1784,17 +2125,39 @@ class GatewayUpdate(BaseModelWithConfigDict):
     description: Optional[str] = Field(None, description="Gateway description")
     transport: str = Field(default="SSE", description="Transport used by MCP server: SSE or STREAMABLEHTTP")
 
-    name: Optional[str] = Field(None, description="Unique name for the prompt")
+    passthrough_headers: Optional[List[str]] = Field(default=None, description="List of headers allowed to be passed through from client to target")
+
     # Authorizations
     auth_type: Optional[str] = Field(None, description="auth_type: basic, bearer, headers or None")
     auth_username: Optional[str] = Field(None, description="username for basic authentication")
     auth_password: Optional[str] = Field(None, description="password for basic authentication")
     auth_token: Optional[str] = Field(None, description="token for bearer authentication")
     auth_header_key: Optional[str] = Field(None, description="key for custom headers authentication")
-    auth_header_value: Optional[str] = Field(None, description="vallue for custom headers authentication")
+    auth_header_value: Optional[str] = Field(None, description="value for custom headers authentication")
+    auth_headers: Optional[List[Dict[str, str]]] = Field(None, description="List of custom headers for authentication")
 
     # Adding `auth_value` as an alias for better access post-validation
     auth_value: Optional[str] = Field(None, validate_default=True)
+
+    # OAuth 2.0 configuration
+    oauth_config: Optional[Dict[str, Any]] = Field(None, description="OAuth 2.0 configuration including grant_type, client_id, encrypted client_secret, URLs, and scopes")
+
+    tags: Optional[List[str]] = Field(None, description="Tags for categorizing the gateway")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings or None if input is None
+        """
+        if v is None:
+            return None
+        return validate_tags_field(v)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -1864,17 +2227,16 @@ class GatewayUpdate(BaseModelWithConfigDict):
 
         # Process the auth fields and generate auth_value based on auth_type
         auth_value = cls._process_auth_fields(info)
-
         return auth_value
 
     @staticmethod
-    def _process_auth_fields(values: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _process_auth_fields(info: ValidationInfo) -> Optional[Dict[str, Any]]:
         """
         Processes the input authentication fields and returns the correct auth_value.
         This method is called based on the selected auth_type.
 
         Args:
-            values: Dict container auth information auth_type, auth_username, auth_password, auth_token, auth_header_key and auth_header_value
+            info: ValidationInfo containing auth fields
 
         Returns:
             dict: Encoded auth information
@@ -1883,12 +2245,13 @@ class GatewayUpdate(BaseModelWithConfigDict):
             ValueError: If auth type is invalid
         """
 
-        auth_type = values.data.get("auth_type")
+        data = info.data
+        auth_type = data.get("auth_type")
 
         if auth_type == "basic":
             # For basic authentication, both username and password must be present
-            username = values.data.get("auth_username")
-            password = values.data.get("auth_password")
+            username = data.get("auth_username")
+            password = data.get("auth_password")
             if not username or not password:
                 raise ValueError("For 'basic' auth, both 'auth_username' and 'auth_password' must be provided.")
 
@@ -1897,24 +2260,73 @@ class GatewayUpdate(BaseModelWithConfigDict):
 
         if auth_type == "bearer":
             # For bearer authentication, only token is required
-            token = values.data.get("auth_token")
+            token = data.get("auth_token")
 
             if not token:
                 raise ValueError("For 'bearer' auth, 'auth_token' must be provided.")
 
             return encode_auth({"Authorization": f"Bearer {token}"})
 
+        if auth_type == "oauth":
+            # For OAuth authentication, we don't encode anything here
+            # The OAuth configuration is handled separately in the oauth_config field
+            # This method is only called for traditional auth types
+            return None
+
         if auth_type == "authheaders":
-            # For headers authentication, both key and value must be present
-            header_key = values.data.get("auth_header_key")
-            header_value = values.data.get("auth_header_value")
+            # Support both new multi-headers format and legacy single header format
+            auth_headers = data.get("auth_headers")
+            if auth_headers and isinstance(auth_headers, list):
+                # New multi-headers format with enhanced validation
+                header_dict = {}
+                duplicate_keys = set()
+
+                for header in auth_headers:
+                    if not isinstance(header, dict):
+                        continue
+
+                    key = header.get("key")
+                    value = header.get("value", "")
+
+                    # Skip headers without keys
+                    if not key:
+                        continue
+
+                    # Track duplicate keys (last value wins)
+                    if key in header_dict:
+                        duplicate_keys.add(key)
+
+                    # Validate header key format (basic HTTP header validation)
+                    if not all(c.isalnum() or c in "-_" for c in key.replace(" ", "")):
+                        raise ValueError(f"Invalid header key format: '{key}'. Header keys should contain only alphanumeric characters, hyphens, and underscores.")
+
+                    # Store header (empty values are allowed)
+                    header_dict[key] = value
+
+                # Ensure at least one valid header
+                if not header_dict:
+                    raise ValueError("For 'headers' auth, at least one valid header with a key must be provided.")
+
+                # Warn about duplicate keys (optional - could log this instead)
+                if duplicate_keys:
+                    logging.warning(f"Duplicate header keys detected (last value used): {', '.join(duplicate_keys)}")
+
+                # Check for excessive headers (prevent abuse)
+                if len(header_dict) > 100:
+                    raise ValueError("Maximum of 100 headers allowed per gateway.")
+
+                return encode_auth(header_dict)
+
+            # Legacy single header format (backward compatibility)
+            header_key = data.get("auth_header_key")
+            header_value = data.get("auth_header_value")
 
             if not header_key or not header_value:
-                raise ValueError("For 'headers' auth, both 'auth_header_key' and 'auth_header_value' must be provided.")
+                raise ValueError("For 'headers' auth, either 'auth_headers' list or both 'auth_header_key' and 'auth_header_value' must be provided.")
 
             return encode_auth({header_key: header_value})
 
-        raise ValueError("Invalid 'auth_type'. Must be one of: basic, bearer, or headers.")
+        raise ValueError("Invalid 'auth_type'. Must be one of: basic, bearer, oauth, or headers.")
 
 
 class GatewayRead(BaseModelWithConfigDict):
@@ -1927,8 +2339,9 @@ class GatewayRead(BaseModelWithConfigDict):
     - enabled status
     - reachable status
     - Last seen timestamp
-    - Authentication type: basic, bearer, headers
+    - Authentication type: basic, bearer, headers, oauth
     - Authentication value: username/password or token or custom headers
+    - OAuth configuration for OAuth 2.0 authentication
 
     Auto Populated fields:
     - Authentication username: for basic auth
@@ -1951,9 +2364,13 @@ class GatewayRead(BaseModelWithConfigDict):
 
     last_seen: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc), description="Last seen timestamp")
 
+    passthrough_headers: Optional[List[str]] = Field(default=None, description="List of headers allowed to be passed through from client to target")
     # Authorizations
-    auth_type: Optional[str] = Field(None, description="auth_type: basic, bearer, headers or None")
+    auth_type: Optional[str] = Field(None, description="auth_type: basic, bearer, headers, oauth, or None")
     auth_value: Optional[str] = Field(None, description="auth value: username/password or token or custom headers")
+
+    # OAuth 2.0 configuration
+    oauth_config: Optional[Dict[str, Any]] = Field(None, description="OAuth 2.0 configuration including grant_type, client_id, encrypted client_secret, URLs, and scopes")
 
     # auth_value will populate the following fields
     auth_username: Optional[str] = Field(None, description="username for basic authentication")
@@ -1961,6 +2378,22 @@ class GatewayRead(BaseModelWithConfigDict):
     auth_token: Optional[str] = Field(None, description="token for bearer authentication")
     auth_header_key: Optional[str] = Field(None, description="key for custom headers authentication")
     auth_header_value: Optional[str] = Field(None, description="vallue for custom headers authentication")
+    tags: List[str] = Field(default_factory=list, description="Tags for categorizing the gateway")
+
+    # Comprehensive metadata for audit tracking
+    created_by: Optional[str] = Field(None, description="Username who created this entity")
+    created_from_ip: Optional[str] = Field(None, description="IP address of creator")
+    created_via: Optional[str] = Field(None, description="Creation method: ui|api|import|federation")
+    created_user_agent: Optional[str] = Field(None, description="User agent of creation request")
+
+    modified_by: Optional[str] = Field(None, description="Username who last modified this entity")
+    modified_from_ip: Optional[str] = Field(None, description="IP address of last modifier")
+    modified_via: Optional[str] = Field(None, description="Modification method")
+    modified_user_agent: Optional[str] = Field(None, description="User agent of modification request")
+
+    import_batch_id: Optional[str] = Field(None, description="UUID of bulk import batch")
+    federation_source: Optional[str] = Field(None, description="Source gateway for federated entities")
+    version: Optional[int] = Field(1, description="Entity version for change tracking")
 
     slug: str = Field(None, description="Slug for gateway endpoint URL")
 
@@ -2038,6 +2471,12 @@ class GatewayRead(BaseModelWithConfigDict):
         if auth_value_encoded == settings.masked_auth_value:
             return values
 
+        # Handle OAuth authentication (no auth_value to decode)
+        if auth_type == "oauth":
+            # OAuth gateways don't have traditional auth_value to decode
+            # They use oauth_config instead
+            return values
+
         auth_value = decode_auth(auth_value_encoded)
         if auth_type == "basic":
             auth = auth_value.get("Authorization")
@@ -2054,9 +2493,9 @@ class GatewayRead(BaseModelWithConfigDict):
             values.auth_token = auth.removeprefix("Bearer ")
 
         elif auth_type == "authheaders":
-            # must be exactly one header
-            if len(auth_value) != 1:
-                raise ValueError("authheaders requires exactly one key/value pair")
+            # For backward compatibility, populate first header in key/value fields
+            if len(auth_value) == 0:
+                raise ValueError("authheaders requires at least one key/value pair")
             k, v = next(iter(auth_value.items()))
             values.auth_header_key, values.auth_header_value = k, v
 
@@ -2082,7 +2521,7 @@ class GatewayRead(BaseModelWithConfigDict):
             - The `auth_value` field is only masked if it exists and its value is different from the masking
             placeholder.
             - Other sensitive fields (`auth_password`, `auth_token`, `auth_header_value`) are masked if present.
-            - Fields not related to authentication remain unchanged.
+            - Fields not related to authentication remain unmodified.
         """
         masked_data = self.model_dump()
 
@@ -2345,9 +2784,25 @@ class ServerCreate(BaseModel):
     name: str = Field(..., description="The server's name")
     description: Optional[str] = Field(None, description="Server description")
     icon: Optional[str] = Field(None, description="URL for the server's icon")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Tags for categorizing the server")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings
+        """
+        return validate_tags_field(v)
+
     associated_tools: Optional[List[str]] = Field(None, description="Comma-separated tool IDs")
     associated_resources: Optional[List[str]] = Field(None, description="Comma-separated resource IDs")
     associated_prompts: Optional[List[str]] = Field(None, description="Comma-separated prompt IDs")
+    associated_a2a_agents: Optional[List[str]] = Field(None, description="Comma-separated A2A agent IDs")
 
     @field_validator("name")
     @classmethod
@@ -2397,7 +2852,7 @@ class ServerCreate(BaseModel):
             return v
         return SecurityValidator.validate_url(v, "Icon URL")
 
-    @field_validator("associated_tools", "associated_resources", "associated_prompts", mode="before")
+    @field_validator("associated_tools", "associated_resources", "associated_prompts", "associated_a2a_agents", mode="before")
     @classmethod
     def split_comma_separated(cls, v):
         """
@@ -2423,9 +2878,27 @@ class ServerUpdate(BaseModelWithConfigDict):
     name: Optional[str] = Field(None, description="The server's name")
     description: Optional[str] = Field(None, description="Server description")
     icon: Optional[str] = Field(None, description="URL for the server's icon")
+    tags: Optional[List[str]] = Field(None, description="Tags for categorizing the server")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings or None if input is None
+        """
+        if v is None:
+            return None
+        return validate_tags_field(v)
+
     associated_tools: Optional[List[str]] = Field(None, description="Comma-separated tool IDs")
     associated_resources: Optional[List[str]] = Field(None, description="Comma-separated resource IDs")
     associated_prompts: Optional[List[str]] = Field(None, description="Comma-separated prompt IDs")
+    associated_a2a_agents: Optional[List[str]] = Field(None, description="Comma-separated A2A agent IDs")
 
     @field_validator("name")
     @classmethod
@@ -2475,7 +2948,7 @@ class ServerUpdate(BaseModelWithConfigDict):
             return v
         return SecurityValidator.validate_url(v, "Icon URL")
 
-    @field_validator("associated_tools", "associated_resources", "associated_prompts", mode="before")
+    @field_validator("associated_tools", "associated_resources", "associated_prompts", "associated_a2a_agents", mode="before")
     @classmethod
     def split_comma_separated(cls, v):
         """
@@ -2513,7 +2986,24 @@ class ServerRead(BaseModelWithConfigDict):
     associated_tools: List[str] = []
     associated_resources: List[int] = []
     associated_prompts: List[int] = []
+    associated_a2a_agents: List[str] = []
     metrics: ServerMetrics
+    tags: List[str] = Field(default_factory=list, description="Tags for categorizing the server")
+
+    # Comprehensive metadata for audit tracking
+    created_by: Optional[str] = Field(None, description="Username who created this entity")
+    created_from_ip: Optional[str] = Field(None, description="IP address of creator")
+    created_via: Optional[str] = Field(None, description="Creation method: ui|api|import|federation")
+    created_user_agent: Optional[str] = Field(None, description="User agent of creation request")
+
+    modified_by: Optional[str] = Field(None, description="Username who last modified this entity")
+    modified_from_ip: Optional[str] = Field(None, description="IP address of last modifier")
+    modified_via: Optional[str] = Field(None, description="Modification method")
+    modified_user_agent: Optional[str] = Field(None, description="User agent of modification request")
+
+    import_batch_id: Optional[str] = Field(None, description="UUID of bulk import batch")
+    federation_source: Optional[str] = Field(None, description="Source gateway for federated entities")
+    version: Optional[int] = Field(1, description="Entity version for change tracking")
 
     @model_validator(mode="before")
     @classmethod
@@ -2544,6 +3034,8 @@ class ServerRead(BaseModelWithConfigDict):
             values["associated_resources"] = [res.id if hasattr(res, "id") else res for res in values["associated_resources"]]
         if "associated_prompts" in values and values["associated_prompts"]:
             values["associated_prompts"] = [prompt.id if hasattr(prompt, "id") else prompt for prompt in values["associated_prompts"]]
+        if "associated_a2a_agents" in values and values["associated_a2a_agents"]:
+            values["associated_a2a_agents"] = [agent.id if hasattr(agent, "id") else agent for agent in values["associated_a2a_agents"]]
         return values
 
 
@@ -2572,3 +3064,347 @@ class GatewayTestResponse(BaseModelWithConfigDict):
     status_code: int = Field(..., description="HTTP status code returned by the gateway")
     latency_ms: int = Field(..., description="Latency of the request in milliseconds")
     body: Optional[Union[str, Dict[str, Any]]] = Field(None, description="Response body, can be a string or JSON object")
+
+
+class TaggedEntity(BaseModelWithConfigDict):
+    """A simplified representation of an entity that has a tag."""
+
+    id: str = Field(..., description="The entity's ID")
+    name: str = Field(..., description="The entity's name")
+    type: str = Field(..., description="The entity type (tool, resource, prompt, server, gateway)")
+    description: Optional[str] = Field(None, description="The entity's description")
+
+
+class TagStats(BaseModelWithConfigDict):
+    """Statistics for a single tag across all entity types."""
+
+    tools: int = Field(default=0, description="Number of tools with this tag")
+    resources: int = Field(default=0, description="Number of resources with this tag")
+    prompts: int = Field(default=0, description="Number of prompts with this tag")
+    servers: int = Field(default=0, description="Number of servers with this tag")
+    gateways: int = Field(default=0, description="Number of gateways with this tag")
+    total: int = Field(default=0, description="Total occurrences of this tag")
+
+
+class TagInfo(BaseModelWithConfigDict):
+    """Information about a single tag."""
+
+    name: str = Field(..., description="The tag name")
+    stats: TagStats = Field(..., description="Statistics for this tag")
+    entities: Optional[List[TaggedEntity]] = Field(default_factory=list, description="Entities that have this tag")
+
+
+class TopPerformer(BaseModelWithConfigDict):
+    """Schema for representing top-performing entities with performance metrics.
+
+    Used to encapsulate metrics for entities such as prompts, resources, servers, or tools,
+    including execution count, average response time, success rate, and last execution timestamp.
+
+    Attributes:
+        id (Union[str, int]): Unique identifier for the entity.
+        name (str): Name of the entity (e.g., prompt name, resource URI, server name, or tool name).
+        execution_count (int): Total number of executions for the entity.
+        avg_response_time (Optional[float]): Average response time in seconds, or None if no metrics.
+        success_rate (Optional[float]): Success rate percentage, or None if no metrics.
+        last_execution (Optional[datetime]): Timestamp of the last execution, or None if no metrics.
+    """
+
+    id: Union[str, int] = Field(..., description="Entity ID")
+    name: str = Field(..., description="Entity name")
+    execution_count: int = Field(..., description="Number of executions")
+    avg_response_time: Optional[float] = Field(None, description="Average response time in seconds")
+    success_rate: Optional[float] = Field(None, description="Success rate percentage")
+    last_execution: Optional[datetime] = Field(None, description="Timestamp of last execution")
+
+
+# --- A2A Agent Schemas ---
+
+
+class A2AAgentCreate(BaseModel):
+    """
+    Schema for creating a new A2A (Agent-to-Agent) compatible agent.
+
+    Attributes:
+        model_config (ConfigDict): Configuration for the model.
+        name (str): Unique name for the agent.
+        description (Optional[str]): Optional description of the agent.
+        endpoint_url (str): URL endpoint for the agent.
+        agent_type (str): Type of agent (e.g., "openai", "anthropic", "custom").
+        protocol_version (str): A2A protocol version supported.
+        capabilities (Dict[str, Any]): Agent capabilities and features.
+        config (Dict[str, Any]): Agent-specific configuration parameters.
+        auth_type (Optional[str]): Type of authentication ("api_key", "oauth", "bearer", etc.).
+        auth_value (Optional[str]): Authentication credentials (will be encrypted).
+        tags (List[str]): Tags for categorizing the agent.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(..., description="Unique name for the agent")
+    description: Optional[str] = Field(None, description="Agent description")
+    endpoint_url: str = Field(..., description="URL endpoint for the agent")
+    agent_type: str = Field(default="generic", description="Type of agent (e.g., 'openai', 'anthropic', 'custom')")
+    protocol_version: str = Field(default="1.0", description="A2A protocol version supported")
+    capabilities: Dict[str, Any] = Field(default_factory=dict, description="Agent capabilities and features")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Agent-specific configuration parameters")
+    auth_type: Optional[str] = Field(None, description="Type of authentication")
+    auth_value: Optional[str] = Field(None, description="Authentication credentials")
+    tags: List[str] = Field(default_factory=list, description="Tags for categorizing the agent")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings
+        """
+        return validate_tags_field(v)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate agent name
+
+        Args:
+            v (str): Value to validate
+
+        Returns:
+            str: Value if validated as safe
+        """
+        return SecurityValidator.validate_name(v, "A2A Agent name")
+
+    @field_validator("endpoint_url")
+    @classmethod
+    def validate_endpoint_url(cls, v: str) -> str:
+        """Validate agent endpoint URL
+
+        Args:
+            v (str): Value to validate
+
+        Returns:
+            str: Value if validated as safe
+        """
+        return SecurityValidator.validate_url(v, "Agent endpoint URL")
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: Optional[str]) -> Optional[str]:
+        """Ensure descriptions display safely
+
+        Args:
+            v (str): Value to validate
+
+        Returns:
+            str: Value if validated as safe
+
+        Raises:
+            ValueError: When value is unsafe
+        """
+        if v is None:
+            return v
+        if len(v) > SecurityValidator.MAX_DESCRIPTION_LENGTH:
+            raise ValueError(f"Description exceeds maximum length of {SecurityValidator.MAX_DESCRIPTION_LENGTH}")
+        return SecurityValidator.sanitize_display_text(v, "Description")
+
+    @field_validator("capabilities", "config")
+    @classmethod
+    def validate_json_fields(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate JSON structure depth
+
+        Args:
+            v (dict): Value to validate
+
+        Returns:
+            dict: Value if validated as safe
+        """
+        SecurityValidator.validate_json_depth(v)
+        return v
+
+
+class A2AAgentUpdate(BaseModelWithConfigDict):
+    """Schema for updating an existing A2A agent.
+
+    Similar to A2AAgentCreate but all fields are optional to allow partial updates.
+    """
+
+    name: Optional[str] = Field(None, description="Unique name for the agent")
+    description: Optional[str] = Field(None, description="Agent description")
+    endpoint_url: Optional[str] = Field(None, description="URL endpoint for the agent")
+    agent_type: Optional[str] = Field(None, description="Type of agent")
+    protocol_version: Optional[str] = Field(None, description="A2A protocol version supported")
+    capabilities: Optional[Dict[str, Any]] = Field(None, description="Agent capabilities and features")
+    config: Optional[Dict[str, Any]] = Field(None, description="Agent-specific configuration parameters")
+    auth_type: Optional[str] = Field(None, description="Type of authentication")
+    auth_value: Optional[str] = Field(None, description="Authentication credentials")
+    tags: Optional[List[str]] = Field(None, description="Tags for categorizing the agent")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Validate and normalize tags.
+
+        Args:
+            v: Optional list of tag strings to validate
+
+        Returns:
+            List of validated tag strings or None if input is None
+        """
+        if v is None:
+            return None
+        return validate_tags_field(v)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate agent name
+
+        Args:
+            v (str): Value to validate
+
+        Returns:
+            str: Value if validated as safe
+        """
+        return SecurityValidator.validate_name(v, "A2A Agent name")
+
+    @field_validator("endpoint_url")
+    @classmethod
+    def validate_endpoint_url(cls, v: str) -> str:
+        """Validate agent endpoint URL
+
+        Args:
+            v (str): Value to validate
+
+        Returns:
+            str: Value if validated as safe
+        """
+        return SecurityValidator.validate_url(v, "Agent endpoint URL")
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: Optional[str]) -> Optional[str]:
+        """Ensure descriptions display safely
+
+        Args:
+            v (str): Value to validate
+
+        Returns:
+            str: Value if validated as safe
+
+        Raises:
+            ValueError: When value is unsafe
+        """
+        if v is None:
+            return v
+        if len(v) > SecurityValidator.MAX_DESCRIPTION_LENGTH:
+            raise ValueError(f"Description exceeds maximum length of {SecurityValidator.MAX_DESCRIPTION_LENGTH}")
+        return SecurityValidator.sanitize_display_text(v, "Description")
+
+    @field_validator("capabilities", "config")
+    @classmethod
+    def validate_json_fields(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Validate JSON structure depth
+
+        Args:
+            v (dict): Value to validate
+
+        Returns:
+            dict: Value if validated as safe
+        """
+        if v is None:
+            return v
+        SecurityValidator.validate_json_depth(v)
+        return v
+
+
+class A2AAgentRead(BaseModelWithConfigDict):
+    """Schema for reading A2A agent information.
+
+    Includes all agent fields plus:
+    - Database ID
+    - Slug
+    - Creation/update timestamps
+    - Enabled/reachable status
+    - Metrics
+    - Audit metadata
+    """
+
+    id: str
+    name: str
+    slug: str
+    description: Optional[str]
+    endpoint_url: str
+    agent_type: str
+    protocol_version: str
+    capabilities: Dict[str, Any]
+    config: Dict[str, Any]
+    auth_type: Optional[str]
+    enabled: bool
+    reachable: bool
+    created_at: datetime
+    updated_at: datetime
+    last_interaction: Optional[datetime]
+    tags: List[str] = Field(default_factory=list, description="Tags for categorizing the agent")
+    metrics: A2AAgentMetrics
+
+    # Comprehensive metadata for audit tracking
+    created_by: Optional[str] = Field(None, description="Username who created this entity")
+    created_from_ip: Optional[str] = Field(None, description="IP address of creator")
+    created_via: Optional[str] = Field(None, description="Creation method: ui|api|import|federation")
+    created_user_agent: Optional[str] = Field(None, description="User agent of creation request")
+
+    modified_by: Optional[str] = Field(None, description="Username who last modified this entity")
+    modified_from_ip: Optional[str] = Field(None, description="IP address of last modifier")
+    modified_via: Optional[str] = Field(None, description="Modification method")
+    modified_user_agent: Optional[str] = Field(None, description="User agent of modification request")
+
+    import_batch_id: Optional[str] = Field(None, description="UUID of bulk import batch")
+    federation_source: Optional[str] = Field(None, description="Source gateway for federated entities")
+    version: Optional[int] = Field(1, description="Entity version for change tracking")
+
+
+class A2AAgentInvocation(BaseModelWithConfigDict):
+    """Schema for A2A agent invocation requests.
+
+    Contains:
+    - Agent name or ID to invoke
+    - Parameters for the agent interaction
+    - Interaction type (query, execute, etc.)
+    """
+
+    agent_name: str = Field(..., description="Name of the A2A agent to invoke")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for agent interaction")
+    interaction_type: str = Field(default="query", description="Type of interaction (query, execute, etc.)")
+
+    @field_validator("agent_name")
+    @classmethod
+    def validate_agent_name(cls, v: str) -> str:
+        """Ensure agent names follow naming conventions
+
+        Args:
+            v (str): Value to validate
+
+        Returns:
+            str: Value if validated as safe
+        """
+        return SecurityValidator.validate_name(v, "Agent name")
+
+    @field_validator("parameters")
+    @classmethod
+    def validate_parameters(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate parameters structure depth to prevent DoS attacks.
+
+        Args:
+            v (dict): Parameters dictionary to validate
+
+        Returns:
+            dict: The validated parameters if within depth limits
+
+        Raises:
+            ValueError: If the parameters exceed the maximum allowed depth
+        """
+        SecurityValidator.validate_json_depth(v)
+        return v

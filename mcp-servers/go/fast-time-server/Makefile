@@ -120,6 +120,7 @@ coverage:
 # help: run-http              - Run HTTP  transport on :8080  (POST JSON-RPC)
 # help: run-sse               - Run SSE   transport on :8080  (/sse, /messages)
 # help: run-dual              - Run BOTH  SSE & HTTP on :8080 (/sse, /messages, /http)
+# help: run-rest              - Run REST API on :8080  (/api/v1/*)
 
 build: tidy
 	@mkdir -p $(DIST_DIR)
@@ -149,6 +150,9 @@ run-sse: build
 run-dual: build
 	@$(DIST_DIR)/$(BIN_NAME) -transport=dual -port=8080
 
+run-rest: build
+	@$(DIST_DIR)/$(BIN_NAME) -transport=rest -port=8080
+
 # =============================================================================
 # 🐳 DOCKER
 # =============================================================================
@@ -175,6 +179,35 @@ docker-run-sse-auth: docker-build
 	@docker run --rm -p 8080:8080 \
 	    -e AUTH_TOKEN=$(TOKEN) \
 	    $(IMAGE) -transport=sse -listen=0.0.0.0 -port=8080 -auth-token=$(TOKEN)
+
+# =============================================================================
+# 📚 MCP RESOURCES & PROMPTS TESTING
+# =============================================================================
+# help: 📚 MCP RESOURCES & PROMPTS
+# help: test-resources        - Test MCP resources via REST API
+# help: test-prompts          - Test MCP prompts via REST API
+# help: test-mcp              - Test all MCP features (resources + prompts)
+
+.PHONY: test-resources test-prompts test-mcp
+
+test-resources:
+	@echo "$(C_BLUE)➜ Testing MCP Resources...$(C_RESET)"
+	@curl -s http://localhost:8080/api/v1/resources | jq .
+	@echo "\n$(C_BLUE)➜ Timezone Info:$(C_RESET)"
+	@curl -s http://localhost:8080/api/v1/resources/timezone-info | jq '.timezones[0]'
+	@echo "\n$(C_BLUE)➜ Current World Times:$(C_RESET)"
+	@curl -s http://localhost:8080/api/v1/resources/current-world | jq .
+
+test-prompts:
+	@echo "$(C_BLUE)➜ Testing MCP Prompts...$(C_RESET)"
+	@curl -s http://localhost:8080/api/v1/prompts | jq .
+	@echo "\n$(C_BLUE)➜ Compare Timezones:$(C_RESET)"
+	@curl -s -X POST http://localhost:8080/api/v1/prompts/compare_timezones/execute \
+	     -H "Content-Type: application/json" \
+	     -d '{"timezones":"UTC,America/New_York,Asia/Tokyo"}' | jq .
+
+test-mcp: test-resources test-prompts
+	@echo "\n$(C_BLUE)✔ MCP Features Test Complete$(C_RESET)"
 
 # =============================================================================
 # 🚀 BENCHMARKING (hey)

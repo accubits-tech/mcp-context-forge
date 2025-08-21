@@ -18,6 +18,7 @@ Examples:
     ...     basic_auth_password = 'pass'
     ...     auth_required = True
     ...     require_token_expiration = False
+    ...     docs_allow_basic_auth = False
     >>> vc.settings = DummySettings()
     >>> import jwt
     >>> token = jwt.encode({'sub': 'alice'}, 'secret', algorithm='HS256')
@@ -40,28 +41,26 @@ Examples:
 """
 
 # Standard
-import logging
+from base64 import b64decode
+import binascii
 from typing import Optional
 
 # Third-Party
-from fastapi import Cookie, Depends, HTTPException, status
-from fastapi.security import (
-    HTTPAuthorizationCredentials,
-    HTTPBasic,
-    HTTPBasicCredentials,
-    HTTPBearer,
-)
+from fastapi import Cookie, Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicCredentials, HTTPBearer
 from fastapi.security.utils import get_authorization_scheme_param
 import jwt
 
 # First-Party
 from mcpgateway.config import settings
+from mcpgateway.services.logging_service import LoggingService
 
 basic_security = HTTPBasic(auto_error=False)
 security = HTTPBearer(auto_error=False)
 
-# Standard
-logger = logging.getLogger(__name__)
+# Initialize logging service first
+logging_service = LoggingService()
+logger = logging_service.get_logger(__name__)
 
 
 async def verify_jwt_token(token: str) -> dict:
@@ -89,6 +88,7 @@ async def verify_jwt_token(token: str) -> dict:
         ...     basic_auth_password = 'pass'
         ...     auth_required = True
         ...     require_token_expiration = False
+        ...     docs_allow_basic_auth = False
         >>> vc.settings = DummySettings()
         >>> import jwt
         >>> token = jwt.encode({'sub': 'alice'}, 'secret', algorithm='HS256')
@@ -97,8 +97,8 @@ async def verify_jwt_token(token: str) -> dict:
         True
 
         Test expired token:
-        >>> import datetime
-        >>> expired_payload = {'sub': 'bob', 'exp': datetime.datetime.utcnow() - datetime.timedelta(hours=1)}
+        >>> from datetime import datetime, timezone, timedelta
+        >>> expired_payload = {'sub': 'bob', 'exp': datetime.now(timezone.utc) - timedelta(hours=1)}
         >>> expired_token = jwt.encode(expired_payload, 'secret', algorithm='HS256')
         >>> try:
         ...     asyncio.run(vc.verify_jwt_token(expired_token))
@@ -199,6 +199,7 @@ async def verify_credentials(token: str) -> dict:
         ...     basic_auth_password = 'pass'
         ...     auth_required = True
         ...     require_token_expiration = False
+        ...     docs_allow_basic_auth = False
         >>> vc.settings = DummySettings()
         >>> import jwt
         >>> token = jwt.encode({'sub': 'alice'}, 'secret', algorithm='HS256')
@@ -212,20 +213,24 @@ async def verify_credentials(token: str) -> dict:
     return payload
 
 
-async def require_auth(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security), jwt_token: Optional[str] = Cookie(None)) -> str | dict:
-    """Require authentication via JWT token.
+async def require_auth(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security), jwt_token: Optional[str] = Cookie(None)) -> str | dict:
+    """Require authentication via JWT token or proxy headers.
 
-    FastAPI dependency that checks for a JWT token either in the Authorization
-    header (Bearer scheme) or as a cookie. If authentication is required but
-    no token is provided, raises an HTTP 401 error.
+    FastAPI dependency that checks for authentication via:
+    1. Proxy headers (if mcp_client_auth_enabled=false and trust_proxy_auth=true)
+    2. JWT token in Authorization header (Bearer scheme)
+    3. JWT token in cookies
+
+    If authentication is required but no token is provided, raises an HTTP 401 error.
 
     Args:
+        request: The FastAPI request object for accessing headers.
         credentials: HTTP Authorization credentials from the request header.
         jwt_token: JWT token from cookies.
 
     Returns:
         str | dict: The verified credentials payload if authenticated,
-            or "anonymous" if authentication is not required.
+            proxy user if proxy auth enabled, or "anonymous" if authentication is not required.
 
     Raises:
         HTTPException: 401 status if authentication is required but no valid
@@ -239,38 +244,59 @@ async def require_auth(credentials: Optional[HTTPAuthorizationCredentials] = Dep
         ...     basic_auth_user = 'user'
         ...     basic_auth_password = 'pass'
         ...     auth_required = True
+        ...     mcp_client_auth_enabled = True
+        ...     trust_proxy_auth = False
+        ...     proxy_user_header = 'X-Authenticated-User'
         ...     require_token_expiration = False
+        ...     docs_allow_basic_auth = False
         >>> vc.settings = DummySettings()
         >>> import jwt
         >>> from fastapi.security import HTTPAuthorizationCredentials
+        >>> from fastapi import Request
         >>> import asyncio
 
         Test with valid credentials in header:
         >>> token = jwt.encode({'sub': 'alice'}, 'secret', algorithm='HS256')
         >>> creds = HTTPAuthorizationCredentials(scheme='Bearer', credentials=token)
-        >>> result = asyncio.run(vc.require_auth(credentials=creds, jwt_token=None))
+        >>> req = Request(scope={'type': 'http', 'headers': []})
+        >>> result = asyncio.run(vc.require_auth(request=req, credentials=creds, jwt_token=None))
         >>> result['sub'] == 'alice'
         True
 
         Test with valid token in cookie:
-        >>> result = asyncio.run(vc.require_auth(credentials=None, jwt_token=token))
+        >>> result = asyncio.run(vc.require_auth(request=req, credentials=None, jwt_token=token))
         >>> result['sub'] == 'alice'
         True
 
         Test with auth required but no token:
         >>> try:
-        ...     asyncio.run(vc.require_auth(credentials=None, jwt_token=None))
+        ...     asyncio.run(vc.require_auth(request=req, credentials=None, jwt_token=None))
         ... except vc.HTTPException as e:
         ...     print(e.status_code, e.detail)
         401 Not authenticated
 
         Test with auth not required:
         >>> vc.settings.auth_required = False
-        >>> result = asyncio.run(vc.require_auth(credentials=None, jwt_token=None))
+        >>> result = asyncio.run(vc.require_auth(request=req, credentials=None, jwt_token=None))
         >>> result
         'anonymous'
         >>> vc.settings.auth_required = True
     """
+    # If MCP client auth is disabled and proxy auth is trusted, use proxy headers
+    if not settings.mcp_client_auth_enabled:
+        if settings.trust_proxy_auth:
+            # Extract user from proxy header
+            proxy_user = request.headers.get(settings.proxy_user_header)
+            if proxy_user:
+                return {"sub": proxy_user, "source": "proxy", "token": None}
+            # If no proxy header but proxy auth is trusted, treat as anonymous
+            return "anonymous"
+        else:
+            # Warning: MCP auth disabled without proxy trust - security risk!
+            # This case is already warned about in config validation
+            return "anonymous"
+
+    # Standard JWT authentication flow
     token = credentials.credentials if credentials else jwt_token
 
     if settings.auth_required and not token:
@@ -305,6 +331,7 @@ async def verify_basic_credentials(credentials: HTTPBasicCredentials) -> str:
         ...     basic_auth_user = 'user'
         ...     basic_auth_password = 'pass'
         ...     auth_required = True
+        ...     docs_allow_basic_auth = False
         >>> vc.settings = DummySettings()
         >>> from fastapi.security import HTTPBasicCredentials
         >>> creds = HTTPBasicCredentials(username='user', password='pass')
@@ -354,6 +381,7 @@ async def require_basic_auth(credentials: HTTPBasicCredentials = Depends(basic_s
         ...     basic_auth_user = 'user'
         ...     basic_auth_password = 'pass'
         ...     auth_required = True
+        ...     docs_allow_basic_auth = False
         >>> vc.settings = DummySettings()
         >>> from fastapi.security import HTTPBasicCredentials
         >>> import asyncio
@@ -387,9 +415,106 @@ async def require_basic_auth(credentials: HTTPBasicCredentials = Depends(basic_s
     return "anonymous"
 
 
+async def require_docs_basic_auth(auth_header: str) -> str:
+    """Dedicated handler for HTTP Basic Auth for documentation endpoints only.
+
+    This function is ONLY intended for /docs, /redoc, or similar endpoints, and is enabled
+    via the settings.docs_allow_basic_auth flag. It should NOT be used for general API authentication.
+
+    Args:
+        auth_header: Raw Authorization header value (e.g. "Basic username:password").
+
+    Returns:
+        str: The authenticated username if credentials are valid.
+
+    Raises:
+        HTTPException: If credentials are invalid or malformed.
+        ValueError: If the basic auth format is invalid (missing colon).
+    """
+    """Dedicated handler for HTTP Basic Auth for documentation endpoints only.
+
+    This function is ONLY intended for /docs, /redoc, or similar endpoints, and is enabled
+    via the settings.docs_allow_basic_auth flag. It should NOT be used for general API authentication.
+
+    Args:
+        auth_header: Raw Authorization header value (e.g. "Basic dXNlcjpwYXNz").
+
+    Returns:
+        str: The authenticated username if credentials are valid.
+
+    Raises:
+        HTTPException: If credentials are invalid or malformed.
+
+    Examples:
+        >>> from mcpgateway.utils import verify_credentials as vc
+        >>> class DummySettings:
+        ...     jwt_secret_key = 'secret'
+        ...     jwt_algorithm = 'HS256'
+        ...     basic_auth_user = 'user'
+        ...     basic_auth_password = 'pass'
+        ...     auth_required = True
+        ...     require_token_expiration = False
+        ...     docs_allow_basic_auth = True
+        >>> vc.settings = DummySettings()
+        >>> import base64, asyncio
+        >>> userpass = base64.b64encode(b'user:pass').decode()
+        >>> auth_header = f'Basic {userpass}'
+        >>> asyncio.run(vc.require_docs_basic_auth(auth_header))
+        'user'
+
+        Test with invalid password:
+        >>> badpass = base64.b64encode(b'user:wrong').decode()
+        >>> bad_header = f'Basic {badpass}'
+        >>> try:
+        ...     asyncio.run(vc.require_docs_basic_auth(bad_header))
+        ... except vc.HTTPException as e:
+        ...     print(e.status_code, e.detail)
+        401 Invalid credentials
+
+        Test with malformed header:
+        >>> malformed = base64.b64encode(b'userpass').decode()
+        >>> malformed_header = f'Basic {malformed}'
+        >>> try:
+        ...     asyncio.run(vc.require_docs_basic_auth(malformed_header))
+        ... except vc.HTTPException as e:
+        ...     print(e.status_code, e.detail)
+        401 Invalid basic auth credentials
+
+        Test when docs_allow_basic_auth is False:
+        >>> vc.settings.docs_allow_basic_auth = False
+        >>> try:
+        ...     asyncio.run(vc.require_docs_basic_auth(auth_header))
+        ... except vc.HTTPException as e:
+        ...     print(e.status_code, e.detail)
+        401 Basic authentication not allowed or malformed
+        >>> vc.settings.docs_allow_basic_auth = True
+    """
+    scheme, param = get_authorization_scheme_param(auth_header)
+    if scheme.lower() == "basic" and param and settings.docs_allow_basic_auth:
+        try:
+            data = b64decode(param).decode("ascii")
+            username, separator, password = data.partition(":")
+            if not separator:
+                raise ValueError("Invalid basic auth format")
+            credentials = HTTPBasicCredentials(username=username, password=password)
+            return await require_basic_auth(credentials=credentials)
+        except (ValueError, UnicodeDecodeError, binascii.Error):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid basic auth credentials",
+                headers={"WWW-Authenticate": "Basic"},
+            )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Basic authentication not allowed or malformed",
+        headers={"WWW-Authenticate": "Basic"},
+    )
+
+
 async def require_auth_override(
     auth_header: str | None = None,
     jwt_token: str | None = None,
+    request: Request | None = None,
 ) -> str | dict:
     """Call require_auth manually from middleware without FastAPI dependency injection.
 
@@ -402,10 +527,15 @@ async def require_auth_override(
         auth_header: Raw Authorization header value (e.g. "Bearer eyJhbGciOi...").
         jwt_token: JWT taken from a cookie. If both header and cookie are
             supplied, the header takes precedence.
+        request: Optional Request object for accessing headers (used for proxy auth).
 
     Returns:
         str | dict: The decoded JWT payload or the string "anonymous",
             same as require_auth.
+
+    Raises:
+        HTTPException: If authentication fails or credentials are invalid.
+        ValueError: If basic auth credentials are malformed.
 
     Note:
         This wrapper may propagate HTTPException raised by require_auth,
@@ -419,7 +549,11 @@ async def require_auth_override(
         ...     basic_auth_user = 'user'
         ...     basic_auth_password = 'pass'
         ...     auth_required = True
+        ...     mcp_client_auth_enabled = True
+        ...     trust_proxy_auth = False
+        ...     proxy_user_header = 'X-Authenticated-User'
         ...     require_token_expiration = False
+        ...     docs_allow_basic_auth = False
         >>> vc.settings = DummySettings()
         >>> import jwt
         >>> import asyncio
@@ -449,10 +583,16 @@ async def require_auth_override(
         'anonymous'
         >>> vc.settings.auth_required = True
     """
+    # Create a mock request if not provided (for backward compatibility)
+    if request is None:
+        request = Request(scope={"type": "http", "headers": []})
+
     credentials = None
     if auth_header:
         scheme, param = get_authorization_scheme_param(auth_header)
         if scheme.lower() == "bearer" and param:
             credentials = HTTPAuthorizationCredentials(scheme=scheme, credentials=param)
-
-    return await require_auth(credentials=credentials, jwt_token=jwt_token)
+        elif scheme.lower() == "basic" and param and settings.docs_allow_basic_auth:
+            # Only allow Basic Auth for docs endpoints when explicitly enabled
+            return await require_docs_basic_auth(auth_header)
+    return await require_auth(request=request, credentials=credentials, jwt_token=jwt_token)

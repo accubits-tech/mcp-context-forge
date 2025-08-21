@@ -29,29 +29,22 @@ Structure:
 import asyncio
 from contextlib import asynccontextmanager
 import json
-import logging
+import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 from urllib.parse import urlparse, urlunparse
+import uuid
 
 # Third-Party
-from fastapi import (
-    APIRouter,
-    Body,
-    Depends,
-    FastAPI,
-    HTTPException,
-    Request,
-    status,
-    WebSocket,
-    WebSocketDisconnect,
-)
+from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request, status, WebSocket, WebSocketDisconnect
 from fastapi.background import BackgroundTasks
+from fastapi.exception_handlers import request_validation_exception_handler as fastapi_default_validation_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -59,21 +52,23 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # First-Party
 from mcpgateway import __version__
-from mcpgateway.admin import admin_router
+from mcpgateway.admin import admin_router, set_logging_service
 from mcpgateway.bootstrap_db import main as bootstrap_db
 from mcpgateway.cache import ResourceCache, SessionRegistry
 from mcpgateway.config import jsonpath_modifier, settings
-from mcpgateway.db import refresh_slugs_on_startup, SessionLocal
+from mcpgateway.db import Prompt as DbPrompt
+from mcpgateway.db import PromptMetric, refresh_slugs_on_startup, SessionLocal
+from mcpgateway.db import Tool as DbTool
 from mcpgateway.handlers.sampling import SamplingHandler
-from mcpgateway.models import (
-    InitializeRequest,
-    InitializeResult,
-    ListResourceTemplatesResult,
-    LogLevel,
-    ResourceContent,
-    Root,
-)
+from mcpgateway.middleware.security_headers import SecurityHeadersMiddleware
+from mcpgateway.models import InitializeResult, ListResourceTemplatesResult, LogLevel, ResourceContent, Root
+from mcpgateway.observability import init_telemetry
+from mcpgateway.plugins.framework import PluginManager, PluginViolationError
+from mcpgateway.routers.well_known import router as well_known_router
 from mcpgateway.schemas import (
+    A2AAgentCreate,
+    A2AAgentRead,
+    A2AAgentUpdate,
     GatewayCreate,
     GatewayRead,
     GatewayUpdate,
@@ -89,50 +84,36 @@ from mcpgateway.schemas import (
     ServerCreate,
     ServerRead,
     ServerUpdate,
+    TaggedEntity,
+    TagInfo,
     ToolCreate,
     ToolRead,
     ToolUpdate,
 )
+from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
 from mcpgateway.services.completion_service import CompletionService
-from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNameConflictError, GatewayService
+from mcpgateway.services.export_service import ExportError, ExportService
+from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNameConflictError, GatewayNotFoundError, GatewayService
+from mcpgateway.services.import_service import ConflictStrategy, ImportConflictError
+from mcpgateway.services.import_service import ImportError as ImportServiceError
+from mcpgateway.services.import_service import ImportService, ImportValidationError
 from mcpgateway.services.logging_service import LoggingService
-from mcpgateway.services.prompt_service import (
-    PromptError,
-    PromptNameConflictError,
-    PromptNotFoundError,
-    PromptService,
-)
-from mcpgateway.services.resource_service import (
-    ResourceError,
-    ResourceNotFoundError,
-    ResourceService,
-    ResourceURIConflictError,
-)
+from mcpgateway.services.prompt_service import PromptError, PromptNameConflictError, PromptNotFoundError, PromptService
+from mcpgateway.services.resource_service import ResourceError, ResourceNotFoundError, ResourceService, ResourceURIConflictError
 from mcpgateway.services.root_service import RootService
-from mcpgateway.services.server_service import (
-    ServerError,
-    ServerNameConflictError,
-    ServerNotFoundError,
-    ServerService,
-)
-from mcpgateway.services.tool_service import (
-    ToolError,
-    ToolNameConflictError,
-    ToolService,
-)
+from mcpgateway.services.server_service import ServerError, ServerNameConflictError, ServerNotFoundError, ServerService
+from mcpgateway.services.tag_service import TagService
+from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, ToolNotFoundError, ToolService
 from mcpgateway.transports.sse_transport import SSETransport
-from mcpgateway.transports.streamablehttp_transport import (
-    SessionManagerWrapper,
-    streamable_http_auth,
-)
+from mcpgateway.transports.streamablehttp_transport import SessionManagerWrapper, streamable_http_auth
 from mcpgateway.utils.db_isready import wait_for_db_ready
 from mcpgateway.utils.error_formatter import ErrorFormatter
+from mcpgateway.utils.metadata_capture import MetadataCapture
+from mcpgateway.utils.passthrough_headers import set_global_passthrough_headers
 from mcpgateway.utils.redis_isready import wait_for_redis_ready
 from mcpgateway.utils.retry_manager import ResilientHttpClient
-from mcpgateway.utils.verify_credentials import require_auth, require_auth_override
-from mcpgateway.validation.jsonrpc import (
-    JSONRPCError,
-)
+from mcpgateway.utils.verify_credentials import require_auth, require_auth_override, verify_jwt_token
+from mcpgateway.validation.jsonrpc import JSONRPCError
 
 # Import the admin routes from the new module
 from mcpgateway.version import router as version_router
@@ -141,11 +122,11 @@ from mcpgateway.version import router as version_router
 logging_service = LoggingService()
 logger = logging_service.get_logger("mcpgateway")
 
-# Configure root logger level
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper()),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+# Share the logging service with admin module
+set_logging_service(logging_service)
+
+# Note: Logging configuration is handled by LoggingService during startup
+# Don't use basicConfig here as it conflicts with our dual logging setup
 
 # Wait for database to be ready before creating tables
 wait_for_db_ready(max_tries=int(settings.db_max_retries), interval=int(settings.db_retry_interval_ms) / 1000, sync=True)  # Converting ms to s
@@ -158,6 +139,8 @@ except RuntimeError:
 else:
     loop.create_task(bootstrap_db())
 
+# Initialize plugin manager as a singleton.
+plugin_manager: PluginManager | None = PluginManager(settings.plugin_config_file) if settings.plugins_enabled else None
 
 # Initialize services
 tool_service = ToolService()
@@ -168,6 +151,11 @@ root_service = RootService()
 completion_service = CompletionService()
 sampling_handler = SamplingHandler()
 server_service = ServerService()
+tag_service = TagService()
+export_service = ExportService()
+import_service = ImportService()
+# Initialize A2A service only if A2A features are enabled
+a2a_service = A2AAgentService() if settings.mcpgateway_a2a_enabled else None
 
 # Initialize session manager for Streamable HTTP transport
 streamable_http_session = SessionManagerWrapper()
@@ -210,29 +198,81 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         Exception: Any unhandled error that occurs during service
             initialisation or shutdown is re-raised to the caller.
     """
+    # Initialize logging service FIRST to ensure all logging goes to dual output
+    await logging_service.initialize()
     logger.info("Starting MCP Gateway services")
+
+    # Initialize observability (Phoenix tracing)
+    init_telemetry()
+    logger.info("Observability initialized")
+
     try:
+        if plugin_manager:
+            await plugin_manager.initialize()
+            logger.info(f"Plugin manager initialized with {plugin_manager.plugin_count} plugins")
+
+        if settings.enable_header_passthrough:
+            db_gen = get_db()
+            db = next(db_gen)  # pylint: disable=stop-iteration-return
+            try:
+                await set_global_passthrough_headers(db)
+            finally:
+                db.close()
+
         await tool_service.initialize()
         await resource_service.initialize()
         await prompt_service.initialize()
         await gateway_service.initialize()
         await root_service.initialize()
         await completion_service.initialize()
-        await logging_service.initialize()
         await sampling_handler.initialize()
+        await export_service.initialize()
+        await import_service.initialize()
+        if a2a_service:
+            await a2a_service.initialize()
         await resource_cache.initialize()
         await streamable_http_session.initialize()
         refresh_slugs_on_startup()
 
         logger.info("All services initialized successfully")
+
+        # Reconfigure uvicorn loggers after startup to capture access logs in dual output
+        logging_service.configure_uvicorn_after_startup()
+
         yield
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
         raise
     finally:
+        # Shutdown plugin manager
+        if plugin_manager:
+            try:
+                await plugin_manager.shutdown()
+                logger.info("Plugin manager shutdown complete")
+            except Exception as e:
+                logger.error(f"Error shutting down plugin manager: {str(e)}")
         logger.info("Shutting down MCP Gateway services")
         # await stop_streamablehttp()
-        for service in [resource_cache, sampling_handler, logging_service, completion_service, root_service, gateway_service, prompt_service, resource_service, tool_service, streamable_http_session]:
+        # Build service list conditionally
+        services_to_shutdown = [
+            resource_cache,
+            sampling_handler,
+            import_service,
+            export_service,
+            logging_service,
+            completion_service,
+            root_service,
+            gateway_service,
+            prompt_service,
+            resource_service,
+            tool_service,
+            streamable_http_session,
+        ]
+
+        if a2a_service:
+            services_to_shutdown.insert(4, a2a_service)  # Insert after export_service
+
+        for service in services_to_shutdown:
             try:
                 await service.shutdown()
             except Exception as e:
@@ -290,6 +330,41 @@ async def validation_exception_handler(_request: Request, exc: ValidationError):
     return JSONResponse(status_code=422, content=ErrorFormatter.format_validation_error(exc))
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(_request: Request, exc: RequestValidationError):
+    """Handle FastAPI request validation errors (automatic request parsing).
+
+    This handles ValidationErrors that occur during FastAPI's automatic request
+    parsing before the request reaches your endpoint.
+
+    Args:
+        _request: The FastAPI request object that triggered validation error.
+        exc: The RequestValidationError exception containing failure details.
+
+    Returns:
+        JSONResponse: A 422 Unprocessable Entity response with error details.
+    """
+    if _request.url.path.startswith("/tools"):
+        error_details = []
+
+        for error in exc.errors():
+            loc = error.get("loc", [])
+            msg = error.get("msg", "Unknown error")
+            ctx = error.get("ctx", {"error": {}})
+            type_ = error.get("type", "value_error")
+            # Ensure ctx is JSON serializable
+            if isinstance(ctx, dict):
+                ctx_serializable = {k: (str(v) if isinstance(v, Exception) else v) for k, v in ctx.items()}
+            else:
+                ctx_serializable = str(ctx)
+            error_detail = {"type": type_, "loc": loc, "msg": msg, "ctx": ctx_serializable}
+            error_details.append(error_detail)
+
+        response_content = {"detail": error_details}
+        return JSONResponse(status_code=422, content=response_content)
+    return await fastapi_default_validation_handler(_request, exc)
+
+
 @app.exception_handler(IntegrityError)
 async def database_exception_handler(_request: Request, exc: IntegrityError):
     """Handle SQLAlchemy database integrity constraint violations globally.
@@ -332,6 +407,10 @@ class DocsAuthMiddleware(BaseHTTPMiddleware):
 
     If a request to one of these paths is made without a valid token,
     the request is rejected with a 401 or 403 error.
+
+    Note:
+        When DOCS_ALLOW_BASIC_AUTH is enabled, Basic Authentication
+        is also accepted using BASIC_AUTH_USER and BASIC_AUTH_PASSWORD credentials.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -462,16 +541,26 @@ class MCPPathRewriteMiddleware:
         await self.application(scope, receive, send)
 
 
-# Configure CORS
+# Configure CORS with environment-aware origins
+cors_origins = list(settings.allowed_origins) if settings.allowed_origins else []
+
+# Ensure we never use wildcard in production
+if settings.environment == "production" and not cors_origins:
+    logger.warning("No CORS origins configured for production environment. CORS will be disabled.")
+    cors_origins = []
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if not settings.allowed_origins else list(settings.allowed_origins),
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=cors_origins,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["Content-Type", "Content-Length"],
+    expose_headers=["Content-Length", "X-Request-ID"],
 )
 
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Add custom DocsAuthMiddleware
 app.add_middleware(DocsAuthMiddleware)
@@ -497,6 +586,9 @@ root_router = APIRouter(prefix="/roots", tags=["Roots"])
 utility_router = APIRouter(tags=["Utilities"])
 server_router = APIRouter(prefix="/servers", tags=["Servers"])
 metrics_router = APIRouter(prefix="/metrics", tags=["Metrics"])
+tag_router = APIRouter(prefix="/tags", tags=["Tags"])
+export_import_router = APIRouter(tags=["Export/Import"])
+a2a_router = APIRouter(prefix="/a2a", tags=["A2A Agents"])
 
 # Basic Auth setup
 
@@ -779,6 +871,7 @@ async def handle_sampling(request: Request, db: Session = Depends(get_db), user:
 @server_router.get("/", response_model=List[ServerRead])
 async def list_servers(
     include_inactive: bool = False,
+    tags: Optional[str] = None,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> List[ServerRead]:
@@ -787,14 +880,20 @@ async def list_servers(
 
     Args:
         include_inactive (bool): Whether to include inactive servers in the response.
+        tags (Optional[str]): Comma-separated list of tags to filter by.
         db (Session): The database session used to interact with the data store.
         user (str): The authenticated user making the request.
 
     Returns:
         List[ServerRead]: A list of server objects.
     """
-    logger.debug(f"User {user} requested server list")
-    return await server_service.list_servers(db, include_inactive=include_inactive)
+    # Parse tags parameter if provided
+    tags_list = None
+    if tags:
+        tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+    logger.debug(f"User {user} requested server list with tags={tags_list}")
+    return await server_service.list_servers(db, include_inactive=include_inactive, tags=tags_list)
 
 
 @server_router.get("/{server_id}", response_model=ServerRead)
@@ -848,6 +947,12 @@ async def create_server(
         raise HTTPException(status_code=409, detail=str(e))
     except ServerError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except ValidationError as e:
+        logger.error(f"Validation error while creating server: {e}")
+        raise HTTPException(status_code=422, detail=ErrorFormatter.format_validation_error(e))
+    except IntegrityError as e:
+        logger.error(f"Integrity error while creating server: {e}")
+        raise HTTPException(status_code=409, detail=ErrorFormatter.format_database_error(e))
 
 
 @server_router.put("/{server_id}", response_model=ServerRead)
@@ -881,6 +986,12 @@ async def update_server(
         raise HTTPException(status_code=409, detail=str(e))
     except ServerError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except ValidationError as e:
+        logger.error(f"Validation error while updating server {server_id}: {e}")
+        raise HTTPException(status_code=422, detail=ErrorFormatter.format_validation_error(e))
+    except IntegrityError as e:
+        logger.error(f"Integrity error while updating server {server_id}: {e}")
+        raise HTTPException(status_code=409, detail=ErrorFormatter.format_database_error(e))
 
 
 @server_router.post("/{server_id}/toggle", response_model=ServerRead)
@@ -1106,6 +1217,256 @@ async def server_get_prompts(
     return [prompt.model_dump(by_alias=True) for prompt in prompts]
 
 
+##################
+# A2A Agent APIs #
+##################
+@a2a_router.get("", response_model=List[A2AAgentRead])
+@a2a_router.get("/", response_model=List[A2AAgentRead])
+async def list_a2a_agents(
+    include_inactive: bool = False,
+    tags: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> List[A2AAgentRead]:
+    """
+    Lists all A2A agents in the system, optionally including inactive ones.
+
+    Args:
+        include_inactive (bool): Whether to include inactive agents in the response.
+        tags (Optional[str]): Comma-separated list of tags to filter by.
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        List[A2AAgentRead]: A list of A2A agent objects.
+    """
+    # Parse tags parameter if provided
+    tags_list = None
+    if tags:
+        tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+    logger.debug(f"User {user} requested A2A agent list with tags={tags_list}")
+    return await a2a_service.list_agents(db, include_inactive=include_inactive, tags=tags_list)
+
+
+@a2a_router.get("/{agent_id}", response_model=A2AAgentRead)
+async def get_a2a_agent(agent_id: str, db: Session = Depends(get_db), user: str = Depends(require_auth)) -> A2AAgentRead:
+    """
+    Retrieves an A2A agent by its ID.
+
+    Args:
+        agent_id (str): The ID of the agent to retrieve.
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        A2AAgentRead: The agent object with the specified ID.
+
+    Raises:
+        HTTPException: If the agent is not found.
+    """
+    try:
+        logger.debug(f"User {user} requested A2A agent with ID {agent_id}")
+        return await a2a_service.get_agent(db, agent_id)
+    except A2AAgentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@a2a_router.post("", response_model=A2AAgentRead, status_code=201)
+@a2a_router.post("/", response_model=A2AAgentRead, status_code=201)
+async def create_a2a_agent(
+    agent: A2AAgentCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> A2AAgentRead:
+    """
+    Creates a new A2A agent.
+
+    Args:
+        agent (A2AAgentCreate): The data for the new agent.
+        request (Request): The FastAPI request object for metadata extraction.
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        A2AAgentRead: The created agent object.
+
+    Raises:
+        HTTPException: If there is a conflict with the agent name or other errors.
+    """
+    try:
+        logger.debug(f"User {user} is creating a new A2A agent")
+        # Extract metadata from request
+        metadata = MetadataCapture.extract_creation_metadata(request, user)
+
+        return await a2a_service.register_agent(
+            db,
+            agent,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via=metadata["created_via"],
+            created_user_agent=metadata["created_user_agent"],
+            import_batch_id=metadata["import_batch_id"],
+            federation_source=metadata["federation_source"],
+        )
+    except A2AAgentNameConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except A2AAgentError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValidationError as e:
+        logger.error(f"Validation error while creating A2A agent: {e}")
+        raise HTTPException(status_code=422, detail=ErrorFormatter.format_validation_error(e))
+    except IntegrityError as e:
+        logger.error(f"Integrity error while creating A2A agent: {e}")
+        raise HTTPException(status_code=409, detail=ErrorFormatter.format_database_error(e))
+
+
+@a2a_router.put("/{agent_id}", response_model=A2AAgentRead)
+async def update_a2a_agent(
+    agent_id: str,
+    agent: A2AAgentUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> A2AAgentRead:
+    """
+    Updates the information of an existing A2A agent.
+
+    Args:
+        agent_id (str): The ID of the agent to update.
+        agent (A2AAgentUpdate): The updated agent data.
+        request (Request): The FastAPI request object for metadata extraction.
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        A2AAgentRead: The updated agent object.
+
+    Raises:
+        HTTPException: If the agent is not found, there is a name conflict, or other errors.
+    """
+    try:
+        logger.debug(f"User {user} is updating A2A agent with ID {agent_id}")
+        # Extract modification metadata
+        mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)  # Version will be incremented in service
+
+        return await a2a_service.update_agent(
+            db,
+            agent_id,
+            agent,
+            modified_by=mod_metadata["modified_by"],
+            modified_from_ip=mod_metadata["modified_from_ip"],
+            modified_via=mod_metadata["modified_via"],
+            modified_user_agent=mod_metadata["modified_user_agent"],
+        )
+    except A2AAgentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except A2AAgentNameConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except A2AAgentError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValidationError as e:
+        logger.error(f"Validation error while updating A2A agent {agent_id}: {e}")
+        raise HTTPException(status_code=422, detail=ErrorFormatter.format_validation_error(e))
+    except IntegrityError as e:
+        logger.error(f"Integrity error while updating A2A agent {agent_id}: {e}")
+        raise HTTPException(status_code=409, detail=ErrorFormatter.format_database_error(e))
+
+
+@a2a_router.post("/{agent_id}/toggle", response_model=A2AAgentRead)
+async def toggle_a2a_agent_status(
+    agent_id: str,
+    activate: bool = True,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> A2AAgentRead:
+    """
+    Toggles the status of an A2A agent (activate or deactivate).
+
+    Args:
+        agent_id (str): The ID of the agent to toggle.
+        activate (bool): Whether to activate or deactivate the agent.
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        A2AAgentRead: The agent object after the status change.
+
+    Raises:
+        HTTPException: If the agent is not found or there is an error.
+    """
+    try:
+        logger.debug(f"User {user} is toggling A2A agent with ID {agent_id} to {'active' if activate else 'inactive'}")
+        return await a2a_service.toggle_agent_status(db, agent_id, activate)
+    except A2AAgentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except A2AAgentError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@a2a_router.delete("/{agent_id}", response_model=Dict[str, str])
+async def delete_a2a_agent(agent_id: str, db: Session = Depends(get_db), user: str = Depends(require_auth)) -> Dict[str, str]:
+    """
+    Deletes an A2A agent by its ID.
+
+    Args:
+        agent_id (str): The ID of the agent to delete.
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        Dict[str, str]: A success message indicating the agent was deleted.
+
+    Raises:
+        HTTPException: If the agent is not found or there is an error.
+    """
+    try:
+        logger.debug(f"User {user} is deleting A2A agent with ID {agent_id}")
+        await a2a_service.delete_agent(db, agent_id)
+        return {
+            "status": "success",
+            "message": f"A2A Agent {agent_id} deleted successfully",
+        }
+    except A2AAgentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except A2AAgentError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@a2a_router.post("/{agent_name}/invoke", response_model=Dict[str, Any])
+async def invoke_a2a_agent(
+    agent_name: str,
+    parameters: Dict[str, Any] = Body(default_factory=dict),
+    interaction_type: str = Body(default="query"),
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """
+    Invokes an A2A agent with the specified parameters.
+
+    Args:
+        agent_name (str): The name of the agent to invoke.
+        parameters (Dict[str, Any]): Parameters for the agent interaction.
+        interaction_type (str): Type of interaction (query, execute, etc.).
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        Dict[str, Any]: The response from the A2A agent.
+
+    Raises:
+        HTTPException: If the agent is not found or there is an error during invocation.
+    """
+    try:
+        logger.debug(f"User {user} is invoking A2A agent '{agent_name}' with type '{interaction_type}'")
+        return await a2a_service.invoke_agent(db, agent_name, parameters, interaction_type)
+    except A2AAgentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except A2AAgentError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 #############
 # Tool APIs #
 #############
@@ -1114,6 +1475,7 @@ async def server_get_prompts(
 async def list_tools(
     cursor: Optional[str] = None,
     include_inactive: bool = False,
+    tags: Optional[str] = None,
     db: Session = Depends(get_db),
     apijsonpath: JsonPathModifier = Body(None),
     _: str = Depends(require_auth),
@@ -1123,6 +1485,7 @@ async def list_tools(
     Args:
         cursor: Pagination cursor for fetching the next set of results
         include_inactive: Whether to include inactive tools in the results
+        tags: Comma-separated list of tags to filter by (e.g., "api,data")
         db: Database session
         apijsonpath: JSON path modifier to filter or transform the response
         _: Authenticated user
@@ -1131,8 +1494,13 @@ async def list_tools(
         List of tools or modified result based on jsonpath
     """
 
+    # Parse tags parameter if provided
+    tags_list = None
+    if tags:
+        tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
     # For now just pass the cursor parameter even if not used
-    data = await tool_service.list_tools(db, cursor=cursor, include_inactive=include_inactive)
+    data = await tool_service.list_tools(db, cursor=cursor, include_inactive=include_inactive, tags=tags_list)
 
     if apijsonpath is None:
         return data
@@ -1144,12 +1512,13 @@ async def list_tools(
 
 @tool_router.post("", response_model=ToolRead)
 @tool_router.post("/", response_model=ToolRead)
-async def create_tool(tool: ToolCreate, db: Session = Depends(get_db), user: str = Depends(require_auth)) -> ToolRead:
+async def create_tool(tool: ToolCreate, request: Request, db: Session = Depends(get_db), user: str = Depends(require_auth)) -> ToolRead:
     """
     Creates a new tool in the system.
 
     Args:
         tool (ToolCreate): The data needed to create the tool.
+        request (Request): The FastAPI request object for metadata extraction.
         db (Session): The database session dependency.
         user (str): The authenticated user making the request.
 
@@ -1160,17 +1529,39 @@ async def create_tool(tool: ToolCreate, db: Session = Depends(get_db), user: str
         HTTPException: If the tool name already exists or other validation errors occur.
     """
     try:
+        # Extract metadata from request
+        metadata = MetadataCapture.extract_creation_metadata(request, user)
+
         logger.debug(f"User {user} is creating a new tool")
-        return await tool_service.register_tool(db, tool)
-    except ToolNameConflictError as e:
-        if not e.enabled and e.tool_id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Tool name already exists but is inactive. Consider activating it with ID: {e.tool_id}",
-            )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-    except ToolError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        return await tool_service.register_tool(
+            db,
+            tool,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via=metadata["created_via"],
+            created_user_agent=metadata["created_user_agent"],
+            import_batch_id=metadata["import_batch_id"],
+            federation_source=metadata["federation_source"],
+        )
+    except Exception as ex:
+        logger.error(f"Error while creating tool: {ex}")
+        if isinstance(ex, ToolNameConflictError):
+            if not ex.enabled and ex.tool_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Tool name already exists but is inactive. Consider activating it with ID: {ex.tool_id}",
+                )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(ex))
+        if isinstance(ex, (ValidationError, ValueError)):
+            logger.error(f"Validation error while creating tool: {ex}")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ErrorFormatter.format_validation_error(ex))
+        if isinstance(ex, IntegrityError):
+            logger.error(f"Integrity error while creating tool: {ex}")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ErrorFormatter.format_database_error(ex))
+        if isinstance(ex, ToolError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ex))
+        logger.error(f"Unexpected error while creating tool: {ex}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while creating the tool")
 
 
 @tool_router.get("/{tool_id}", response_model=Union[ToolRead, Dict])
@@ -1213,6 +1604,7 @@ async def get_tool(
 async def update_tool(
     tool_id: str,
     tool: ToolUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> ToolRead:
@@ -1222,6 +1614,7 @@ async def update_tool(
     Args:
         tool_id (str): The ID of the tool to update.
         tool (ToolUpdate): The updated tool information.
+        request (Request): The FastAPI request object for metadata extraction.
         db (Session): The database session dependency.
         user (str): The authenticated user making the request.
 
@@ -1232,10 +1625,36 @@ async def update_tool(
         HTTPException: If an error occurs during the update.
     """
     try:
+        # Get current tool to extract current version
+        current_tool = db.get(DbTool, tool_id)
+        current_version = getattr(current_tool, "version", 0) if current_tool else 0
+
+        # Extract modification metadata
+        mod_metadata = MetadataCapture.extract_modification_metadata(request, user, current_version)
+
         logger.debug(f"User {user} is updating tool with ID {tool_id}")
-        return await tool_service.update_tool(db, tool_id, tool)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        return await tool_service.update_tool(
+            db,
+            tool_id,
+            tool,
+            modified_by=mod_metadata["modified_by"],
+            modified_from_ip=mod_metadata["modified_from_ip"],
+            modified_via=mod_metadata["modified_via"],
+            modified_user_agent=mod_metadata["modified_user_agent"],
+        )
+    except Exception as ex:
+        if isinstance(ex, ToolNotFoundError):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ex))
+        if isinstance(ex, ValidationError):
+            logger.error(f"Validation error while creating tool: {ex}")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ErrorFormatter.format_validation_error(ex))
+        if isinstance(ex, IntegrityError):
+            logger.error(f"Integrity error while creating tool: {ex}")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ErrorFormatter.format_database_error(ex))
+        if isinstance(ex, ToolError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ex))
+        logger.error(f"Unexpected error while creating tool: {ex}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while creating the tool")
 
 
 @tool_router.delete("/{tool_id}")
@@ -1360,6 +1779,7 @@ async def toggle_resource_status(
 async def list_resources(
     cursor: Optional[str] = None,
     include_inactive: bool = False,
+    tags: Optional[str] = None,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> List[ResourceRead]:
@@ -1369,17 +1789,23 @@ async def list_resources(
     Args:
         cursor (Optional[str]): Optional cursor for pagination.
         include_inactive (bool): Whether to include inactive resources.
+        tags (Optional[str]): Comma-separated list of tags to filter by.
         db (Session): Database session.
         user (str): Authenticated user.
 
     Returns:
         List[ResourceRead]: List of resources.
     """
-    logger.debug(f"User {user} requested resource list with cursor {cursor} and include_inactive={include_inactive}")
+    # Parse tags parameter if provided
+    tags_list = None
+    if tags:
+        tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+    logger.debug(f"User {user} requested resource list with cursor {cursor}, include_inactive={include_inactive}, tags={tags_list}")
     if cached := resource_cache.get("resource_list"):
         return cached
     # Pass the cursor parameter
-    resources = await resource_service.list_resources(db, include_inactive=include_inactive)
+    resources = await resource_service.list_resources(db, include_inactive=include_inactive, tags=tags_list)
     resource_cache.set("resource_list", resources)
     return resources
 
@@ -1388,6 +1814,7 @@ async def list_resources(
 @resource_router.post("/", response_model=ResourceRead)
 async def create_resource(
     resource: ResourceCreate,
+    request: Request,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> ResourceRead:
@@ -1396,6 +1823,7 @@ async def create_resource(
 
     Args:
         resource (ResourceCreate): Data for the new resource.
+        request (Request): FastAPI request object for metadata extraction.
         db (Session): Database session.
         user (str): Authenticated user.
 
@@ -1403,25 +1831,43 @@ async def create_resource(
         ResourceRead: The created resource.
 
     Raises:
-        HTTPException: On conflict or validation errors.
+        HTTPException: On conflict or validation errors or IntegrityError.
     """
     logger.debug(f"User {user} is creating a new resource")
     try:
-        result = await resource_service.register_resource(db, resource)
-        return result
+        metadata = MetadataCapture.extract_creation_metadata(request, user)
+
+        return await resource_service.register_resource(
+            db,
+            resource,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via=metadata["created_via"],
+            created_user_agent=metadata["created_user_agent"],
+            import_batch_id=metadata["import_batch_id"],
+            federation_source=metadata["federation_source"],
+        )
     except ResourceURIConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ResourceError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except ValidationError as e:
+        # Handle validation errors from Pydantic
+        logger.error(f"Validation error while creating resource: {e}")
+        raise HTTPException(status_code=422, detail=ErrorFormatter.format_validation_error(e))
+    except IntegrityError as e:
+        logger.error(f"Integrity error while creating resource: {e}")
+        raise HTTPException(status_code=409, detail=ErrorFormatter.format_database_error(e))
 
 
 @resource_router.get("/{uri:path}")
-async def read_resource(uri: str, db: Session = Depends(get_db), user: str = Depends(require_auth)) -> ResourceContent:
+async def read_resource(uri: str, request: Request, db: Session = Depends(get_db), user: str = Depends(require_auth)) -> ResourceContent:
     """
-    Read a resource by its URI.
+    Read a resource by its URI with plugin support.
 
     Args:
         uri (str): URI of the resource.
+        request (Request): FastAPI request object for context.
         db (Session): Database session.
         user (str): Authenticated user.
 
@@ -1431,14 +1877,23 @@ async def read_resource(uri: str, db: Session = Depends(get_db), user: str = Dep
     Raises:
         HTTPException: If the resource cannot be found or read.
     """
-    logger.debug(f"User {user} requested resource with URI {uri}")
+    # Get request ID from headers or generate one
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    server_id = request.headers.get("X-Server-ID")
+
+    logger.debug(f"User {user} requested resource with URI {uri} (request_id: {request_id})")
+
+    # Check cache
     if cached := resource_cache.get(uri):
         return cached
+
     try:
-        content: ResourceContent = await resource_service.read_resource(db, uri)
+        # Call service with context for plugin support
+        content: ResourceContent = await resource_service.read_resource(db, uri, request_id=request_id, user=user, server_id=server_id)
     except (ResourceNotFoundError, ResourceError) as exc:
         # Translate to FastAPI HTTP error
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
     resource_cache.set(uri, content)
     return content
 
@@ -1470,6 +1925,12 @@ async def update_resource(
         result = await resource_service.update_resource(db, uri, resource)
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValidationError as e:
+        logger.error(f"Validation error while updating resource {uri}: {e}")
+        raise HTTPException(status_code=422, detail=ErrorFormatter.format_validation_error(e))
+    except IntegrityError as e:
+        logger.error(f"Integrity error while updating resource {uri}: {e}")
+        raise HTTPException(status_code=409, detail=ErrorFormatter.format_database_error(e))
     await invalidate_resource_cache(uri)
     return result
 
@@ -1559,6 +2020,7 @@ async def toggle_prompt_status(
 async def list_prompts(
     cursor: Optional[str] = None,
     include_inactive: bool = False,
+    tags: Optional[str] = None,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> List[PromptRead]:
@@ -1568,20 +2030,27 @@ async def list_prompts(
     Args:
         cursor: Cursor for pagination.
         include_inactive: Include inactive prompts.
+        tags: Comma-separated list of tags to filter by.
         db: Database session.
         user: Authenticated user.
 
     Returns:
         List of prompt records.
     """
-    logger.debug(f"User: {user} requested prompt list with include_inactive={include_inactive}, cursor={cursor}")
-    return await prompt_service.list_prompts(db, cursor=cursor, include_inactive=include_inactive)
+    # Parse tags parameter if provided
+    tags_list = None
+    if tags:
+        tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+    logger.debug(f"User: {user} requested prompt list with include_inactive={include_inactive}, cursor={cursor}, tags={tags_list}")
+    return await prompt_service.list_prompts(db, cursor=cursor, include_inactive=include_inactive, tags=tags_list)
 
 
 @prompt_router.post("", response_model=PromptRead)
 @prompt_router.post("/", response_model=PromptRead)
 async def create_prompt(
     prompt: PromptCreate,
+    request: Request,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> PromptRead:
@@ -1590,6 +2059,7 @@ async def create_prompt(
 
     Args:
         prompt (PromptCreate): Payload describing the prompt to create.
+        request (Request): The FastAPI request object for metadata extraction.
         db (Session): Active SQLAlchemy session.
         user (str): Authenticated username.
 
@@ -1603,11 +2073,37 @@ async def create_prompt(
     """
     logger.debug(f"User: {user} requested to create prompt: {prompt}")
     try:
-        return await prompt_service.register_prompt(db, prompt)
-    except PromptNameConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except PromptError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # Extract metadata from request
+        metadata = MetadataCapture.extract_creation_metadata(request, user)
+
+        return await prompt_service.register_prompt(
+            db,
+            prompt,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via=metadata["created_via"],
+            created_user_agent=metadata["created_user_agent"],
+            import_batch_id=metadata["import_batch_id"],
+            federation_source=metadata["federation_source"],
+        )
+    except Exception as e:
+        if isinstance(e, PromptNameConflictError):
+            # If the prompt name already exists, return a 409 Conflict error
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        if isinstance(e, PromptError):
+            # If there is a general prompt error, return a 400 Bad Request error
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        if isinstance(e, ValidationError):
+            # If there is a validation error, return a 422 Unprocessable Entity error
+            logger.error(f"Validation error while creating prompt: {e}")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ErrorFormatter.format_validation_error(e))
+        if isinstance(e, IntegrityError):
+            # If there is an integrity error, return a 409 Conflict error
+            logger.error(f"Integrity error while creating prompt: {e}")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ErrorFormatter.format_database_error(e))
+        # For any other unexpected errors, return a 500 Internal Server Error
+        logger.error(f"Unexpected error while creating prompt: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while creating the prompt")
 
 
 @prompt_router.post("/{name}")
@@ -1631,15 +2127,51 @@ async def get_prompt(
 
     Returns:
         Rendered prompt or metadata.
+
+    Raises:
+        Exception: Re-raised if not a handled exception type.
     """
     logger.debug(f"User: {user} requested prompt: {name} with args={args}")
+    start_time = time.monotonic()
+    success = False
+    error_message = None
+    result = None
+
     try:
         PromptExecuteArgs(args=args)
-        return await prompt_service.get_prompt(db, name, args)
+        result = await prompt_service.get_prompt(db, name, args)
+        success = True
+        logger.debug(f"Prompt execution successful for '{name}'")
     except Exception as ex:
-        logger.error(f"Error retrieving prompt {name}: {ex}")
-        if isinstance(ex, ValueError):
-            return JSONResponse(content={"message": "Prompt execution arguments contains HTML tags that may cause security issues"}, status_code=422)
+        error_message = str(ex)
+        logger.error(f"Could not retrieve prompt {name}: {ex}")
+        if isinstance(ex, PluginViolationError):
+            # Return the actual plugin violation message
+            result = JSONResponse(content={"message": ex.message, "details": str(ex.violation) if hasattr(ex, "violation") else None}, status_code=422)
+        elif isinstance(ex, (ValueError, PromptError)):
+            # Return the actual error message
+            result = JSONResponse(content={"message": str(ex)}, status_code=422)
+        else:
+            raise
+
+    # Record metrics (moved outside try/except/finally to ensure it runs)
+    end_time = time.monotonic()
+    response_time = end_time - start_time
+
+    # Get the prompt from database to get its ID
+    prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name)).scalar_one_or_none()
+
+    if prompt:
+        metric = PromptMetric(
+            prompt_id=prompt.id,
+            response_time=response_time,
+            is_success=success,
+            error_message=error_message,
+        )
+        db.add(metric)
+        db.commit()
+
+    return result
 
 
 @prompt_router.get("/{name}")
@@ -1659,9 +2191,41 @@ async def get_prompt_no_args(
 
     Returns:
         The prompt template information
+
+    Raises:
+        Exception: Re-raised from prompt service.
     """
     logger.debug(f"User: {user} requested prompt: {name} with no arguments")
-    return await prompt_service.get_prompt(db, name, {})
+    start_time = time.monotonic()
+    success = False
+    error_message = None
+    result = None
+
+    try:
+        result = await prompt_service.get_prompt(db, name, {})
+        success = True
+    except Exception as ex:
+        error_message = str(ex)
+        raise
+
+    # Record metrics
+    end_time = time.monotonic()
+    response_time = end_time - start_time
+
+    # Get the prompt from database to get its ID
+    prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name)).scalar_one_or_none()
+
+    if prompt:
+        metric = PromptMetric(
+            prompt_id=prompt.id,
+            response_time=response_time,
+            is_success=success,
+            error_message=error_message,
+        )
+        db.add(metric)
+        db.commit()
+
+    return result
 
 
 @prompt_router.put("/{name}", response_model=PromptRead)
@@ -1687,13 +2251,28 @@ async def update_prompt(
         HTTPException: * **409 Conflict** - a different prompt with the same *name* already exists and is still active.
             * **400 Bad Request** - validation or persistence error raised by :pyclass:`~mcpgateway.services.prompt_service.PromptService`.
     """
+    logger.info(f"User: {user} requested to update prompt: {name} with data={prompt}")
     logger.debug(f"User: {user} requested to update prompt: {name} with data={prompt}")
     try:
         return await prompt_service.update_prompt(db, name, prompt)
-    except PromptNameConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except PromptError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        if isinstance(e, PromptNotFoundError):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        if isinstance(e, ValidationError):
+            logger.error(f"Validation error while updating prompt: {e}")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ErrorFormatter.format_validation_error(e))
+        if isinstance(e, IntegrityError):
+            logger.error(f"Integrity error while updating prompt: {e}")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ErrorFormatter.format_database_error(e))
+        if isinstance(e, PromptNameConflictError):
+            # If the prompt name already exists, return a 409 Conflict error
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        if isinstance(e, PromptError):
+            # If there is a general prompt error, return a 400 Bad Request error
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        # For any other unexpected errors, return a 500 Internal Server Error
+        logger.error(f"Unexpected error while updating prompt: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while updating the prompt")
 
 
 @prompt_router.delete("/{name}")
@@ -1708,15 +2287,26 @@ async def delete_prompt(name: str, db: Session = Depends(get_db), user: str = De
 
     Returns:
         Status message.
+
+    Raises:
+        HTTPException: If the prompt is not found, a prompt error occurs, or an unexpected error occurs during deletion.
     """
     logger.debug(f"User: {user} requested deletion of prompt {name}")
     try:
         await prompt_service.delete_prompt(db, name)
         return {"status": "success", "message": f"Prompt {name} deleted"}
-    except PromptNotFoundError as e:
-        return {"status": "error", "message": str(e)}
-    except PromptError as e:
-        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        if isinstance(e, PromptNotFoundError):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        if isinstance(e, PromptError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.error(f"Unexpected error while deleting prompt {name}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while deleting the prompt")
+
+    # except PromptNotFoundError as e:
+    #     return {"status": "error", "message": str(e)}
+    # except PromptError as e:
+    #     return {"status": "error", "message": str(e)}
 
 
 ################
@@ -1786,6 +2376,7 @@ async def list_gateways(
 @gateway_router.post("/", response_model=GatewayRead)
 async def register_gateway(
     gateway: GatewayCreate,
+    request: Request,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> GatewayRead:
@@ -1794,6 +2385,7 @@ async def register_gateway(
 
     Args:
         gateway: Gateway creation data.
+        request: The FastAPI request object for metadata extraction.
         db: Database session.
         user: Authenticated user.
 
@@ -1802,17 +2394,31 @@ async def register_gateway(
     """
     logger.debug(f"User '{user}' requested to register gateway: {gateway}")
     try:
-        return await gateway_service.register_gateway(db, gateway)
+        # Extract metadata from request
+        metadata = MetadataCapture.extract_creation_metadata(request, user)
+
+        return await gateway_service.register_gateway(
+            db,
+            gateway,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via=metadata["created_via"],
+            created_user_agent=metadata["created_user_agent"],
+        )
     except Exception as ex:
         if isinstance(ex, GatewayConnectionError):
-            return JSONResponse(content={"message": "Unable to connect to gateway"}, status_code=502)
+            return JSONResponse(content={"message": "Unable to connect to gateway"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
         if isinstance(ex, ValueError):
-            return JSONResponse(content={"message": "Unable to process input"}, status_code=400)
+            return JSONResponse(content={"message": "Unable to process input"}, status_code=status.HTTP_400_BAD_REQUEST)
         if isinstance(ex, GatewayNameConflictError):
-            return JSONResponse(content={"message": "Gateway name already exists"}, status_code=400)
+            return JSONResponse(content={"message": "Gateway name already exists"}, status_code=status.HTTP_409_CONFLICT)
         if isinstance(ex, RuntimeError):
-            return JSONResponse(content={"message": "Error during execution"}, status_code=500)
-        return JSONResponse(content={"message": "Unexpected error"}, status_code=500)
+            return JSONResponse(content={"message": "Error during execution"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        if isinstance(ex, ValidationError):
+            return JSONResponse(content=ErrorFormatter.format_validation_error(ex), status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        if isinstance(ex, IntegrityError):
+            return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=ErrorFormatter.format_database_error(ex))
+        return JSONResponse(content={"message": "Unexpected error"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @gateway_router.get("/{gateway_id}", response_model=GatewayRead)
@@ -1852,7 +2458,24 @@ async def update_gateway(
         Updated gateway.
     """
     logger.debug(f"User '{user}' requested update on gateway {gateway_id} with data={gateway}")
-    return await gateway_service.update_gateway(db, gateway_id, gateway)
+    try:
+        return await gateway_service.update_gateway(db, gateway_id, gateway)
+    except Exception as ex:
+        if isinstance(ex, GatewayNotFoundError):
+            return JSONResponse(content={"message": "Gateway not found"}, status_code=status.HTTP_404_NOT_FOUND)
+        if isinstance(ex, GatewayConnectionError):
+            return JSONResponse(content={"message": "Unable to connect to gateway"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if isinstance(ex, ValueError):
+            return JSONResponse(content={"message": "Unable to process input"}, status_code=status.HTTP_400_BAD_REQUEST)
+        if isinstance(ex, GatewayNameConflictError):
+            return JSONResponse(content={"message": "Gateway name already exists"}, status_code=status.HTTP_409_CONFLICT)
+        if isinstance(ex, RuntimeError):
+            return JSONResponse(content={"message": "Error during execution"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        if isinstance(ex, ValidationError):
+            return JSONResponse(content=ErrorFormatter.format_validation_error(ex), status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        if isinstance(ex, IntegrityError):
+            return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=ErrorFormatter.format_database_error(ex))
+        return JSONResponse(content={"message": "Unexpected error"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @gateway_router.delete("/{gateway_id}")
@@ -1971,39 +2594,57 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user: str 
         logger.debug(f"User {user} made an RPC request")
         body = await request.json()
         method = body["method"]
-        # rpc_id = body.get("id")
+        req_id = body.get("id") if "body" in locals() else None
         params = body.get("params", {})
+        server_id = params.get("server_id", None)
         cursor = params.get("cursor")  # Extract cursor parameter
 
         RPCRequest(jsonrpc="2.0", method=method, params=params)  # Validate the request body against the RPCRequest model
 
-        if method == "tools/list":
-            tools = await tool_service.list_tools(db, cursor=cursor)
-            result = [t.model_dump(by_alias=True, exclude_none=True) for t in tools]
+        if method == "initialize":
+            result = await session_registry.handle_initialize_logic(body.get("params", {}))
+            if hasattr(result, "model_dump"):
+                result = result.model_dump(by_alias=True, exclude_none=True)
+        elif method == "tools/list":
+            if server_id:
+                tools = await tool_service.list_server_tools(db, server_id, cursor=cursor)
+            else:
+                tools = await tool_service.list_tools(db, cursor=cursor)
+            result = {"tools": [t.model_dump(by_alias=True, exclude_none=True) for t in tools]}
         elif method == "list_tools":  # Legacy endpoint
-            tools = await tool_service.list_tools(db, cursor=cursor)
-            result = [t.model_dump(by_alias=True, exclude_none=True) for t in tools]
-        elif method == "initialize":
-            result = initialize(
-                InitializeRequest(
-                    protocol_version=params.get("protocolVersion") or params.get("protocol_version", ""),
-                    capabilities=params.get("capabilities", {}),
-                    client_info=params.get("clientInfo") or params.get("client_info", {}),
-                ),
-                user,
-            ).model_dump(by_alias=True, exclude_none=True)
+            if server_id:
+                tools = await tool_service.list_server_tools(db, server_id, cursor=cursor)
+            else:
+                tools = await tool_service.list_tools(db, cursor=cursor)
+            result = {"tools": [t.model_dump(by_alias=True, exclude_none=True) for t in tools]}
         elif method == "list_gateways":
             gateways = await gateway_service.list_gateways(db, include_inactive=False)
-            result = [g.model_dump(by_alias=True, exclude_none=True) for g in gateways]
+            result = {"gateways": [g.model_dump(by_alias=True, exclude_none=True) for g in gateways]}
         elif method == "list_roots":
             roots = await root_service.list_roots()
-            result = [r.model_dump(by_alias=True, exclude_none=True) for r in roots]
+            result = {"roots": [r.model_dump(by_alias=True, exclude_none=True) for r in roots]}
         elif method == "resources/list":
-            resources = await resource_service.list_resources(db)
-            result = [r.model_dump(by_alias=True, exclude_none=True) for r in resources]
+            if server_id:
+                resources = await resource_service.list_server_resources(db, server_id)
+            else:
+                resources = await resource_service.list_resources(db)
+            result = {"resources": [r.model_dump(by_alias=True, exclude_none=True) for r in resources]}
+        elif method == "resources/read":
+            uri = params.get("uri")
+            request_id = params.get("requestId", None)
+            if not uri:
+                raise JSONRPCError(-32602, "Missing resource URI in parameters", params)
+            result = await resource_service.read_resource(db, uri, request_id=request_id, user=user)
+            if hasattr(result, "model_dump"):
+                result = {"contents": [result.model_dump(by_alias=True, exclude_none=True)]}
+            else:
+                result = {"contents": [result]}
         elif method == "prompts/list":
-            prompts = await prompt_service.list_prompts(db, cursor=cursor)
-            result = [p.model_dump(by_alias=True, exclude_none=True) for p in prompts]
+            if server_id:
+                prompts = await prompt_service.list_server_prompts(db, server_id, cursor=cursor)
+            else:
+                prompts = await prompt_service.list_prompts(db, cursor=cursor)
+            result = {"prompts": [p.model_dump(by_alias=True, exclude_none=True) for p in prompts]}
         elif method == "prompts/get":
             name = params.get("name")
             arguments = params.get("arguments", {})
@@ -2015,21 +2656,59 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user: str 
         elif method == "ping":
             # Per the MCP spec, a ping returns an empty result.
             result = {}
-        else:
+        elif method == "tools/call":
+            # Get request headers
+            headers = {k.lower(): v for k, v in request.headers.items()}
+            name = params.get("name")
+            arguments = params.get("arguments", {})
+            if not name:
+                raise JSONRPCError(-32602, "Missing tool name in parameters", params)
             try:
-                result = await tool_service.invoke_tool(db=db, name=method, arguments=params)
+                result = await tool_service.invoke_tool(db=db, name=name, arguments=arguments, request_headers=headers)
                 if hasattr(result, "model_dump"):
                     result = result.model_dump(by_alias=True, exclude_none=True)
             except ValueError:
                 result = await gateway_service.forward_request(db, method, params)
                 if hasattr(result, "model_dump"):
                     result = result.model_dump(by_alias=True, exclude_none=True)
+        # TODO: Implement methods  # pylint: disable=fixme
+        elif method == "resources/templates/list":
+            result = {}
+        elif method.startswith("roots/"):
+            result = {}
+        elif method.startswith("notifications/"):
+            result = {}
+        elif method.startswith("sampling/"):
+            result = {}
+        elif method.startswith("elicitation/"):
+            result = {}
+        elif method.startswith("completion/"):
+            result = {}
+        elif method.startswith("logging/"):
+            result = {}
+        else:
+            # Backward compatibility: Try to invoke as a tool directly
+            # This allows both old format (method=tool_name) and new format (method=tools/call)
+            headers = {k.lower(): v for k, v in request.headers.items()}
+            try:
+                result = await tool_service.invoke_tool(db=db, name=method, arguments=params, request_headers=headers)
+                if hasattr(result, "model_dump"):
+                    result = result.model_dump(by_alias=True, exclude_none=True)
+            except (ValueError, Exception):
+                # If not a tool, try forwarding to gateway
+                try:
+                    result = await gateway_service.forward_request(db, method, params)
+                    if hasattr(result, "model_dump"):
+                        result = result.model_dump(by_alias=True, exclude_none=True)
+                except Exception:
+                    # If all else fails, return invalid method error
+                    raise JSONRPCError(-32000, "Invalid method", params)
 
-        response = result
-        return response
+        return {"jsonrpc": "2.0", "result": result, "id": req_id}
 
     except JSONRPCError as e:
-        return e.to_dict()
+        error = e.to_dict()
+        return {"jsonrpc": "2.0", "error": error["error"], "id": req_id}
     except Exception as e:
         if isinstance(e, ValueError):
             return JSONResponse(content={"message": "Method invalid"}, status_code=422)
@@ -2037,7 +2716,7 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user: str 
         return {
             "jsonrpc": "2.0",
             "error": {"code": -32000, "message": "Internal error", "data": str(e)},
-            "id": body.get("id") if "body" in locals() else None,
+            "id": req_id,
         }
 
 
@@ -2053,6 +2732,37 @@ async def websocket_endpoint(websocket: WebSocket):
         websocket: The WebSocket connection instance.
     """
     try:
+        # Authenticate WebSocket connection
+        if settings.mcp_client_auth_enabled or settings.auth_required:
+            # Extract auth from query params or headers
+            token = None
+            # Try to get token from query parameter
+            if "token" in websocket.query_params:
+                token = websocket.query_params["token"]
+            # Try to get token from Authorization header
+            elif "authorization" in websocket.headers:
+                auth_header = websocket.headers["authorization"]
+                if auth_header.startswith("Bearer "):
+                    token = auth_header[7:]
+
+            # Check for proxy auth if MCP client auth is disabled
+            if not settings.mcp_client_auth_enabled and settings.trust_proxy_auth:
+                proxy_user = websocket.headers.get(settings.proxy_user_header)
+                if not proxy_user and not token:
+                    await websocket.close(code=1008, reason="Authentication required")
+                    return
+            elif settings.auth_required and not token:
+                await websocket.close(code=1008, reason="Authentication required")
+                return
+
+            # Verify JWT token if provided and MCP client auth is enabled
+            if token and settings.mcp_client_auth_enabled:
+                try:
+                    await verify_jwt_token(token)
+                except Exception:
+                    await websocket.close(code=1008, reason="Invalid authentication")
+                    return
+
         await websocket.accept()
         while True:
             try:
@@ -2196,7 +2906,7 @@ async def set_log_level(request: Request, user: str = Depends(require_auth)) -> 
 @metrics_router.get("", response_model=dict)
 async def get_metrics(db: Session = Depends(get_db), user: str = Depends(require_auth)) -> dict:
     """
-    Retrieve aggregated metrics for all entity types (Tools, Resources, Servers, Prompts).
+    Retrieve aggregated metrics for all entity types (Tools, Resources, Servers, Prompts, A2A Agents).
 
     Args:
         db: Database session
@@ -2210,12 +2920,20 @@ async def get_metrics(db: Session = Depends(get_db), user: str = Depends(require
     resource_metrics = await resource_service.aggregate_metrics(db)
     server_metrics = await server_service.aggregate_metrics(db)
     prompt_metrics = await prompt_service.aggregate_metrics(db)
-    return {
+
+    metrics_result = {
         "tools": tool_metrics,
         "resources": resource_metrics,
         "servers": server_metrics,
         "prompts": prompt_metrics,
     }
+
+    # Include A2A metrics only if A2A features are enabled
+    if a2a_service and settings.mcpgateway_a2a_metrics_enabled:
+        a2a_metrics = await a2a_service.aggregate_metrics(db)
+        metrics_result["a2a_agents"] = a2a_metrics
+
+    return metrics_result
 
 
 @metrics_router.post("/reset", response_model=dict)
@@ -2225,7 +2943,7 @@ async def reset_metrics(entity: Optional[str] = None, entity_id: Optional[int] =
     or perform a global reset if no entity is specified.
 
     Args:
-        entity: One of "tool", "resource", "server", "prompt", or None for global reset.
+        entity: One of "tool", "resource", "server", "prompt", "a2a_agent", or None for global reset.
         entity_id: Specific entity ID to reset metrics for (optional).
         db: Database session
         user: Authenticated user
@@ -2243,6 +2961,8 @@ async def reset_metrics(entity: Optional[str] = None, entity_id: Optional[int] =
         await resource_service.reset_metrics(db)
         await server_service.reset_metrics(db)
         await prompt_service.reset_metrics(db)
+        if a2a_service and settings.mcpgateway_a2a_metrics_enabled:
+            await a2a_service.reset_metrics(db)
     elif entity.lower() == "tool":
         await tool_service.reset_metrics(db, entity_id)
     elif entity.lower() == "resource":
@@ -2251,6 +2971,11 @@ async def reset_metrics(entity: Optional[str] = None, entity_id: Optional[int] =
         await server_service.reset_metrics(db)
     elif entity.lower() == "prompt":
         await prompt_service.reset_metrics(db)
+    elif entity.lower() in ("a2a_agent", "a2a"):
+        if a2a_service and settings.mcpgateway_a2a_metrics_enabled:
+            await a2a_service.reset_metrics(db, entity_id)
+        else:
+            raise HTTPException(status_code=400, detail="A2A features are disabled")
     else:
         raise HTTPException(status_code=400, detail="Invalid entity type for metrics reset")
     return {"status": "success", "message": f"Metrics reset for {entity if entity else 'all entities'}"}
@@ -2301,6 +3026,323 @@ async def readiness_check(db: Session = Depends(get_db)):
         return JSONResponse(content={"status": "not ready", "error": error_message}, status_code=503)
 
 
+####################
+# Tag Endpoints    #
+####################
+
+
+@tag_router.get("", response_model=List[TagInfo])
+@tag_router.get("/", response_model=List[TagInfo])
+async def list_tags(
+    entity_types: Optional[str] = None,
+    include_entities: bool = False,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> List[TagInfo]:
+    """
+    Retrieve all unique tags across specified entity types.
+
+    Args:
+        entity_types: Comma-separated list of entity types to filter by
+                     (e.g., "tools,resources,prompts,servers,gateways").
+                     If not provided, returns tags from all entity types.
+        include_entities: Whether to include the list of entities that have each tag
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        List of TagInfo objects containing tag names, statistics, and optionally entities
+
+    Raises:
+        HTTPException: If tag retrieval fails
+    """
+    # Parse entity types parameter if provided
+    entity_types_list = None
+    if entity_types:
+        entity_types_list = [et.strip().lower() for et in entity_types.split(",") if et.strip()]
+
+    logger.debug(f"User {user} is retrieving tags for entity types: {entity_types_list}, include_entities: {include_entities}")
+
+    try:
+        tags = await tag_service.get_all_tags(db, entity_types=entity_types_list, include_entities=include_entities)
+        return tags
+    except Exception as e:
+        logger.error(f"Failed to retrieve tags: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve tags: {str(e)}")
+
+
+@tag_router.get("/{tag_name}/entities", response_model=List[TaggedEntity])
+async def get_entities_by_tag(
+    tag_name: str,
+    entity_types: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> List[TaggedEntity]:
+    """
+    Get all entities that have a specific tag.
+
+    Args:
+        tag_name: The tag to search for
+        entity_types: Comma-separated list of entity types to filter by
+                     (e.g., "tools,resources,prompts,servers,gateways").
+                     If not provided, returns entities from all types.
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        List of TaggedEntity objects
+
+    Raises:
+        HTTPException: If entity retrieval fails
+    """
+    # Parse entity types parameter if provided
+    entity_types_list = None
+    if entity_types:
+        entity_types_list = [et.strip().lower() for et in entity_types.split(",") if et.strip()]
+
+    logger.debug(f"User {user} is retrieving entities for tag '{tag_name}' with entity types: {entity_types_list}")
+
+    try:
+        entities = await tag_service.get_entities_by_tag(db, tag_name=tag_name, entity_types=entity_types_list)
+        return entities
+    except Exception as e:
+        logger.error(f"Failed to retrieve entities for tag '{tag_name}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve entities: {str(e)}")
+
+
+####################
+# Export/Import    #
+####################
+
+
+@export_import_router.get("/export", response_model=Dict[str, Any])
+async def export_configuration(
+    export_format: str = "json",  # pylint: disable=unused-argument
+    types: Optional[str] = None,
+    exclude_types: Optional[str] = None,
+    tags: Optional[str] = None,
+    include_inactive: bool = False,
+    include_dependencies: bool = True,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """
+    Export gateway configuration to JSON format.
+
+    Args:
+        export_format: Export format (currently only 'json' supported)
+        types: Comma-separated list of entity types to include (tools,gateways,servers,prompts,resources,roots)
+        exclude_types: Comma-separated list of entity types to exclude
+        tags: Comma-separated list of tags to filter by
+        include_inactive: Whether to include inactive entities
+        include_dependencies: Whether to include dependent entities
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Export data in the specified format
+
+    Raises:
+        HTTPException: If export fails
+    """
+    try:
+        logger.info(f"User {user} requested configuration export")
+
+        # Parse parameters
+        include_types = None
+        if types:
+            include_types = [t.strip() for t in types.split(",") if t.strip()]
+
+        exclude_types_list = None
+        if exclude_types:
+            exclude_types_list = [t.strip() for t in exclude_types.split(",") if t.strip()]
+
+        tags_list = None
+        if tags:
+            tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+
+        # Extract username from user (which could be string or dict with token)
+        username = user if isinstance(user, str) else user.get("username", "unknown")
+
+        # Perform export
+        export_data = await export_service.export_configuration(
+            db=db, include_types=include_types, exclude_types=exclude_types_list, tags=tags_list, include_inactive=include_inactive, include_dependencies=include_dependencies, exported_by=username
+        )
+
+        return export_data
+
+    except ExportError as e:
+        logger.error(f"Export failed for user {user}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected export error for user {user}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+@export_import_router.post("/export/selective", response_model=Dict[str, Any])
+async def export_selective_configuration(
+    entity_selections: Dict[str, List[str]] = Body(...), include_dependencies: bool = True, db: Session = Depends(get_db), user: str = Depends(require_auth)
+) -> Dict[str, Any]:
+    """
+    Export specific entities by their IDs/names.
+
+    Args:
+        entity_selections: Dict mapping entity types to lists of IDs/names to export
+        include_dependencies: Whether to include dependent entities
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Selective export data
+
+    Raises:
+        HTTPException: If export fails
+
+    Example request body:
+        {
+            "tools": ["tool1", "tool2"],
+            "servers": ["server1"],
+            "prompts": ["prompt1"]
+        }
+    """
+    try:
+        logger.info(f"User {user} requested selective configuration export")
+
+        # Extract username from user (which could be string or dict with token)
+        username = user if isinstance(user, str) else user.get("username", "unknown")
+
+        export_data = await export_service.export_selective(db=db, entity_selections=entity_selections, include_dependencies=include_dependencies, exported_by=username)
+
+        return export_data
+
+    except ExportError as e:
+        logger.error(f"Selective export failed for user {user}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected selective export error for user {user}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+@export_import_router.post("/import", response_model=Dict[str, Any])
+async def import_configuration(
+    import_data: Dict[str, Any] = Body(...),
+    conflict_strategy: str = "update",
+    dry_run: bool = False,
+    rekey_secret: Optional[str] = None,
+    selected_entities: Optional[Dict[str, List[str]]] = None,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """
+    Import configuration data with conflict resolution.
+
+    Args:
+        import_data: The configuration data to import
+        conflict_strategy: How to handle conflicts: skip, update, rename, fail
+        dry_run: If true, validate but don't make changes
+        rekey_secret: New encryption secret for cross-environment imports
+        selected_entities: Dict of entity types to specific entity names/ids to import
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Import status and results
+
+    Raises:
+        HTTPException: If import fails or validation errors occur
+    """
+    try:
+        logger.info(f"User {user} requested configuration import (dry_run={dry_run})")
+
+        # Validate conflict strategy
+        try:
+            strategy = ConflictStrategy(conflict_strategy.lower())
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid conflict strategy. Must be one of: {[s.value for s in ConflictStrategy]}")
+
+        # Extract username from user (which could be string or dict with token)
+        username = user if isinstance(user, str) else user.get("username", "unknown")
+
+        # Perform import
+        import_status = await import_service.import_configuration(
+            db=db, import_data=import_data, conflict_strategy=strategy, dry_run=dry_run, rekey_secret=rekey_secret, imported_by=username, selected_entities=selected_entities
+        )
+
+        return import_status.to_dict()
+
+    except ImportValidationError as e:
+        logger.error(f"Import validation failed for user {user}: {str(e)}")
+        raise HTTPException(status_code=422, detail=f"Validation error: {str(e)}")
+    except ImportConflictError as e:
+        logger.error(f"Import conflict for user {user}: {str(e)}")
+        raise HTTPException(status_code=409, detail=f"Conflict error: {str(e)}")
+    except ImportServiceError as e:
+        logger.error(f"Import failed for user {user}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected import error for user {user}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+
+
+@export_import_router.get("/import/status/{import_id}", response_model=Dict[str, Any])
+async def get_import_status(import_id: str, user: str = Depends(require_auth)) -> Dict[str, Any]:
+    """
+    Get the status of an import operation.
+
+    Args:
+        import_id: The import operation ID
+        user: Authenticated user
+
+    Returns:
+        Import status information
+
+    Raises:
+        HTTPException: If import not found
+    """
+    logger.debug(f"User {user} requested import status for {import_id}")
+
+    import_status = import_service.get_import_status(import_id)
+    if not import_status:
+        raise HTTPException(status_code=404, detail=f"Import {import_id} not found")
+
+    return import_status.to_dict()
+
+
+@export_import_router.get("/import/status", response_model=List[Dict[str, Any]])
+async def list_import_statuses(user: str = Depends(require_auth)) -> List[Dict[str, Any]]:
+    """
+    List all import operation statuses.
+
+    Args:
+        user: Authenticated user
+
+    Returns:
+        List of import status information
+    """
+    logger.debug(f"User {user} requested all import statuses")
+
+    statuses = import_service.list_import_statuses()
+    return [status.to_dict() for status in statuses]
+
+
+@export_import_router.post("/import/cleanup", response_model=Dict[str, Any])
+async def cleanup_import_statuses(max_age_hours: int = 24, user: str = Depends(require_auth)) -> Dict[str, Any]:
+    """
+    Clean up completed import statuses older than specified age.
+
+    Args:
+        max_age_hours: Maximum age in hours for keeping completed imports
+        user: Authenticated user
+
+    Returns:
+        Cleanup results
+    """
+    logger.info(f"User {user} requested import status cleanup (max_age_hours={max_age_hours})")
+
+    removed_count = import_service.cleanup_completed_imports(max_age_hours)
+    return {"status": "success", "message": f"Cleaned up {removed_count} completed import statuses", "removed_count": removed_count}
+
+
 # Mount static files
 # app.mount("/static", StaticFiles(directory=str(settings.static_dir)), name="static")
 
@@ -2315,7 +3357,37 @@ app.include_router(root_router)
 app.include_router(utility_router)
 app.include_router(server_router)
 app.include_router(metrics_router)
+app.include_router(tag_router)
+app.include_router(export_import_router)
 
+# Conditionally include A2A router if A2A features are enabled
+if settings.mcpgateway_a2a_enabled:
+    app.include_router(a2a_router)
+    logger.info("A2A router included - A2A features enabled")
+else:
+    logger.info("A2A router not included - A2A features disabled")
+
+app.include_router(well_known_router)
+
+# Include OAuth router
+try:
+    # First-Party
+    from mcpgateway.routers.oauth_router import oauth_router
+
+    app.include_router(oauth_router)
+    logger.info("OAuth router included")
+except ImportError:
+    logger.debug("OAuth router not available")
+
+# Include reverse proxy router if enabled
+try:
+    # First-Party
+    from mcpgateway.routers.reverse_proxy import router as reverse_proxy_router
+
+    app.include_router(reverse_proxy_router)
+    logger.info("Reverse proxy router included")
+except ImportError:
+    logger.debug("Reverse proxy router not available")
 
 # Feature flags for admin UI and API
 UI_ENABLED = settings.mcpgateway_ui_enabled

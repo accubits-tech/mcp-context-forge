@@ -20,6 +20,7 @@ Environment variables:
 - AUTH_REQUIRED: Require authentication (default: True)
 - TRANSPORT_TYPE: Transport mechanisms (default: "all")
 - FEDERATION_ENABLED: Enable gateway federation (default: True)
+- DOCS_ALLOW_BASIC_AUTH: Allow basic auth for docs (default: False)
 - FEDERATION_DISCOVERY: Enable auto-discovery (default: False)
 - FEDERATION_PEERS: List of peer gateway URLs (default: [])
 - RESOURCE_CACHE_SIZE: Max cached resources (default: 1000)
@@ -51,6 +52,7 @@ from functools import lru_cache
 from importlib.resources import files
 import json
 import logging
+import os
 from pathlib import Path
 import re
 from typing import Annotated, Any, ClassVar, Dict, List, Optional, Set, Union
@@ -63,11 +65,14 @@ from jsonpath_ng.jsonpath import JSONPath
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%H:%M:%S",
-)
+# Only configure basic logging if no handlers exist yet
+# This prevents conflicts with LoggingService while ensuring config logging works
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -92,12 +97,24 @@ class Settings(BaseSettings):
         >>> s4 = Settings(database_url='sqlite:///./test.db')
         >>> isinstance(s4.database_settings, dict)
         True
+        >>> s5 = Settings()
+        >>> s5.app_name
+        'MCP_Gateway'
+        >>> s5.host in ('0.0.0.0', '127.0.0.1')  # Default can be either
+        True
+        >>> s5.port
+        4444
+        >>> s5.auth_required
+        True
+        >>> isinstance(s5.allowed_origins, set)
+        True
     """
 
     # Basic Settings
     app_name: str = "MCP_Gateway"
     host: str = "127.0.0.1"
     port: int = 4444
+    docs_allow_basic_auth: bool = False  # Allow basic auth for docs
     database_url: str = "sqlite:///./mcp.db"
     templates_dir: Path = Path("mcpgateway/templates")
     # Absolute paths resolved at import-time (still override-able via env vars)
@@ -118,16 +135,62 @@ class Settings(BaseSettings):
 
     require_token_expiration: bool = Field(default=False, description="Require all JWT tokens to have expiration claims")  # Default to flexible mode for backward compatibility
 
+    # MCP Client Authentication
+    mcp_client_auth_enabled: bool = Field(default=True, description="Enable JWT authentication for MCP client operations")
+    trust_proxy_auth: bool = Field(
+        default=False,
+        description="Trust proxy authentication headers (required when mcp_client_auth_enabled=false)",
+    )
+    proxy_user_header: str = Field(default="X-Authenticated-User", description="Header containing authenticated username from proxy")
+
     #  Encryption key phrase for auth storage
     auth_encryption_secret: str = "my-test-salt"
+
+    # OAuth Configuration
+    oauth_request_timeout: int = Field(default=30, description="OAuth request timeout in seconds")
+    oauth_max_retries: int = Field(default=3, description="Maximum retries for OAuth token requests")
 
     # UI/Admin Feature Flags
     mcpgateway_ui_enabled: bool = False
     mcpgateway_admin_api_enabled: bool = False
+    mcpgateway_bulk_import_enabled: bool = True
+    mcpgateway_bulk_import_max_tools: int = 200
+    mcpgateway_bulk_import_rate_limit: int = 10
+
+    # A2A (Agent-to-Agent) Feature Flags
+    mcpgateway_a2a_enabled: bool = True
+    mcpgateway_a2a_max_agents: int = 100
+    mcpgateway_a2a_default_timeout: int = 30
+    mcpgateway_a2a_max_retries: int = 3
+    mcpgateway_a2a_metrics_enabled: bool = True
 
     # Security
     skip_ssl_verify: bool = False
     cors_enabled: bool = True
+
+    # Environment
+    environment: str = Field(default="development", env="ENVIRONMENT")
+
+    # Domain configuration
+    app_domain: str = Field(default="localhost", env="APP_DOMAIN")
+
+    # Security settings
+    secure_cookies: bool = Field(default=True, env="SECURE_COOKIES")
+    cookie_samesite: str = Field(default="lax", env="COOKIE_SAMESITE")
+
+    # CORS settings
+    cors_allow_credentials: bool = Field(default=True, env="CORS_ALLOW_CREDENTIALS")
+
+    # Security Headers Configuration
+    security_headers_enabled: bool = Field(default=True, env="SECURITY_HEADERS_ENABLED")
+    x_frame_options: str = Field(default="DENY", env="X_FRAME_OPTIONS")
+    x_content_type_options_enabled: bool = Field(default=True, env="X_CONTENT_TYPE_OPTIONS_ENABLED")
+    x_xss_protection_enabled: bool = Field(default=True, env="X_XSS_PROTECTION_ENABLED")
+    x_download_options_enabled: bool = Field(default=True, env="X_DOWNLOAD_OPTIONS_ENABLED")
+    hsts_enabled: bool = Field(default=True, env="HSTS_ENABLED")
+    hsts_max_age: int = Field(default=31536000, env="HSTS_MAX_AGE")  # 1 year
+    hsts_include_subdomains: bool = Field(default=True, env="HSTS_INCLUDE_SUBDOMAINS")
+    remove_server_headers: bool = Field(default=True, env="REMOVE_SERVER_HEADERS")
 
     # For allowed_origins, strip '' to ensure we're passing on valid JSON via env
     # Tell pydantic *not* to touch this env var - our validator will.
@@ -188,12 +251,25 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"  # json or text
-    log_file: Optional[Path] = None
+    log_to_file: bool = False  # Enable file logging (default: stdout/stderr only)
+    log_filemode: str = "a+"  # append or overwrite
+    log_file: Optional[str] = None  # Only used if log_to_file=True
+    log_folder: Optional[str] = None  # Only used if log_to_file=True
+
+    # Log Rotation (optional - only used if log_to_file=True)
+    log_rotation_enabled: bool = False  # Enable log file rotation
+    log_max_size_mb: int = 1  # Max file size in MB before rotation (default: 1MB)
+    log_backup_count: int = 5  # Number of backup files to keep (default: 5)
+
+    # Log Buffer (for in-memory storage in admin UI)
+    log_buffer_size_mb: float = 1.0  # Size of in-memory log buffer in MB
 
     # Transport
     transport_type: str = "all"  # http, ws, sse, all
     websocket_ping_interval: int = 30  # seconds
     sse_retry_timeout: int = 5000  # milliseconds
+    sse_keepalive_enabled: bool = True  # Enable SSE keepalive events
+    sse_keepalive_interval: int = 30  # seconds between keepalive events
 
     # Federation
     federation_enabled: bool = True
@@ -309,11 +385,61 @@ class Settings(BaseSettings):
     use_stateful_sessions: bool = False  # Set to False to use stateless sessions without event store
     json_response_enabled: bool = True  # Enable JSON responses instead of SSE streams
 
+    # Core plugin settings
+    plugins_enabled: bool = Field(default=False, description="Enable the plugin framework")
+    plugin_config_file: str = Field(default="plugins/config.yaml", description="Path to main plugin configuration file")
+
+    # Plugin CLI settings
+    plugins_cli_completion: bool = Field(default=False, description="Enable auto-completion for plugins CLI")
+    plugins_cli_markup_mode: str | None = Field(default=None, description="Set markup mode for plugins CLI")
+
     # Development
     dev_mode: bool = False
     reload: bool = False
     debug: bool = False
 
+    # Observability (OpenTelemetry)
+    otel_enable_observability: bool = Field(default=True, description="Enable OpenTelemetry observability")
+    otel_traces_exporter: str = Field(default="otlp", description="Traces exporter: otlp, jaeger, zipkin, console, none")
+    otel_exporter_otlp_endpoint: Optional[str] = Field(default=None, description="OTLP endpoint (e.g., http://localhost:4317)")
+    otel_exporter_otlp_protocol: str = Field(default="grpc", description="OTLP protocol: grpc or http")
+    otel_exporter_otlp_insecure: bool = Field(default=True, description="Use insecure connection for OTLP")
+    otel_exporter_otlp_headers: Optional[str] = Field(default=None, description="OTLP headers (comma-separated key=value)")
+    otel_exporter_jaeger_endpoint: Optional[str] = Field(default=None, description="Jaeger endpoint")
+    otel_exporter_zipkin_endpoint: Optional[str] = Field(default=None, description="Zipkin endpoint")
+    otel_service_name: str = Field(default="mcp-gateway", description="Service name for traces")
+    otel_resource_attributes: Optional[str] = Field(default=None, description="Resource attributes (comma-separated key=value)")
+    otel_bsp_max_queue_size: int = Field(default=2048, description="Max queue size for batch span processor")
+    otel_bsp_max_export_batch_size: int = Field(default=512, description="Max export batch size")
+    otel_bsp_schedule_delay: int = Field(default=5000, description="Schedule delay in milliseconds")
+
+    # ===================================
+    # Well-Known URI Configuration
+    # ===================================
+
+    # Enable well-known URI endpoints
+    well_known_enabled: bool = True
+
+    # robots.txt content (default: disallow all crawling for private API)
+    well_known_robots_txt: str = """User-agent: *
+Disallow: /
+
+# MCP Gateway is a private API gateway
+# Public crawling is disabled by default"""
+
+    # security.txt content (optional, user-defined)
+    # Example: "Contact: security@example.com\nExpires: 2025-12-31T23:59:59Z\nPreferred-Languages: en"
+    well_known_security_txt: str = ""
+
+    # Enable security.txt only if content is provided
+    well_known_security_txt_enabled: bool = False
+
+    # Additional custom well-known files (JSON format)
+    # Example: {"ai.txt": "This service uses AI for...", "dnt-policy.txt": "Do Not Track policy..."}
+    well_known_custom_files: str = "{}"
+
+    # Cache control for well-known files (seconds)
+    well_known_cache_max_age: int = 3600  # 1 hour default
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
 
     gateway_tool_name_separator: str = "-"
@@ -329,6 +455,18 @@ class Settings(BaseSettings):
 
         Returns:
             The validated separator, defaults to '-' if invalid.
+
+        Examples:
+            >>> Settings.must_be_allowed_sep('-')
+            '-'
+            >>> Settings.must_be_allowed_sep('--')
+            '--'
+            >>> Settings.must_be_allowed_sep('_')
+            '_'
+            >>> Settings.must_be_allowed_sep('.')
+            '.'
+            >>> Settings.must_be_allowed_sep('invalid')
+            '-'
         """
         if not re.fullmatch(cls.valid_slug_separator_regexp, v):
             logger.warning(
@@ -336,6 +474,35 @@ class Settings(BaseSettings):
                 stacklevel=2,
             )
             return "-"
+        return v
+
+    @property
+    def custom_well_known_files(self) -> Dict[str, str]:
+        """Parse custom well-known files from JSON string.
+
+        Returns:
+            Dict[str, str]: Parsed custom well-known files mapping filename to content.
+        """
+        try:
+            return json.loads(self.well_known_custom_files) if self.well_known_custom_files else {}
+        except json.JSONDecodeError:
+            logger.error(f"Invalid JSON in WELL_KNOWN_CUSTOM_FILES: {self.well_known_custom_files}")
+            return {}
+
+    @field_validator("well_known_security_txt_enabled", mode="after")
+    @classmethod
+    def _auto_enable_security_txt(cls, v, info):
+        """Auto-enable security.txt if content is provided.
+
+        Args:
+            v: The current value of well_known_security_txt_enabled.
+            info: ValidationInfo containing field data.
+
+        Returns:
+            bool: True if security.txt content is provided, otherwise the original value.
+        """
+        if info.data and "well_known_security_txt" in info.data:
+            return bool(info.data["well_known_security_txt"].strip())
         return v
 
     @property
@@ -445,6 +612,17 @@ class Settings(BaseSettings):
 
         Returns:
             dict: Dictionary containing CORS configuration options.
+
+        Examples:
+            >>> s = Settings(cors_enabled=True, allowed_origins={'http://localhost'})
+            >>> cors = s.cors_settings
+            >>> cors['allow_origins']
+            ['http://localhost']
+            >>> cors['allow_credentials']
+            True
+            >>> s2 = Settings(cors_enabled=False)
+            >>> s2.cors_settings
+            {}
         """
         return (
             {
@@ -541,6 +719,77 @@ class Settings(BaseSettings):
 
     # Rate limiting
     validation_max_requests_per_minute: int = 60
+
+    # Header passthrough feature (disabled by default for security)
+    enable_header_passthrough: bool = Field(default=False, description="Enable HTTP header passthrough feature (WARNING: Security implications - only enable if needed)")
+
+    # Passthrough headers configuration
+    default_passthrough_headers: List[str] = Field(default_factory=list)
+
+    def __init__(self, **kwargs):
+        """Initialize Settings with environment variable parsing.
+
+        Args:
+            **kwargs: Keyword arguments passed to parent Settings class
+
+        Raises:
+            ValueError: When environment variable parsing fails or produces invalid data
+
+        Examples:
+            >>> import os
+            >>> # Test with no environment variable set
+            >>> old_val = os.environ.get('DEFAULT_PASSTHROUGH_HEADERS')
+            >>> if 'DEFAULT_PASSTHROUGH_HEADERS' in os.environ:
+            ...     del os.environ['DEFAULT_PASSTHROUGH_HEADERS']
+            >>> s = Settings()
+            >>> s.default_passthrough_headers
+            ['X-Tenant-Id', 'X-Trace-Id']
+            >>> # Restore original value if it existed
+            >>> if old_val is not None:
+            ...     os.environ['DEFAULT_PASSTHROUGH_HEADERS'] = old_val
+        """
+        super().__init__(**kwargs)
+
+        # Parse DEFAULT_PASSTHROUGH_HEADERS environment variable
+        default_value = os.environ.get("DEFAULT_PASSTHROUGH_HEADERS")
+        if default_value:
+            try:
+                # Try JSON parsing first
+                self.default_passthrough_headers = json.loads(default_value)
+                if not isinstance(self.default_passthrough_headers, list):
+                    raise ValueError("Must be a JSON array")
+            except (json.JSONDecodeError, ValueError):
+                # Fallback to comma-separated parsing
+                self.default_passthrough_headers = [h.strip() for h in default_value.split(",") if h.strip()]
+                logger.info(f"Parsed comma-separated passthrough headers: {self.default_passthrough_headers}")
+        else:
+            # Safer defaults without Authorization header
+            self.default_passthrough_headers = ["X-Tenant-Id", "X-Trace-Id"]
+
+        # Configure environment-aware CORS origins if not explicitly set via env or kwargs
+        # Only apply defaults if using the default allowed_origins value
+        if not os.environ.get("ALLOWED_ORIGINS") and "allowed_origins" not in kwargs and self.allowed_origins == {"http://localhost", "http://localhost:4444"}:
+            if self.environment == "development":
+                self.allowed_origins = {
+                    "http://localhost",
+                    "http://localhost:3000",
+                    "http://localhost:8080",
+                    "http://127.0.0.1:3000",
+                    "http://127.0.0.1:8080",
+                    f"http://localhost:{self.port}",
+                    f"http://127.0.0.1:{self.port}",
+                }
+            else:
+                # Production origins - construct from app_domain
+                self.allowed_origins = {f"https://{self.app_domain}", f"https://app.{self.app_domain}", f"https://admin.{self.app_domain}"}
+
+        # Validate proxy auth configuration
+        if not self.mcp_client_auth_enabled and not self.trust_proxy_auth:
+            logger.warning(
+                "MCP client authentication is disabled but trust_proxy_auth is not set. "
+                "This is a security risk! Set TRUST_PROXY_AUTH=true only if MCP Gateway "
+                "is behind a trusted authentication proxy."
+            )
 
     # Masking value for all sensitive data
     masked_auth_value: str = "*****"
@@ -671,6 +920,15 @@ def get_settings() -> Settings:
 
     Returns:
         Settings: A cached instance of the Settings class.
+
+    Examples:
+        >>> settings = get_settings()
+        >>> isinstance(settings, Settings)
+        True
+        >>> # Second call returns the same cached instance
+        >>> settings2 = get_settings()
+        >>> settings is settings2
+        True
     """
     # Instantiate a fresh Pydantic Settings object,
     # loading from env vars or .env exactly once.

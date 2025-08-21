@@ -22,7 +22,7 @@ Point it at any MCP-compliant endpoint &mdash; a live Gateway **SSE** stream or 
 |----------|-----------|--------------|
 | **1. Connect to Gateway (SSE)** |<br/>```bash<br/>npx @modelcontextprotocol/inspector \\<br/>  --url http://localhost:4444/servers/UUID_OF_SERVER_1/sse \\<br/>  --header "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN"<br/>``` | Inspector opens `http://localhost:5173` and attaches **directly** to the gateway stream. |
 | **2. Connect to Gateway (Streamable HTTP)** |<br/>```bash<br/>npx @modelcontextprotocol/inspector \\<br/>  --url http://localhost:4444/servers/UUID_OF_SERVER_1/mcp/ \\<br/>  --header "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN"<br/>``` | Inspector opens `http://localhost:5173` and attaches **directly** to the gateway stream. |
-| **3 - Spin up the stdio wrapper in-process** |<br/>```bash<br/>export MCP_AUTH_TOKEN=$MCPGATEWAY_BEARER_TOKEN<br/>export MCP_SERVER_CATALOG_URLS=http://localhost:4444/servers/UUID_OF_SERVER_1<br/><br/>npx @modelcontextprotocol/inspector \\<br/>  python3 -m mcpgateway.wrapper<br/>``` | Inspector forks `python3 -m mcpgateway.wrapper`, then connects to its stdio port automatically. |
+| **3 - Spin up the stdio wrapper in-process** |<br/>```bash<br/>export MCP_AUTH=$MCPGATEWAY_BEARER_TOKEN<br/>export MCP_SERVER_URL=http://localhost:4444/servers/UUID_OF_SERVER_1/mcp<br/><br/>npx @modelcontextprotocol/inspector \\<br/>  python3 -m mcpgateway.wrapper<br/>``` | Inspector forks `python3 -m mcpgateway.wrapper`, then connects to its stdio port automatically. |
 | **4 - Same, but via uv / uvx** |<br/>```bash<br/>npx @modelcontextprotocol/inspector \\<br/>  uvx python3 -m mcpgateway.wrapper<br/>``` | Uses the super-fast **uv** virtual-env if you prefer. |
 | **5 - Wrapper already running** | Launch the wrapper in another shell, then:<br/>```bash<br/>npx @modelcontextprotocol/inspector --stdio<br/>``` | Inspector only opens the GUI and binds to the running stdio server on stdin/stdout. |
 
@@ -33,14 +33,14 @@ Point it at any MCP-compliant endpoint &mdash; a live Gateway **SSE** stream or 
 Most wrappers / servers will need at least:
 
 ```bash
-export MCP_SERVER_CATALOG_URLS=http://localhost:4444/servers/UUID_OF_SERVER_1   # one or many
-export MCP_AUTH_TOKEN=$(python3 -m mcpgateway.utils.create_jwt_token -u admin --secret my-test-key)
+export MCP_SERVER_URL=http://localhost:4444/servers/UUID_OF_SERVER_1   # one or many
+export MCP_AUTH=$(python3 -m mcpgateway.utils.create_jwt_token -u admin --secret my-test-key)
 ```
 
 If you point Inspector **directly** at a Gateway SSE stream, pass the header:
 
 ```bash
---header "Authorization: Bearer $MCP_AUTH_TOKEN"
+--header "Authorization: Bearer $MCP_AUTH"
 ```
 
 ---
@@ -55,13 +55,13 @@ If you point Inspector **directly** at a Gateway SSE stream, pass the header:
 
 ---
 
-## 🛰 Connecting through SuperGateway (stdio → SSE bridge)
+## 🛰 Connecting through Translate Bridge (stdio → SSE bridge)
 
 Want to test a **stdio-only** MCP server inside Inspector?
 
 ```bash
 # Example: expose mcp-server-git over SSE on :8000
-npx -y supergateway --stdio "uvx mcp-server-git"
+python3 -m mcpgateway.translate --stdio "uvx mcp-server-git" --expose-sse --port 9002
 #   SSE stream:  http://localhost:8000/sse
 #   POST back-channel: http://localhost:8000/message
 ```
@@ -73,4 +73,4 @@ npx @modelcontextprotocol/inspector \
   --url http://localhost:8000/sse
 ```
 
-SuperGateway handles the bridging; Inspector thinks it is speaking native SSE.
+Translate Bridge handles the bridging; Inspector thinks it is speaking native SSE.

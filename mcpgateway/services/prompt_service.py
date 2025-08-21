@@ -17,23 +17,31 @@ It handles:
 # Standard
 import asyncio
 from datetime import datetime, timezone
-import logging
 from string import Formatter
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
+import uuid
 
 # Third-Party
 from jinja2 import Environment, meta, select_autoescape
-from sqlalchemy import delete, func, not_, select
+from sqlalchemy import case, delete, desc, Float, func, not_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 # First-Party
+from mcpgateway.config import settings
 from mcpgateway.db import Prompt as DbPrompt
 from mcpgateway.db import PromptMetric, server_prompt_association
 from mcpgateway.models import Message, PromptResult, Role, TextContent
-from mcpgateway.schemas import PromptCreate, PromptRead, PromptUpdate
+from mcpgateway.observability import create_span
+from mcpgateway.plugins.framework import GlobalContext, PluginManager, PluginViolationError, PromptPosthookPayload, PromptPrehookPayload
+from mcpgateway.schemas import PromptCreate, PromptRead, PromptUpdate, TopPerformer
+from mcpgateway.services.logging_service import LoggingService
+from mcpgateway.utils.metrics_common import build_top_performers
 
-logger = logging.getLogger(__name__)
+# Initialize logging service first
+logging_service = LoggingService()
+logger = logging_service.get_logger(__name__)
 
 
 class PromptError(Exception):
@@ -113,6 +121,7 @@ class PromptService:
         """
         self._event_subscribers: List[asyncio.Queue] = []
         self._jinja_env = Environment(autoescape=select_autoescape(["html", "xml"]), trim_blocks=True, lstrip_blocks=True)
+        self._plugin_manager: PluginManager | None = PluginManager() if settings.plugins_enabled else None
 
     async def initialize(self) -> None:
         """Initialize the service."""
@@ -132,6 +141,50 @@ class PromptService:
         """
         self._event_subscribers.clear()
         logger.info("Prompt service shutdown complete")
+
+    async def get_top_prompts(self, db: Session, limit: int = 5) -> List[TopPerformer]:
+        """Retrieve the top-performing prompts based on execution count.
+
+        Queries the database to get prompts with their metrics, ordered by the number of executions
+        in descending order. Returns a list of TopPerformer objects containing prompt details and
+        performance metrics.
+
+        Args:
+            db (Session): Database session for querying prompt metrics.
+            limit (int): Maximum number of prompts to return. Defaults to 5.
+
+        Returns:
+            List[TopPerformer]: A list of TopPerformer objects, each containing:
+                - id: Prompt ID.
+                - name: Prompt name.
+                - execution_count: Total number of executions.
+                - avg_response_time: Average response time in seconds, or None if no metrics.
+                - success_rate: Success rate percentage, or None if no metrics.
+                - last_execution: Timestamp of the last execution, or None if no metrics.
+        """
+        results = (
+            db.query(
+                DbPrompt.id,
+                DbPrompt.name,
+                func.count(PromptMetric.id).label("execution_count"),  # pylint: disable=not-callable
+                func.avg(PromptMetric.response_time).label("avg_response_time"),  # pylint: disable=not-callable
+                case(
+                    (
+                        func.count(PromptMetric.id) > 0,  # pylint: disable=not-callable
+                        func.sum(case((PromptMetric.is_success.is_(True), 1), else_=0)).cast(Float) / func.count(PromptMetric.id) * 100,  # pylint: disable=not-callable
+                    ),
+                    else_=None,
+                ).label("success_rate"),
+                func.max(PromptMetric.timestamp).label("last_execution"),  # pylint: disable=not-callable
+            )
+            .outerjoin(PromptMetric)
+            .group_by(DbPrompt.id, DbPrompt.name)
+            .order_by(desc("execution_count"))
+            .limit(limit)
+            .all()
+        )
+
+        return build_top_performers(results)
 
     def _convert_db_prompt(self, db_prompt: DbPrompt) -> Dict[str, Any]:
         """
@@ -184,14 +237,31 @@ class PromptService:
                 "avgResponseTime": avg_rt,
                 "lastExecutionTime": last_time,
             },
+            "tags": db_prompt.tags or [],
         }
 
-    async def register_prompt(self, db: Session, prompt: PromptCreate) -> PromptRead:
+    async def register_prompt(
+        self,
+        db: Session,
+        prompt: PromptCreate,
+        created_by: Optional[str] = None,
+        created_from_ip: Optional[str] = None,
+        created_via: Optional[str] = None,
+        created_user_agent: Optional[str] = None,
+        import_batch_id: Optional[str] = None,
+        federation_source: Optional[str] = None,
+    ) -> PromptRead:
         """Register a new prompt template.
 
         Args:
             db: Database session
             prompt: Prompt creation schema
+            created_by: Username who created this prompt
+            created_from_ip: IP address of creator
+            created_via: Creation method (ui, api, import, federation)
+            created_user_agent: User agent of creation request
+            import_batch_id: UUID for bulk import operations
+            federation_source: Source gateway for federated prompts
 
         Returns:
             Created prompt information
@@ -243,6 +313,15 @@ class PromptService:
                 description=prompt.description,
                 template=prompt.template,
                 argument_schema=argument_schema,
+                tags=prompt.tags,
+                # Metadata fields
+                created_by=created_by,
+                created_from_ip=created_from_ip,
+                created_via=created_via,
+                created_user_agent=created_user_agent,
+                import_batch_id=import_batch_id,
+                federation_source=federation_source,
+                version=1,
             )
 
             # Add to DB
@@ -264,7 +343,7 @@ class PromptService:
             db.rollback()
             raise PromptError(f"Failed to register prompt: {str(e)}")
 
-    async def list_prompts(self, db: Session, include_inactive: bool = False, cursor: Optional[str] = None) -> List[PromptRead]:
+    async def list_prompts(self, db: Session, include_inactive: bool = False, cursor: Optional[str] = None, tags: Optional[List[str]] = None) -> List[PromptRead]:
         """
         Retrieve a list of prompt templates from the database.
 
@@ -279,6 +358,7 @@ class PromptService:
                 Defaults to False.
             cursor (Optional[str], optional): An opaque cursor token for pagination. Currently,
                 this parameter is ignored. Defaults to None.
+            tags (Optional[List[str]]): Filter prompts by tags. If provided, only prompts with at least one matching tag will be returned.
 
         Returns:
             List[PromptRead]: A list of prompt templates represented as PromptRead objects.
@@ -301,6 +381,16 @@ class PromptService:
         query = select(DbPrompt)
         if not include_inactive:
             query = query.where(DbPrompt.is_active)
+
+        # Add tag filtering if tags are provided
+        if tags:
+            # Filter prompts that have any of the specified tags
+            tag_conditions = []
+            for tag in tags:
+                tag_conditions.append(func.json_contains(DbPrompt.tags, f'"{tag}"'))
+            if tag_conditions:
+                query = query.where(func.or_(*tag_conditions))
+
         # Cursor-based pagination logic can be implemented here in the future.
         logger.debug(cursor)
         prompts = db.execute(query).scalars().all()
@@ -349,18 +439,32 @@ class PromptService:
         prompts = db.execute(query).scalars().all()
         return [PromptRead.model_validate(self._convert_db_prompt(p)) for p in prompts]
 
-    async def get_prompt(self, db: Session, name: str, arguments: Optional[Dict[str, str]] = None) -> PromptResult:
+    async def get_prompt(
+        self,
+        db: Session,
+        name: str,
+        arguments: Optional[Dict[str, str]] = None,
+        user: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        server_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> PromptResult:
         """Get a prompt template and optionally render it.
 
         Args:
             db: Database session
             name: Name of prompt to get
             arguments: Optional arguments for rendering
+            user: Optional user identifier for plugin context
+            tenant_id: Optional tenant identifier for plugin context
+            server_id: Optional server identifier for plugin context
+            request_id: Optional request ID, generated if not provided
 
         Returns:
             Prompt result with rendered messages
 
         Raises:
+            PluginViolationError: If prompt violates a plugin policy
             PromptNotFoundError: If prompt not found
             PromptError: For other prompt errors
 
@@ -376,34 +480,113 @@ class PromptService:
             ... except Exception:
             ...     pass
         """
-        # Find prompt
-        prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(DbPrompt.is_active)).scalar_one_or_none()
 
-        if not prompt:
-            inactive_prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(not_(DbPrompt.is_active))).scalar_one_or_none()
-            if inactive_prompt:
-                raise PromptNotFoundError(f"Prompt '{name}' exists but is inactive")
+        start_time = time.monotonic()
 
-            raise PromptNotFoundError(f"Prompt not found: {name}")
+        # Create a trace span for prompt rendering
+        with create_span(
+            "prompt.render",
+            {
+                "prompt.name": name,
+                "arguments_count": len(arguments) if arguments else 0,
+                "user": user or "anonymous",
+                "server_id": server_id,
+                "tenant_id": tenant_id,
+                "request_id": request_id or "none",
+            },
+        ) as span:
+            if self._plugin_manager:
+                if not request_id:
+                    request_id = uuid.uuid4().hex
+                global_context = GlobalContext(request_id=request_id, user=user, server_id=server_id, tenant_id=tenant_id)
+                try:
+                    pre_result, context_table = await self._plugin_manager.prompt_pre_fetch(payload=PromptPrehookPayload(name=name, args=arguments), global_context=global_context, local_contexts=None)
 
-        if not arguments:
-            return PromptResult(
-                messages=[
-                    Message(
-                        role=Role.USER,
-                        content=TextContent(type="text", text=prompt.template),
-                    )
-                ],
-                description=prompt.description,
-            )
+                    if not pre_result.continue_processing:
+                        # Plugin blocked the request
+                        if pre_result.violation:
+                            plugin_name = pre_result.violation.plugin_name
+                            violation_reason = pre_result.violation.reason
+                            violation_desc = pre_result.violation.description
+                            violation_code = pre_result.violation.code
+                            raise PluginViolationError(f"Pre prompting fetch blocked by plugin {plugin_name}: {violation_code} - {violation_reason} ({violation_desc})", pre_result.violation)
+                        raise PluginViolationError("Pre prompting fetch blocked by plugin")
 
-        try:
-            prompt.validate_arguments(arguments)
-            rendered = self._render_template(prompt.template, arguments)
-            messages = self._parse_messages(rendered)
-            return PromptResult(messages=messages, description=prompt.description)
-        except Exception as e:
-            raise PromptError(f"Failed to process prompt: {str(e)}")
+                    # Use modified payload if provided
+                    if pre_result.modified_payload:
+                        payload = pre_result.modified_payload
+                        name = payload.name
+                        arguments = payload.args
+                except PluginViolationError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error in pre-prompt fetch plugin hook: {e}")
+                    # Only fail if configured to do so
+                    if self._plugin_manager.config and self._plugin_manager.config.plugin_settings.fail_on_plugin_error:
+                        raise
+
+            # Find prompt
+            prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(DbPrompt.is_active)).scalar_one_or_none()
+
+            if not prompt:
+                inactive_prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(not_(DbPrompt.is_active))).scalar_one_or_none()
+                if inactive_prompt:
+                    raise PromptNotFoundError(f"Prompt '{name}' exists but is inactive")
+
+                raise PromptNotFoundError(f"Prompt not found: {name}")
+
+            if not arguments:
+                result = PromptResult(
+                    messages=[
+                        Message(
+                            role=Role.USER,
+                            content=TextContent(type="text", text=prompt.template),
+                        )
+                    ],
+                    description=prompt.description,
+                )
+            else:
+                try:
+                    prompt.validate_arguments(arguments)
+                    rendered = self._render_template(prompt.template, arguments)
+                    messages = self._parse_messages(rendered)
+                    result = PromptResult(messages=messages, description=prompt.description)
+                except Exception as e:
+                    if span:
+                        span.set_attribute("error", True)
+                        span.set_attribute("error.message", str(e))
+                    raise PromptError(f"Failed to process prompt: {str(e)}")
+
+            if self._plugin_manager:
+                try:
+                    post_result, _ = await self._plugin_manager.prompt_post_fetch(payload=PromptPosthookPayload(name=name, result=result), global_context=global_context, local_contexts=context_table)
+                    if not post_result.continue_processing:
+                        # Plugin blocked the request
+                        if post_result.violation:
+                            plugin_name = post_result.violation.plugin_name
+                            violation_reason = post_result.violation.reason
+                            violation_desc = post_result.violation.description
+                            violation_code = post_result.violation.code
+                            raise PluginViolationError(f"Post prompting fetch blocked by plugin {plugin_name}: {violation_code} - {violation_reason} ({violation_desc})", post_result.violation)
+                        raise PluginViolationError("Post prompting fetch blocked by plugin")
+                    # Use modified payload if provided
+                    return post_result.modified_payload.result if post_result.modified_payload else result
+                except PluginViolationError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error in post-prompt fetch plugin hook: {e}")
+                    # Only fail if configured to do so
+                    if self._plugin_manager.config and self._plugin_manager.config.plugin_settings.fail_on_plugin_error:
+                        raise
+
+            # Set success attributes on span
+            if span:
+                span.set_attribute("success", True)
+                span.set_attribute("duration.ms", (time.monotonic() - start_time) * 1000)
+                if result and hasattr(result, "messages"):
+                    span.set_attribute("messages.count", len(result.messages))
+
+            return result
 
     async def update_prompt(self, db: Session, name: str, prompt_update: PromptUpdate) -> PromptRead:
         """
@@ -442,6 +625,7 @@ class PromptService:
             prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(DbPrompt.is_active)).scalar_one_or_none()
             if not prompt:
                 inactive_prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(not_(DbPrompt.is_active))).scalar_one_or_none()
+
                 if inactive_prompt:
                     raise PromptNotFoundError(f"Prompt '{name}' exists but is inactive")
 
@@ -468,6 +652,10 @@ class PromptService:
                     argument_schema["properties"][arg.name] = schema
                 prompt.argument_schema = argument_schema
 
+            # Update tags if provided
+            if prompt_update.tags is not None:
+                prompt.tags = prompt_update.tags
+
             prompt.updated_at = datetime.now(timezone.utc)
             db.commit()
             db.refresh(prompt)
@@ -479,6 +667,10 @@ class PromptService:
             db.rollback()
             logger.error(f"IntegrityErrors in group: {ie}")
             raise ie
+        except PromptNotFoundError as e:
+            db.rollback()
+            logger.error(f"Prompt not found: {e}")
+            raise e
         except Exception as e:
             db.rollback()
             raise PromptError(f"Failed to update prompt: {str(e)}")
@@ -909,8 +1101,8 @@ class PromptService:
         """
 
         total = db.execute(select(func.count(PromptMetric.id))).scalar() or 0  # pylint: disable=not-callable
-        successful = db.execute(select(func.count(PromptMetric.id)).where(PromptMetric.is_success)).scalar() or 0  # pylint: disable=not-callable
-        failed = db.execute(select(func.count(PromptMetric.id)).where(not_(PromptMetric.is_success))).scalar() or 0  # pylint: disable=not-callable
+        successful = db.execute(select(func.count(PromptMetric.id)).where(PromptMetric.is_success.is_(True))).scalar() or 0  # pylint: disable=not-callable
+        failed = db.execute(select(func.count(PromptMetric.id)).where(PromptMetric.is_success.is_(False))).scalar() or 0  # pylint: disable=not-callable
         failure_rate = failed / total if total > 0 else 0.0
         min_rt = db.execute(select(func.min(PromptMetric.response_time))).scalar()
         max_rt = db.execute(select(func.max(PromptMetric.response_time))).scalar()

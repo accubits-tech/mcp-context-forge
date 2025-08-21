@@ -11,12 +11,24 @@ Pick an install method below, generate an auth token, then walk through a real t
 
 ## Installing and starting MCP Gateway
 
+=== "PyPI / uv"
+
+    !!! note
+        **Prereqs**: Install uv (https://docs.astral.sh/uv/getting-started/installation/)
+
+    ```bash
+    BASIC_AUTH_PASSWORD=pass \
+    MCPGATEWAY_UI_ENABLED=true \
+    MCPGATEWAY_ADMIN_API_ENABLED=true \
+    uvx --from mcp-contextforge-gateway mcpgateway --host 0.0.0.0 --port 4444
+    ```
+
 === "PyPI / virtual-env"
 
     ### Local install via PyPI
 
     !!! note
-        **Prereqs**: Python ≥ 3.10, plus `curl` & `jq` for the smoke test.
+        **Prereqs**: Python ≥ 3.11, plus `curl` & `jq` for the smoke test.
 
     1. **Create an isolated environment and upgrade pip if required**
 
@@ -46,7 +58,7 @@ Pick an install method below, generate an auth token, then walk through a real t
     4. **Generate a bearer token with an expiration time of 10080 seconds (1 week)**
 
         ```bash
-        export MCP_BEARER_TOKEN=$(python3 -m mcpgateway.utils.create_jwt_token \
+        export MCPGATEWAY_BEARER_TOKEN=$(python3 -m mcpgateway.utils.create_jwt_token \
             --username admin --exp 10080 --secret my-test-key)
         ```
 
@@ -56,7 +68,7 @@ Pick an install method below, generate an auth token, then walk through a real t
 
         ```bash
         curl -s http://localhost:4444/health | jq
-        curl -s -H "Authorization: Bearer $MCP_BEARER_TOKEN" http://localhost:4444/version | jq
+        curl -s -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" http://localhost:4444/version | jq
         ```
 
 === "Docker / Podman"
@@ -75,7 +87,7 @@ Pick an install method below, generate an auth token, then walk through a real t
           -e JWT_SECRET_KEY=my-test-key \
           -e BASIC_AUTH_USER=admin \
           -e BASIC_AUTH_PASSWORD=changeme \
-          ghcr.io/ibm/mcp-context-forge:0.4.0
+          ghcr.io/ibm/mcp-context-forge:0.5.0
         ```
 
     2. **(Optional) persist the DB**
@@ -89,7 +101,7 @@ Pick an install method below, generate an auth token, then walk through a real t
           -e JWT_SECRET_KEY=my-test-key \
           -e BASIC_AUTH_USER=admin \
           -e BASIC_AUTH_PASSWORD=changeme \
-          ghcr.io/ibm/mcp-context-forge:0.4.0
+          ghcr.io/ibm/mcp-context-forge:0.5.0
         ```
 
     3. **Generate a token inside the container**
@@ -102,9 +114,9 @@ Pick an install method below, generate an auth token, then walk through a real t
     4. **Smoke-test**
 
         ```bash
-        export MCP_BEARER_TOKEN=<paste_from_previous_step>
+        export MCPGATEWAY_BEARER_TOKEN=<paste_from_previous_step>
         curl -s http://localhost:4444/health | jq
-        curl -s -H "Authorization: Bearer $MCP_BEARER_TOKEN" http://localhost:4444/version | jq
+        curl -s -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" http://localhost:4444/version | jq
         ```
 
 === "Docker Compose"
@@ -126,7 +138,7 @@ Pick an install method below, generate an auth token, then walk through a real t
     2. **Pull the published image**
 
         ```bash
-        docker pull ghcr.io/ibm/mcp-context-forge:0.4.0
+        docker pull ghcr.io/ibm/mcp-context-forge:0.5.0
         ```
 
     3. **Start the stack**
@@ -135,7 +147,7 @@ Pick an install method below, generate an auth token, then walk through a real t
         # Uses podman or docker automatically
         make compose-up
         # -or- raw CLI
-        docker compose -f podman-compose.yml up -d
+        docker compose -f docker-compose.yml up -d
         ```
 
     4. **Verify**
@@ -155,12 +167,15 @@ Pick an install method below, generate an auth token, then walk through a real t
 ```bash
 # Spin up a sample MCP time server (SSE, port 8002)
 pip install uv
-npx -y supergateway --stdio "uvx mcp_server_time -- --local-timezone=Europe/Dublin" --port 8002 &
+python3 -m mcpgateway.translate \
+  --stdio "uvx mcp_server_time -- --local-timezone=Europe/Dublin" \
+  --expose-sse \
+  --port 8002 &
 ```
 
 ```bash
 # Register that server with your gateway
-curl -s -X POST -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
+curl -s -X POST -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"name":"local_time","url":"http://localhost:8002/sse"}' \
      http://localhost:4444/gateways | jq
@@ -168,7 +183,7 @@ curl -s -X POST -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
 
 ```bash
 # Bundle the imported tool(s) into a virtual MCP server
-curl -s -X POST -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
+curl -s -X POST -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"name":"demo_server","description":"Time tools","associatedTools":["1"]}' \
      http://localhost:4444/servers | jq
@@ -176,15 +191,15 @@ curl -s -X POST -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
 
 ```bash
 # Verify catalog entries
-curl -s -H "Authorization: Bearer $MCP_BEARER_TOKEN" http://localhost:4444/tools   | jq
-curl -s -H "Authorization: Bearer $MCP_BEARER_TOKEN" http://localhost:4444/servers | jq
+curl -s -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" http://localhost:4444/tools   | jq
+curl -s -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" http://localhost:4444/servers | jq
 ```
 
 ```bash
 # Optional: Connect interactively via MCP Inspector
 npx -y @modelcontextprotocol/inspector
 # Transport SSE → URL http://localhost:4444/servers/UUID_OF_SERVER_1/sse
-# Header Authorization → Bearer $MCP_BEARER_TOKEN
+# Header Authorization → Bearer $MCPGATEWAY_BEARER_TOKEN
 ```
 
 ---
@@ -192,8 +207,8 @@ npx -y @modelcontextprotocol/inspector
 ## Connect via `mcpgateway-wrapper` (stdio)
 
 ```bash
-export MCP_AUTH_TOKEN=$MCP_BEARER_TOKEN
-export MCP_SERVER_CATALOG_URLS=http://localhost:4444/servers/UUID_OF_SERVER_1
+export MCP_AUTH=$MCPGATEWAY_BEARER_TOKEN
+export MCP_SERVER_URL=http://localhost:4444/servers/UUID_OF_SERVER_1/mcp
 python3 -m mcpgateway.wrapper   # behaves as a local MCP stdio server - run from MCP client
 ```
 
@@ -206,8 +221,8 @@ Use this in GUI clients (Claude Desktop, Continue, etc.) that prefer stdio. Exam
       "command": "python3",
       "args": ["-m", "mcpgateway.wrapper"],
       "env": {
-        "MCP_SERVER_CATALOG_URLS": "http://localhost:4444/servers/UUID_OF_SERVER_1",
-        "MCP_AUTH_TOKEN": "<YOUR_JWT_TOKEN>",
+        "MCP_SERVER_URL": "http://localhost:4444/servers/UUID_OF_SERVER_1/mcp",
+        "MCP_AUTH": "<YOUR_JWT_TOKEN>",
         "MCP_TOOL_CALL_TIMEOUT": "120"
       }
     }

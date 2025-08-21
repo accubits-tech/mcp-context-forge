@@ -42,7 +42,6 @@ Examples:
 """
 
 # Standard
-import logging
 from typing import Any, Dict, List
 
 # Third-Party
@@ -50,8 +49,11 @@ from sqlalchemy.orm import Session
 
 # First-Party
 from mcpgateway.models import CreateMessageResult, ModelPreferences, Role, TextContent
+from mcpgateway.services.logging_service import LoggingService
 
-logger = logging.getLogger(__name__)
+# Initialize logging service first
+logging_service = LoggingService()
+logger = logging_service.get_logger(__name__)
 
 
 class SamplingError(Exception):
@@ -216,7 +218,7 @@ class SamplingHandler:
                 if not self._validate_message(msg):
                     raise SamplingError(f"Invalid message format: {msg}")
 
-            # TODO: Sample from selected model
+            # TODO: Implement actual model sampling - currently returns mock response  # pylint: disable=fixme
             # For now return mock response
             response = self._mock_sample(messages=messages)
 
@@ -355,7 +357,7 @@ class SamplingHandler:
             >>> len(result)
             2
         """
-        # TODO: Implement context gathering based on type
+        # TODO: Implement context gathering based on type - currently no-op  # pylint: disable=fixme
         # For now return original messages
         return messages
 

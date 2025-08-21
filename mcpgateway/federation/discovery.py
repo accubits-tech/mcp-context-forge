@@ -65,7 +65,7 @@ Examples:
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import logging
+import ipaddress
 import os
 import socket
 from typing import Dict, List, Optional
@@ -80,8 +80,11 @@ from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
 from mcpgateway import __version__
 from mcpgateway.config import settings
 from mcpgateway.models import ServerCapabilities
+from mcpgateway.services.logging_service import LoggingService
 
-logger = logging.getLogger(__name__)
+# Initialize logging service first
+logging_service = LoggingService()
+logger = logging_service.get_logger(__name__)
 
 PROTOCOL_VERSION = os.getenv("PROTOCOL_VERSION", "2025-03-26")
 
@@ -217,8 +220,10 @@ class LocalDiscoveryService:
             # Get all network interfaces
             for iface in socket.getaddrinfo(socket.gethostname(), None):
                 addr = iface[4][0]
-                # Skip localhost
-                if not addr.startswith("127."):
+                ip_obj = ipaddress.ip_address(addr)
+                is_ipv4 = isinstance(ip_obj, ipaddress.IPv4Address)
+                # Skip localhost and non ipv4 addresses
+                if is_ipv4 and not addr.startswith("127."):
                     addresses.append(addr)
         except Exception as e:
             logger.warning(f"Failed to get local addresses: {e}")

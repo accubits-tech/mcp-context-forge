@@ -23,39 +23,16 @@ Examples:
 
 # Standard
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 import uuid
 
 # Third-Party
 import jsonschema
-from sqlalchemy import (
-    Boolean,
-    Column,
-    create_engine,
-    DateTime,
-    event,
-    Float,
-    ForeignKey,
-    func,
-    Integer,
-    JSON,
-    make_url,
-    select,
-    String,
-    Table,
-    Text,
-    UniqueConstraint,
-)
+from sqlalchemy import Boolean, Column, create_engine, DateTime, event, Float, ForeignKey, func, Integer, JSON, make_url, select, String, Table, Text, UniqueConstraint
 from sqlalchemy.event import listen
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import (
-    DeclarativeBase,
-    Mapped,
-    mapped_column,
-    relationship,
-    sessionmaker,
-)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Session, sessionmaker
 from sqlalchemy.orm.attributes import get_history
 
 # First-Party
@@ -199,6 +176,28 @@ server_prompt_association = Table(
     Column("prompt_id", Integer, ForeignKey("prompts.id"), primary_key=True),
 )
 
+# Association table for servers and A2A agents
+server_a2a_association = Table(
+    "server_a2a_association",
+    Base.metadata,
+    Column("server_id", String, ForeignKey("servers.id"), primary_key=True),
+    Column("a2a_agent_id", String, ForeignKey("a2a_agents.id"), primary_key=True),
+)
+
+
+class GlobalConfig(Base):
+    """Global configuration settings.
+
+    Attributes:
+        id (int): Primary key
+        passthrough_headers (List[str]): List of headers allowed to be passed through globally
+    """
+
+    __tablename__ = "global_config"
+
+    id = Column(Integer, primary_key=True)
+    passthrough_headers: Mapped[Optional[List[str]]] = Column(JSON, nullable=True)  # Store list of strings as JSON array
+
 
 class ToolMetric(Base):
     """
@@ -306,6 +305,34 @@ class PromptMetric(Base):
     prompt: Mapped["Prompt"] = relationship("Prompt", back_populates="metrics")
 
 
+class A2AAgentMetric(Base):
+    """
+    ORM model for recording metrics for A2A agent interactions.
+
+    Attributes:
+        id (int): Primary key.
+        a2a_agent_id (str): Foreign key linking to the A2A agent.
+        timestamp (datetime): The time when the interaction occurred.
+        response_time (float): The response time in seconds.
+        is_success (bool): True if the interaction succeeded, False otherwise.
+        error_message (Optional[str]): Error message if the interaction failed.
+        interaction_type (str): Type of interaction (invoke, query, etc.).
+    """
+
+    __tablename__ = "a2a_agent_metrics"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    a2a_agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("a2a_agents.id"), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    response_time: Mapped[float] = mapped_column(Float, nullable=False)
+    is_success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    interaction_type: Mapped[str] = mapped_column(String, nullable=False, default="invoke")
+
+    # Relationship back to the A2AAgent model.
+    a2a_agent: Mapped["A2AAgent"] = relationship("A2AAgent", back_populates="metrics")
+
+
 class Tool(Base):
     """
     ORM model for a registered Tool.
@@ -342,7 +369,6 @@ class Tool(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
     original_name: Mapped[str] = mapped_column(String, nullable=False)
-    original_name_slug: Mapped[str] = mapped_column(String, nullable=False)
     url: Mapped[str] = mapped_column(String, nullable=True)
     description: Mapped[Optional[str]]
     integration_type: Mapped[str] = mapped_column(default="MCP")
@@ -355,10 +381,30 @@ class Tool(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     reachable: Mapped[bool] = mapped_column(default=True)
     jsonpath_filter: Mapped[str] = mapped_column(default="")
+    tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # Comprehensive metadata for audit tracking
+    created_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    modified_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    import_batch_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    federation_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     # Request type and authentication fields
     auth_type: Mapped[Optional[str]] = mapped_column(default=None)  # "basic", "bearer", or None
     auth_value: Mapped[Optional[str]] = mapped_column(default=None)
+
+    # custom_name,custom_name_slug
+    custom_name: Mapped[Optional[str]] = mapped_column(String, nullable=False)
+    custom_name_slug: Mapped[Optional[str]] = mapped_column(String, nullable=False)
 
     # Federation relationship with a local gateway
     gateway_id: Mapped[Optional[str]] = mapped_column(ForeignKey("gateways.id"))
@@ -388,15 +434,15 @@ class Tool(Base):
         if self._computed_name:  # pylint: disable=no-member
             return self._computed_name  # orm column, resolved at runtime
 
-        original_slug = slugify(self.original_name)  # pylint: disable=no-member
+        custom_name_slug = slugify(self.custom_name_slug)  # pylint: disable=no-member
 
         # Gateway present → prepend its slug and the configured separator
         if self.gateway_id:  # pylint: disable=no-member
             gateway_slug = slugify(self.gateway.name)  # pylint: disable=no-member
-            return f"{gateway_slug}{settings.gateway_tool_name_separator}{original_slug}"
+            return f"{gateway_slug}{settings.gateway_tool_name_separator}{custom_name_slug}"
 
         # No gateway → only the original name slug
-        return original_slug
+        return custom_name_slug
 
     @name.setter
     def name(self, value):
@@ -600,6 +646,23 @@ class Resource(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     is_active: Mapped[bool] = mapped_column(default=True)
+    tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # Comprehensive metadata for audit tracking
+    created_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    modified_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    import_batch_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    federation_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     metrics: Mapped[List["ResourceMetric"]] = relationship("ResourceMetric", back_populates="resource", cascade="all, delete-orphan")
 
     # Content storage - can be text or binary
@@ -810,6 +873,23 @@ class Prompt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     is_active: Mapped[bool] = mapped_column(default=True)
+    tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # Comprehensive metadata for audit tracking
+    created_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    modified_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    import_batch_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    federation_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     metrics: Mapped[List["PromptMetric"]] = relationship("PromptMetric", back_populates="prompt", cascade="all, delete-orphan")
 
     gateway_id: Mapped[Optional[str]] = mapped_column(ForeignKey("gateways.id"))
@@ -977,12 +1057,30 @@ class Server(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     is_active: Mapped[bool] = mapped_column(default=True)
+    tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # Comprehensive metadata for audit tracking
+    created_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    modified_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    import_batch_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    federation_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     metrics: Mapped[List["ServerMetric"]] = relationship("ServerMetric", back_populates="server", cascade="all, delete-orphan")
 
     # Many-to-many relationships for associated items
     tools: Mapped[List["Tool"]] = relationship("Tool", secondary=server_tool_association, back_populates="servers")
     resources: Mapped[List["Resource"]] = relationship("Resource", secondary=server_resource_association, back_populates="servers")
     prompts: Mapped[List["Prompt"]] = relationship("Prompt", secondary=server_prompt_association, back_populates="servers")
+    a2a_agents: Mapped[List["A2AAgent"]] = relationship("A2AAgent", secondary=server_a2a_association, back_populates="servers")
 
     @property
     def execution_count(self) -> int:
@@ -1028,7 +1126,7 @@ class Server(Base):
             float: The failure rate as a value between 0 and 1.
 
         Examples:
-            >>> tool = Tool(original_name="test_tool", original_name_slug="test-tool", input_schema={})
+            >>> tool = Tool(custom_name="test_tool", custom_name_slug="test-tool", input_schema={})
             >>> tool.failure_rate  # No metrics yet
             0.0
             >>> tool.metrics = [
@@ -1111,6 +1209,25 @@ class Gateway(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     reachable: Mapped[bool] = mapped_column(default=True)
     last_seen: Mapped[Optional[datetime]]
+    tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # Comprehensive metadata for audit tracking
+    created_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    modified_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    import_batch_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    federation_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    # Header passthrough configuration
+    passthrough_headers: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)  # Store list of strings as JSON array
 
     # Relationship with local tools this gateway provides
     tools: Mapped[List["Tool"]] = relationship(back_populates="gateway", foreign_keys="Tool.gateway_id", cascade="all, delete-orphan")
@@ -1131,8 +1248,14 @@ class Gateway(Base):
     # federated_prompts: Mapped[List["Prompt"]] = relationship(secondary=prompt_gateway_table, back_populates="federated_with")
 
     # Authorizations
-    auth_type: Mapped[Optional[str]] = mapped_column(default=None)  # "basic", "bearer", "headers" or None
+    auth_type: Mapped[Optional[str]] = mapped_column(default=None)  # "basic", "bearer", "headers", "oauth" or None
     auth_value: Mapped[Optional[Dict[str, str]]] = mapped_column(JSON)
+
+    # OAuth configuration
+    oauth_config: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True, comment="OAuth 2.0 configuration including grant_type, client_id, encrypted client_secret, URLs, and scopes")
+
+    # Relationship with OAuth tokens
+    oauth_tokens: Mapped[List["OAuthToken"]] = relationship("OAuthToken", back_populates="gateway", cascade="all, delete-orphan")
 
 
 @event.listens_for(Gateway, "after_update")
@@ -1165,12 +1288,140 @@ def update_tool_names_on_gateway_update(_mapper, connection, target):
     stmt = (
         tools_table.update()
         .where(tools_table.c.gateway_id == target.id)
-        .values(name=new_gateway_slug + separator + tools_table.c.original_name_slug)
+        .values(name=new_gateway_slug + separator + tools_table.c.custom_name_slug)
         .execution_options(synchronize_session=False)  # Important for bulk updates
     )
 
     # 5. Execute the statement using the connection from the ongoing transaction.
     connection.execute(stmt)
+
+
+class A2AAgent(Base):
+    """
+    ORM model for A2A (Agent-to-Agent) compatible agents.
+
+    A2A agents represent external AI agents that can be integrated into the gateway
+    and exposed as tools within virtual servers. They support standardized
+    Agent-to-Agent communication protocols for interoperability.
+    """
+
+    __tablename__ = "a2a_agents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    endpoint_url: Mapped[str] = mapped_column(String, nullable=False)
+    agent_type: Mapped[str] = mapped_column(String, nullable=False, default="generic")  # e.g., "openai", "anthropic", "custom"
+    protocol_version: Mapped[str] = mapped_column(String, nullable=False, default="1.0")
+    capabilities: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    # Configuration and authentication
+    config: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    auth_type: Mapped[Optional[str]] = mapped_column(String)  # "api_key", "oauth", "bearer", etc.
+    auth_value: Mapped[Optional[str]] = mapped_column(Text)  # encrypted auth data
+
+    # Status and metadata
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    reachable: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    last_interaction: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Tags for categorization
+    tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # Comprehensive metadata for audit tracking
+    created_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    modified_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_from_ip: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_via: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    modified_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    import_batch_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    federation_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    # Relationships
+    servers: Mapped[List["Server"]] = relationship("Server", secondary=server_a2a_association, back_populates="a2a_agents")
+    metrics: Mapped[List["A2AAgentMetric"]] = relationship("A2AAgentMetric", back_populates="a2a_agent", cascade="all, delete-orphan")
+
+    @property
+    def execution_count(self) -> int:
+        """Total number of interactions with this agent.
+
+        Returns:
+            int: The total count of interactions.
+        """
+        return len(self.metrics)
+
+    @property
+    def successful_executions(self) -> int:
+        """Number of successful interactions.
+
+        Returns:
+            int: The count of successful interactions.
+        """
+        return sum(1 for m in self.metrics if m.is_success)
+
+    @property
+    def failed_executions(self) -> int:
+        """Number of failed interactions.
+
+        Returns:
+            int: The count of failed interactions.
+        """
+        return sum(1 for m in self.metrics if not m.is_success)
+
+    @property
+    def failure_rate(self) -> float:
+        """Failure rate as a percentage.
+
+        Returns:
+            float: The failure rate percentage.
+        """
+        if not self.metrics:
+            return 0.0
+        return (self.failed_executions / len(self.metrics)) * 100
+
+    @property
+    def avg_response_time(self) -> Optional[float]:
+        """Average response time in seconds.
+
+        Returns:
+            Optional[float]: The average response time, or None if no metrics.
+        """
+        if not self.metrics:
+            return None
+        return sum(m.response_time for m in self.metrics) / len(self.metrics)
+
+    @property
+    def last_execution_time(self) -> Optional[datetime]:
+        """Timestamp of the most recent interaction.
+
+        Returns:
+            Optional[datetime]: The timestamp of the last interaction, or None if no metrics.
+        """
+        if not self.metrics:
+            return None
+        return max(m.timestamp for m in self.metrics)
+
+    def __repr__(self) -> str:
+        """Return a string representation of the A2AAgent instance.
+
+        Returns:
+            str: A formatted string containing the agent's ID, name, and type.
+
+        Examples:
+            >>> agent = A2AAgent(id='123', name='test-agent', agent_type='custom')
+            >>> repr(agent)
+            "<A2AAgent(id='123', name='test-agent', agent_type='custom')>"
+        """
+        return f"<A2AAgent(id='{self.id}', name='{self.name}', agent_type='{self.agent_type}')>"
 
 
 class SessionRecord(Base):
@@ -1198,6 +1449,26 @@ class SessionMessageRecord(Base):
     last_accessed: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)  # pylint: disable=not-callable
 
     session: Mapped["SessionRecord"] = relationship("SessionRecord", back_populates="messages")
+
+
+class OAuthToken(Base):
+    """ORM model for OAuth access and refresh tokens."""
+
+    __tablename__ = "oauth_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    gateway_id: Mapped[str] = mapped_column(String(36), ForeignKey("gateways.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_type: Mapped[str] = mapped_column(String(50), default="Bearer")
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    scopes: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    # Relationship with gateway
+    gateway: Mapped["Gateway"] = relationship("Gateway", back_populates="oauth_tokens")
 
 
 # Event listeners for validation
@@ -1277,7 +1548,7 @@ listen(Prompt, "before_insert", validate_prompt_schema)
 listen(Prompt, "before_update", validate_prompt_schema)
 
 
-def get_db():
+def get_db() -> Generator[Session, Any, None]:
     """
     Dependency to get database session.
 
@@ -1336,19 +1607,42 @@ def set_gateway_slug(_mapper, _conn, target):
     target.slug = slugify(target.name)
 
 
-@event.listens_for(Tool, "before_insert")
-def set_tool_name(_mapper, _conn, target):
-    """Set the computed name for a Tool before insert.
+@event.listens_for(A2AAgent, "before_insert")
+def set_a2a_agent_slug(_mapper, _conn, target):
+    """Set the slug for an A2AAgent before insert.
 
     Args:
         _mapper: Mapper
         _conn: Connection
-        target: Target Tool instance
+        target: Target A2AAgent instance
     """
+    target.slug = slugify(target.name)
 
-    sep = settings.gateway_tool_name_separator
-    gateway_slug = target.gateway.slug if target.gateway_id else ""
+
+@event.listens_for(Tool, "before_insert")
+@event.listens_for(Tool, "before_update")
+def set_custom_name_and_slug(mapper, connection, target):  # pylint: disable=unused-argument
+    """
+    Event listener to set custom_name, custom_name_slug, and name for Tool before insert/update.
+
+    - Sets custom_name to original_name if not provided.
+    - Calculates custom_name_slug from custom_name using slugify.
+    - Updates name to gateway_slug + separator + custom_name_slug.
+
+    Args:
+        mapper: SQLAlchemy mapper for the Tool model.
+        connection: Database connection.
+        target: The Tool instance being inserted or updated.
+    """
+    # Set custom_name to original_name if not provided
+    if not target.custom_name:
+        target.custom_name = target.original_name
+    # Always update custom_name_slug from custom_name
+    target.custom_name_slug = slugify(target.custom_name)
+    # Update name field
+    gateway_slug = slugify(target.gateway.name) if target.gateway else ""
     if gateway_slug:
-        target.name = f"{gateway_slug}{sep}{slugify(target.original_name)}"
+        sep = settings.gateway_tool_name_separator
+        target.name = f"{gateway_slug}{sep}{target.custom_name_slug}"
     else:
-        target.name = slugify(target.original_name)
+        target.name = target.custom_name_slug

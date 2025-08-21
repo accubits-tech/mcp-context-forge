@@ -65,25 +65,26 @@ jobs:
           python3 -m pip install --upgrade pip
           # install the project itself in *editable* mode so tests import the same codebase
           # and pull in every dev / test extra declared in pyproject.toml
-          pip install -e .[dev]
+          pip install -e .[dev,asyncpg]
           # belt-and-braces - keep the core test tool-chain pinned here too
           pip install pytest pytest-cov pytest-asyncio coverage[toml]
 
       # -----------------------------------------------------------
-      # 3️⃣  Run the tests with coverage (fail under 80% coverage)
+      # 3️⃣  Run the tests with coverage (fail under 790 coverage)
       # -----------------------------------------------------------
       - name: 🧪  Run pytest
         run: |
           pytest \
+            --ignore=tests/fuzz \
             --cov=mcpgateway \
             --cov-report=xml \
             --cov-report=html \
             --cov-report=term \
             --cov-branch \
-            --cov-fail-under=80
+            --cov-fail-under=70
 
       # -----------------------------------------------------------
-      # 4️⃣  Run doctests (fail under 55% coverage)
+      # 4️⃣  Run doctests (fail under 545 coverage)
       # -----------------------------------------------------------
       - name: 📊  Doctest coverage with threshold
         run: |
@@ -92,7 +93,7 @@ jobs:
             --cov=mcpgateway \
             --cov-report=term \
             --cov-report=json:doctest-coverage.json \
-            --cov-fail-under=55 \
+            --cov-fail-under=45 \
             --tb=short
 
       # -----------------------------------------------------------

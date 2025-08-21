@@ -1,3 +1,13 @@
+mcpgateway-export*
+mutants
+.mutmut-cache
+CLAUDE.local.md
+.aider*
+.scannerwork
+llms-full.txt
+aider*
+.aider*
+todo/
 *.sarif
 devskim-results.sarif
 debug_login_page.png
@@ -35,6 +45,11 @@ FIXMEs
 *.old
 logs/
 *.log
+
+# Fuzzing artifacts and reports
+reports/
+corpus/
+tests/fuzz/fuzzers/results/
 .venv
 mcp.db
 public/
@@ -61,6 +76,7 @@ command_outputs.md
 .ica.env
 ./snakefood.png
 ./snakefood.svg
+./playground
 
 .attic
 .vscode/settings.json

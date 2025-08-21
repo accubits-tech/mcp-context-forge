@@ -24,7 +24,7 @@ services:
   # MCP Gateway - the main API server for the MCP stack
   # ──────────────────────────────────────────────────────────────────────
   gateway:
-    #image: ghcr.io/ibm/mcp-context-forge:0.4.0 # Use the release MCP Context Forge image
+    #image: ghcr.io/ibm/mcp-context-forge:0.5.0 # Use the release MCP Context Forge image
     image: ${IMAGE_LOCAL:-mcpgateway/mcpgateway:latest} # Use the local latest image. Run `make docker-prod` to build it.
     build:
       context: .
@@ -52,9 +52,21 @@ services:
       - BASIC_AUTH_PASSWORD=changeme
       - MCPGATEWAY_UI_ENABLED=true
       - MCPGATEWAY_ADMIN_API_ENABLED=true
+      # Security configuration (using defaults)
+      - ENVIRONMENT=development
+      - SECURITY_HEADERS_ENABLED=true
+      - CORS_ALLOW_CREDENTIALS=true
       # - SSL=true
       # - CERT_FILE=/app/certs/cert.pem
       # - KEY_FILE=/app/certs/key.pem
+
+      # Phoenix Observability Integration (uncomment when using Phoenix)
+      # - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT:-http://phoenix:6006}
+      # - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:4317}
+      # - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-mcp-gateway}
+      # - OTEL_TRACES_EXPORTER=${OTEL_TRACES_EXPORTER:-otlp}
+      # - OTEL_METRICS_EXPORTER=${OTEL_METRICS_EXPORTER:-otlp}
+      # - OTEL_RESOURCE_ATTRIBUTES=${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=docker,service.namespace=mcp}
 
     depends_on:          # Default stack: Postgres + Redis + Alembic migration
       postgres:
@@ -65,12 +77,12 @@ services:
       #   condition: service_completed_successfully
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4444/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; import json; resp = urllib.request.urlopen('http://localhost:4444/health', timeout=5); data = json.loads(resp.read()); exit(0 if data.get('status') == 'healthy' else 1)"]
       #test: ["CMD", "curl", "-f", "https://localhost:4444/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 30s
 
     # volumes:
     #   - ./certs:/app/certs:ro   # mount certs folder read-only
@@ -125,7 +137,7 @@ services:
   #   networks: [mcpnet]
 
   # migration:
-  #   #image: ghcr.io/ibm/mcp-context-forge:0.4.0 # Use the release MCP Context Forge image
+  #   #image: ghcr.io/ibm/mcp-context-forge:0.5.0 # Use the release MCP Context Forge image
   #   image: mcpgateway/mcpgateway:latest # Use the local latest image. Run `make docker-prod` to build it.
   #   build:
   #     context: .
@@ -374,37 +386,26 @@ services:
           exit 1
         fi
 
-###############################################################################
-#  OTHER MCP SERVERS - drop-in helpers the Gateway can call (not implemented yet)
-# ###############################################################################
-#   mcp_time:
-#     image: mcp/time:latest
-#     networks: [mcpnet]
-
-#   mcp_playwright:
-#     image: mcp/playwright:latest
-#     networks: [mcpnet]
-
-#   mcp_postgres:
-#     image: mcp/postgres:latest
-#     networks: [mcpnet]
-
-#   mcp_github:
-#     image: mcp/github:latest
-#     networks: [mcpnet]
-
-#   mcp_filesystem:
-#     image: mcp/filesystem:latest
-#     networks: [mcpnet]
-
-#   mcp_perplexity_ask:
-#     image: mcp/perplexity-ask:latest
-#     networks: [mcpnet]
-
-#   mcp_memory:
-#     image: mcp/memory:latest
-#     networks: [mcpnet]
-
-#   mcp_fetch:
-#     image: mcp/fetch:latest
-#     networks: [mcpnet]
+  ###############################################################################
+  # Hashicorp Terraform MCP Server
+  # https://hub.docker.com/r/hashicorp/terraform-mcp-server
+  # https://github.com/hashicorp/terraform-mcp-server/blob/main/README.md
+  ###############################################################################
+  # terraform-mcp-server:
+  #   image: docker.io/hashicorp/terraform-mcp-server:dev
+  #   container_name: terraform-mcp-server
+  #   networks: [mcpnet]
+  #   ports:
+  #     - "8001:8080"    # Map host port 8888 to container port 8080
+  #   restart: unless-stopped
+  #   environment:
+  #     - TRANSPORT_MODE=streamable-http
+  #     - TRANSPORT_HOST=0.0.0.0
+  #     - TRANSPORT_PORT=8080
+  #     - MCP_CORS_MODE=disabled
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 20s

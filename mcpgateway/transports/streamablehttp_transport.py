@@ -34,24 +34,19 @@ from collections import deque
 from contextlib import asynccontextmanager, AsyncExitStack
 import contextvars
 from dataclasses import dataclass
-import logging
 import re
-from typing import List, Union
+from typing import Any, AsyncGenerator, List, Union
 from uuid import uuid4
 
 # Third-Party
 from fastapi.security.utils import get_authorization_scheme_param
 from mcp import types
 from mcp.server.lowlevel import Server
-from mcp.server.streamable_http import (
-    EventCallback,
-    EventId,
-    EventMessage,
-    EventStore,
-    StreamId,
-)
+from mcp.server.streamable_http import EventCallback, EventId, EventMessage, EventStore, StreamId
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import JSONRPCMessage
+from pydantic import AnyUrl
+from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.status import HTTP_401_UNAUTHORIZED
@@ -60,17 +55,25 @@ from starlette.types import Receive, Scope, Send
 # First-Party
 from mcpgateway.config import settings
 from mcpgateway.db import SessionLocal
+from mcpgateway.services.logging_service import LoggingService
+from mcpgateway.services.prompt_service import PromptService
+from mcpgateway.services.resource_service import ResourceService
 from mcpgateway.services.tool_service import ToolService
 from mcpgateway.utils.verify_credentials import verify_credentials
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+# Initialize logging service first
+logging_service = LoggingService()
+logger = logging_service.get_logger(__name__)
 
-# Initialize ToolService and MCP Server
-tool_service = ToolService()
-mcp_app = Server("mcp-streamable-http-stateless")
+# Initialize ToolService, PromptService and MCP Server
+tool_service: ToolService = ToolService()
+prompt_service: PromptService = PromptService()
+resource_service: ResourceService = ResourceService()
 
-server_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("server_id", default=None)
+mcp_app: Server[Any] = Server("mcp-streamable-http")
+
+server_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("server_id", default="default_server_id")
+request_headers_var: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("request_headers", default={})
 
 # ------------------------------ Event store ------------------------------
 
@@ -309,7 +312,7 @@ class InMemoryEventStore(EventStore):
 
 
 @asynccontextmanager
-async def get_db():
+async def get_db() -> AsyncGenerator[Session, Any]:
     """
     Asynchronous context manager for database sessions.
 
@@ -360,9 +363,10 @@ async def call_tool(name: str, arguments: dict) -> List[Union[types.TextContent,
         >>> sig.return_annotation
         typing.List[typing.Union[mcp.types.TextContent, mcp.types.ImageContent, mcp.types.EmbeddedResource]]
     """
+    request_headers = request_headers_var.get()
     try:
         async with get_db() as db:
-            result = await tool_service.invoke_tool(db=db, name=name, arguments=arguments)
+            result = await tool_service.invoke_tool(db=db, name=name, arguments=arguments, request_headers=request_headers)
             if not result or not result.content:
                 logger.warning(f"No content returned by tool: {name}")
                 return []
@@ -392,11 +396,12 @@ async def list_tools() -> List[types.Tool]:
         typing.List[mcp.types.Tool]
     """
     server_id = server_id_var.get()
+    request_headers = request_headers_var.get()
 
     if server_id:
         try:
             async with get_db() as db:
-                tools = await tool_service.list_server_tools(db, server_id)
+                tools = await tool_service.list_server_tools(db, server_id, _request_headers=request_headers)
                 return [types.Tool(name=tool.name, description=tool.description, inputSchema=tool.input_schema, annotations=tool.annotations) for tool in tools]
         except Exception as e:
             logger.exception(f"Error listing tools:{e}")
@@ -404,11 +409,165 @@ async def list_tools() -> List[types.Tool]:
     else:
         try:
             async with get_db() as db:
-                tools = await tool_service.list_tools(db)
+                tools = await tool_service.list_tools(db, False, None, None, request_headers)
                 return [types.Tool(name=tool.name, description=tool.description, inputSchema=tool.input_schema, annotations=tool.annotations) for tool in tools]
         except Exception as e:
             logger.exception(f"Error listing tools:{e}")
             return []
+
+
+@mcp_app.list_prompts()
+async def list_prompts() -> List[types.Prompt]:
+    """
+    Lists all prompts available to the MCP Server.
+
+    Returns:
+        A list of Prompt objects containing metadata such as name, description, and arguments.
+        Logs and returns an empty list on failure.
+
+    Examples:
+        >>> import inspect
+        >>> sig = inspect.signature(list_prompts)
+        >>> list(sig.parameters.keys())
+        []
+        >>> sig.return_annotation
+        typing.List[mcp.types.Prompt]
+    """
+
+    server_id = server_id_var.get()
+
+    if server_id:
+        try:
+            async with get_db() as db:
+                prompts = await prompt_service.list_server_prompts(db, server_id)
+                return [types.Prompt(name=prompt.name, description=prompt.description, arguments=prompt.arguments) for prompt in prompts]
+        except Exception as e:
+            logger.exception(f"Error listing Prompts:{e}")
+            return []
+    else:
+        try:
+            async with get_db() as db:
+                prompts = await prompt_service.list_prompts(db, False, None, None)
+                return [types.Prompt(name=prompt.name, description=prompt.description, arguments=prompt.arguments) for prompt in prompts]
+        except Exception as e:
+            logger.exception(f"Error listing prompts:{e}")
+            return []
+
+
+@mcp_app.get_prompt()
+async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> types.GetPromptResult:
+    """
+    Retrieves a prompt by name, optionally substituting arguments.
+
+    Args:
+        name (str): The name of the prompt to retrieve.
+        arguments (Optional[dict[str, str]]): Optional dictionary of arguments to substitute into the prompt.
+
+    Returns:
+        GetPromptResult: Object containing the prompt messages and description.
+        Returns an empty list on failure or if no prompt content is found.
+
+    Logs exceptions if any errors occur during retrieval.
+
+    Examples:
+        >>> import inspect
+        >>> sig = inspect.signature(get_prompt)
+        >>> list(sig.parameters.keys())
+        ['name', 'arguments']
+        >>> sig.return_annotation.__name__
+        'GetPromptResult'
+    """
+    try:
+        async with get_db() as db:
+            try:
+                result = await prompt_service.get_prompt(db=db, name=name, arguments=arguments)
+            except Exception as e:
+                logger.exception(f"Error getting prompt '{name}': {e}")
+                return []
+            if not result or not result.messages:
+                logger.warning(f"No content returned by prompt: {name}")
+                return []
+            message_dicts = [message.dict() for message in result.messages]
+            return types.GetPromptResult(messages=message_dicts, description=result.description)
+    except Exception as e:
+        logger.exception(f"Error getting prompt '{name}': {e}")
+        return []
+
+
+@mcp_app.list_resources()
+async def list_resources() -> List[types.Resource]:
+    """
+    Lists all resources available to the MCP Server.
+
+    Returns:
+        A list of Resource objects containing metadata such as uri, name, description, and mimeType.
+        Logs and returns an empty list on failure.
+
+    Examples:
+        >>> import inspect
+        >>> sig = inspect.signature(list_resources)
+        >>> list(sig.parameters.keys())
+        []
+        >>> sig.return_annotation
+        typing.List[mcp.types.Resource]
+    """
+    server_id = server_id_var.get()
+
+    if server_id:
+        try:
+            async with get_db() as db:
+                resources = await resource_service.list_server_resources(db, server_id)
+                return [types.Resource(uri=resource.uri, name=resource.name, description=resource.description, mimeType=resource.mime_type) for resource in resources]
+        except Exception as e:
+            logger.exception(f"Error listing Resources:{e}")
+            return []
+    else:
+        try:
+            async with get_db() as db:
+                resources = await resource_service.list_resources(db, False)
+                return [types.Resource(uri=resource.uri, name=resource.name, description=resource.description, mimeType=resource.mime_type) for resource in resources]
+        except Exception as e:
+            logger.exception(f"Error listing resources:{e}")
+            return []
+
+
+@mcp_app.read_resource()
+async def read_resource(uri: AnyUrl) -> Union[str, bytes]:
+    """
+    Reads the content of a resource specified by its URI.
+
+    Args:
+        uri (AnyUrl): The URI of the resource to read.
+
+    Returns:
+        Union[str, bytes]: The content of the resource, typically as text.
+        Returns an empty list on failure or if no content is found.
+
+    Logs exceptions if any errors occur during reading.
+
+    Examples:
+        >>> import inspect
+        >>> sig = inspect.signature(read_resource)
+        >>> list(sig.parameters.keys())
+        ['uri']
+        >>> sig.return_annotation
+        typing.Union[str, bytes]
+    """
+    try:
+        async with get_db() as db:
+            try:
+                result = await resource_service.read_resource(db=db, uri=str(uri))
+            except Exception as e:
+                logger.exception(f"Error reading resource '{uri}': {e}")
+                return []
+            if not result or not result.text:
+                logger.warning(f"No content returned by resource: {uri}")
+                return []
+
+            return result.text
+    except Exception as e:
+        logger.exception(f"Error reading resource '{uri}': {e}")
+        return []
 
 
 class SessionManagerWrapper:
@@ -519,9 +678,16 @@ class SessionManagerWrapper:
         path = scope["modified_path"]
         match = re.search(r"/servers/(?P<server_id>[a-fA-F0-9\-]+)/mcp", path)
 
+        # Extract request headers from scope
+        headers = dict(Headers(scope=scope))
+        # Store headers in context for tool invocations
+        request_headers_var.set(headers)
+
         if match:
             server_id = match.group("server_id")
             server_id_var.set(server_id)
+        else:
+            server_id_var.set(None)
 
         try:
             await self.session_manager.handle_request(scope, receive, send)
@@ -533,7 +699,7 @@ class SessionManagerWrapper:
 # ------------------------- Authentication for /mcp routes ------------------------------
 
 
-async def streamable_http_auth(scope, receive, send):
+async def streamable_http_auth(scope: Any, receive: Any, send: Any) -> bool:
     """
     Perform authentication check in middleware context (ASGI scope).
 
@@ -581,6 +747,8 @@ async def streamable_http_auth(scope, receive, send):
         if scheme.lower() == "bearer" and credentials:
             token = credentials
     try:
+        if token is None:
+            raise Exception()
         await verify_credentials(token)
     except Exception:
         response = JSONResponse(

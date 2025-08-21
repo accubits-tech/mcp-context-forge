@@ -1,3 +1,25 @@
+// Make URL field read-only for integration type MCP
+function updateEditToolUrl() {
+    const editTypeField = document.getElementById("edit-tool-type");
+    const editurlField = document.getElementById("edit-tool-url");
+    if (editTypeField && editurlField) {
+        if (editTypeField.value === "MCP") {
+            editurlField.readOnly = true;
+        } else {
+            editurlField.readOnly = false;
+        }
+    }
+}
+
+// Attach event listener after DOM is loaded or when modal opens
+document.addEventListener("DOMContentLoaded", function () {
+    const TypeField = document.getElementById("edit-tool-type");
+    if (TypeField) {
+        TypeField.addEventListener("change", updateEditToolUrl);
+        // Set initial state
+        updateEditToolUrl();
+    }
+});
 /**
  * ====================================================================
  * SECURE ADMIN.JS - COMPLETE VERSION WITH XSS PROTECTION
@@ -36,6 +58,59 @@ function escapeHtml(unsafe) {
 }
 
 /**
+ * Header validation constants and functions
+ */
+const HEADER_NAME_REGEX = /^[A-Za-z0-9-]+$/;
+const MAX_HEADER_VALUE_LENGTH = 4096;
+
+/**
+ * Validate a passthrough header name and value
+ * @param {string} name - Header name to validate
+ * @param {string} value - Header value to validate
+ * @returns {Object} Validation result with 'valid' boolean and 'error' message
+ */
+function validatePassthroughHeader(name, value) {
+    // Validate header name
+    if (!HEADER_NAME_REGEX.test(name)) {
+        return {
+            valid: false,
+            error: `Header name "${name}" contains invalid characters. Only letters, numbers, and hyphens are allowed.`,
+        };
+    }
+
+    // Check for dangerous characters in value
+    if (value.includes("\n") || value.includes("\r")) {
+        return {
+            valid: false,
+            error: "Header value cannot contain newline characters",
+        };
+    }
+
+    // Check value length
+    if (value.length > MAX_HEADER_VALUE_LENGTH) {
+        return {
+            valid: false,
+            error: `Header value too long (${value.length} chars, max ${MAX_HEADER_VALUE_LENGTH})`,
+        };
+    }
+
+    // Check for control characters (except tab)
+    const hasControlChars = Array.from(value).some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 32 && code !== 9; // Allow tab (9) but not other control chars
+    });
+
+    if (hasControlChars) {
+        return {
+            valid: false,
+            error: "Header value contains invalid control characters",
+        };
+    }
+
+    return { valid: true };
+}
+
+/**
  * SECURITY: Validate input names to prevent XSS and ensure clean data
  */
 function validateInputName(name, type = "input") {
@@ -69,10 +144,10 @@ function validateInputName(name, type = "input") {
         return { valid: false, error: `${type} name cannot be empty` };
     }
 
-    if (cleaned.length > 100) {
+    if (cleaned.length > window.MAX_NAME_LENGTH) {
         return {
             valid: false,
-            error: `${type} name must be 100 characters or less`,
+            error: `${type} name must be ${window.MAX_NAME_LENGTH} characters or less`,
         };
     }
 
@@ -461,6 +536,17 @@ function openModal(modalId) {
     }
 }
 
+// Global event handler for Escape key
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        // Find any active modal
+        const activeModal = Array.from(AppState.activeModals)[0];
+        if (activeModal) {
+            closeModal(activeModal);
+        }
+    }
+});
+
 function closeModal(modalId, clearId = null) {
     try {
         const modal = safeGetElement(modalId);
@@ -837,7 +923,9 @@ function displayMetrics(data) {
         // Top Performers section (before individual metrics)
         if (data.topPerformers || data.top) {
             const topData = data.topPerformers || data.top;
-            const topSection = createTopPerformersSection(topData);
+            // const topSection = createTopPerformersSection(topData);
+            const topSection = createEnhancedTopPerformersSection(topData);
+
             mainContainer.appendChild(topSection);
         }
 
@@ -1145,7 +1233,54 @@ function extractKPIData(data) {
 /**
  * SECURITY: Create top performers section with safe display
  */
-function createTopPerformersSection(topData) {
+// function createTopPerformersSection(topData) {
+//     try {
+//         const section = document.createElement("div");
+//         section.className = "bg-white rounded-lg shadow p-6 dark:bg-gray-800";
+
+//         const title = document.createElement("h3");
+//         title.className = "text-lg font-medium mb-4 dark:text-gray-200";
+//         title.textContent = "Top Performers";
+//         section.appendChild(title);
+
+//         const grid = document.createElement("div");
+//         grid.className = "grid grid-cols-1 md:grid-cols-2 gap-4";
+
+//         // Top Tools
+//         if (topData.tools && Array.isArray(topData.tools)) {
+//             const toolsCard = createTopItemCard("Tools", topData.tools);
+//             grid.appendChild(toolsCard);
+//         }
+
+//         // Top Resources
+//         if (topData.resources && Array.isArray(topData.resources)) {
+//             const resourcesCard = createTopItemCard(
+//                 "Resources",
+//                 topData.resources,
+//             );
+//             grid.appendChild(resourcesCard);
+//         }
+
+//         // Top Prompts
+//         if (topData.prompts && Array.isArray(topData.prompts)) {
+//             const promptsCard = createTopItemCard("Prompts", topData.prompts);
+//             grid.appendChild(promptsCard);
+//         }
+
+//         // Top Servers
+//         if (topData.servers && Array.isArray(topData.servers)) {
+//             const serversCard = createTopItemCard("Servers", topData.servers);
+//             grid.appendChild(serversCard);
+//         }
+
+//         section.appendChild(grid);
+//         return section;
+//     } catch (error) {
+//         console.error("Error creating top performers section:", error);
+//         return document.createElement("div"); // Safe fallback
+//     }
+// }
+function createEnhancedTopPerformersSection(topData) {
     try {
         const section = document.createElement("div");
         section.className = "bg-white rounded-lg shadow p-6 dark:bg-gray-800";
@@ -1153,86 +1288,452 @@ function createTopPerformersSection(topData) {
         const title = document.createElement("h3");
         title.className = "text-lg font-medium mb-4 dark:text-gray-200";
         title.textContent = "Top Performers";
+        title.setAttribute("aria-label", "Top Performers Section");
         section.appendChild(title);
 
-        const grid = document.createElement("div");
-        grid.className = "grid grid-cols-1 md:grid-cols-2 gap-4";
+        // Loading skeleton
+        const skeleton = document.createElement("div");
+        skeleton.className = "animate-pulse space-y-4";
+        skeleton.innerHTML = `
+            <div class="h-4 bg-gray-200 rounded w-1/4 dark:bg-gray-700"></div>
+            <div class="space-y-2">
+                <div class="h-10 bg-gray-200 rounded dark:bg-gray-700"></div>
+                <div class="h-32 bg-gray-200 rounded dark:bg-gray-700"></div>
+            </div>`;
+        section.appendChild(skeleton);
 
-        // Top Tools
-        if (topData.tools && Array.isArray(topData.tools)) {
-            const toolsCard = createTopItemCard("Tools", topData.tools);
-            grid.appendChild(toolsCard);
-        }
+        // Tabs
+        const tabsContainer = document.createElement("div");
+        tabsContainer.className =
+            "border-b border-gray-200 dark:border-gray-700";
+        const tabList = document.createElement("nav");
+        tabList.className = "-mb-px flex space-x-8 overflow-x-auto";
+        tabList.setAttribute("aria-label", "Top Performers Tabs");
 
-        // Top Resources
-        if (topData.resources && Array.isArray(topData.resources)) {
-            const resourcesCard = createTopItemCard(
-                "Resources",
-                topData.resources,
-            );
-            grid.appendChild(resourcesCard);
-        }
+        const entityTypes = [
+            "tools",
+            "resources",
+            "prompts",
+            "gateways",
+            "servers",
+        ];
+        entityTypes.forEach((type, index) => {
+            if (topData[type] && Array.isArray(topData[type])) {
+                const tab = createTab(type, index === 0);
+                tabList.appendChild(tab);
+            }
+        });
 
-        // Top Prompts
-        if (topData.prompts && Array.isArray(topData.prompts)) {
-            const promptsCard = createTopItemCard("Prompts", topData.prompts);
-            grid.appendChild(promptsCard);
-        }
+        tabsContainer.appendChild(tabList);
+        section.appendChild(tabsContainer);
 
-        // Top Servers
-        if (topData.servers && Array.isArray(topData.servers)) {
-            const serversCard = createTopItemCard("Servers", topData.servers);
-            grid.appendChild(serversCard);
-        }
+        // Content panels
+        const contentContainer = document.createElement("div");
+        contentContainer.className = "mt-4";
 
-        section.appendChild(grid);
+        entityTypes.forEach((type, index) => {
+            if (topData[type] && Array.isArray(topData[type])) {
+                const panel = createTopPerformersTable(
+                    type,
+                    topData[type],
+                    index === 0,
+                );
+                contentContainer.appendChild(panel);
+            }
+        });
+
+        section.appendChild(contentContainer);
+
+        // Remove skeleton once data is loaded
+        setTimeout(() => skeleton.remove(), 500); // Simulate async data load
+
+        // Export button
+        const exportButton = document.createElement("button");
+        exportButton.className =
+            "mt-4 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600";
+        exportButton.textContent = "Export Metrics";
+        exportButton.onclick = () => exportMetricsToCSV(topData);
+        section.appendChild(exportButton);
+
         return section;
     } catch (error) {
-        console.error("Error creating top performers section:", error);
-        return document.createElement("div"); // Safe fallback
+        console.error("Error creating enhanced top performers section:", error);
+        showErrorMessage("Failed to load top performers section");
+        return document.createElement("div");
     }
+}
+function calculateSuccessRate(item) {
+    // API returns successRate directly as a percentage
+    if (item.successRate !== undefined && item.successRate !== null) {
+        return Math.round(item.successRate);
+    }
+    // Fallback for legacy format (if needed)
+    const total =
+        item.execution_count || item.executions || item.executionCount || 0;
+    const successful = item.successful_count || item.successfulExecutions || 0;
+    return total > 0 ? Math.round((successful / total) * 100) : 0;
+}
+
+function formatNumber(num) {
+    return new Intl.NumberFormat().format(num);
+}
+
+function formatLastUsed(timestamp) {
+    if (!timestamp) {
+        return "Never";
+    }
+
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+
+    if (diffMins < 1) {
+        return "Just now";
+    }
+    if (diffMins < 60) {
+        return `${diffMins} min ago`;
+    }
+    if (diffMins < 1440) {
+        return `${Math.floor(diffMins / 60)} hours ago`;
+    }
+    if (diffMins < 10080) {
+        return `${Math.floor(diffMins / 1440)} days ago`;
+    }
+
+    return date.toLocaleDateString();
+}
+function createTopPerformersTable(entityType, data, isActive) {
+    const panel = document.createElement("div");
+    panel.id = `top-${entityType}-panel`;
+    panel.className = `transition-opacity duration-300 ${isActive ? "opacity-100" : "hidden opacity-0"}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", `top-${entityType}-tab`);
+
+    if (data.length === 0) {
+        const emptyState = document.createElement("p");
+        emptyState.className =
+            "text-gray-500 dark:text-gray-400 text-center py-4";
+        emptyState.textContent = `No ${entityType} data available`;
+        panel.appendChild(emptyState);
+        return panel;
+    }
+
+    // Responsive table wrapper
+    const tableWrapper = document.createElement("div");
+    tableWrapper.className = "overflow-x-auto sm:overflow-x-visible";
+
+    const table = document.createElement("table");
+    table.className =
+        "min-w-full divide-y divide-gray-200 dark:divide-gray-700";
+
+    // Table header
+    const thead = document.createElement("thead");
+    thead.className =
+        "bg-gray-50 dark:bg-gray-700 hidden sm:table-header-group";
+    const headerRow = document.createElement("tr");
+    const headers = [
+        "Rank",
+        "Name",
+        "Executions",
+        "Avg Response Time",
+        "Success Rate",
+        "Last Used",
+    ];
+
+    headers.forEach((headerText, index) => {
+        const th = document.createElement("th");
+        th.className =
+            "px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider";
+        th.setAttribute("scope", "col");
+        th.textContent = headerText;
+        if (index === 0) {
+            th.setAttribute("aria-sort", "ascending");
+        }
+        headerRow.appendChild(th);
+    });
+
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    // Table body
+    const tbody = document.createElement("tbody");
+    tbody.className =
+        "bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700";
+
+    // Pagination (if > 5 items)
+    const paginatedData = data.slice(0, 5); // Limit to top 5
+    paginatedData.forEach((item, index) => {
+        const row = document.createElement("tr");
+        row.className =
+            "hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-200";
+
+        // Rank
+        const rankCell = document.createElement("td");
+        rankCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100 sm:px-6 sm:py-4";
+        const rankBadge = document.createElement("span");
+        rankBadge.className = `inline-flex items-center justify-center w-6 h-6 rounded-full ${
+            index === 0
+                ? "bg-yellow-400 text-yellow-900"
+                : index === 1
+                  ? "bg-gray-300 text-gray-900"
+                  : index === 2
+                    ? "bg-orange-400 text-orange-900"
+                    : "bg-gray-100 text-gray-600"
+        }`;
+        rankBadge.textContent = index + 1;
+        rankBadge.setAttribute("aria-label", `Rank ${index + 1}`);
+        rankCell.appendChild(rankBadge);
+        row.appendChild(rankCell);
+
+        // Name (clickable for drill-down)
+        const nameCell = document.createElement("td");
+        nameCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm text-indigo-600 dark:text-indigo-400 cursor-pointer";
+        nameCell.textContent = escapeHtml(item.name || "Unknown");
+        // nameCell.onclick = () => showDetailedMetrics(entityType, item.id);
+        nameCell.setAttribute("role", "button");
+        nameCell.setAttribute(
+            "aria-label",
+            `View details for ${item.name || "Unknown"}`,
+        );
+        row.appendChild(nameCell);
+
+        // Executions
+        const execCell = document.createElement("td");
+        execCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300 sm:px-6 sm:py-4";
+        execCell.textContent = formatNumber(
+            item.executionCount || item.execution_count || item.executions || 0,
+        );
+        row.appendChild(execCell);
+
+        // Avg Response Time
+        const avgTimeCell = document.createElement("td");
+        avgTimeCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300 sm:px-6 sm:py-4";
+        const avgTime = item.avg_response_time || item.avgResponseTime;
+        avgTimeCell.textContent = avgTime ? `${Math.round(avgTime)}ms` : "N/A";
+        row.appendChild(avgTimeCell);
+
+        // Success Rate
+        const successCell = document.createElement("td");
+        successCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm sm:px-6 sm:py-4";
+        const successRate = calculateSuccessRate(item);
+        const successBadge = document.createElement("span");
+        successBadge.className = `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+            successRate >= 95
+                ? "bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100"
+                : successRate >= 80
+                  ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100"
+                  : "bg-red-100 text-red-800 dark:bg-red-800 dark:text-red-100"
+        }`;
+        successBadge.textContent = `${successRate}%`;
+        successBadge.setAttribute(
+            "aria-label",
+            `Success rate: ${successRate}%`,
+        );
+        successCell.appendChild(successBadge);
+        row.appendChild(successCell);
+
+        // Last Used
+        const lastUsedCell = document.createElement("td");
+        lastUsedCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300 sm:px-6 sm:py-4";
+        lastUsedCell.textContent = formatLastUsed(
+            item.last_execution || item.lastExecution,
+        );
+        row.appendChild(lastUsedCell);
+
+        tbody.appendChild(row);
+    });
+
+    table.appendChild(tbody);
+    tableWrapper.appendChild(table);
+    panel.appendChild(tableWrapper);
+
+    // Pagination controls (if needed)
+    if (data.length > 5) {
+        const pagination = createPaginationControls(data.length, 5, (page) => {
+            updateTableRows(panel, entityType, data, page);
+        });
+        panel.appendChild(pagination);
+    }
+
+    return panel;
+}
+
+function createTab(type, isActive) {
+    const tab = document.createElement("a");
+    tab.href = "#";
+    tab.id = `top-${type}-tab`;
+    tab.className = `${
+        isActive
+            ? "border-indigo-500 text-indigo-600 dark:text-indigo-400"
+            : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300"
+    } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm capitalize transition-colors duration-200 sm:py-4 sm:px-1`;
+    tab.textContent = type;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", `top-${type}-panel`);
+    tab.setAttribute("aria-selected", isActive.toString());
+    tab.onclick = (e) => {
+        e.preventDefault();
+        showTopPerformerTab(type);
+    };
+    return tab;
+}
+
+function showTopPerformerTab(activeType) {
+    const entityTypes = [
+        "tools",
+        "resources",
+        "prompts",
+        "gateways",
+        "servers",
+    ];
+    entityTypes.forEach((type) => {
+        const panel = document.getElementById(`top-${type}-panel`);
+        const tab = document.getElementById(`top-${type}-tab`);
+        if (panel) {
+            panel.classList.toggle("hidden", type !== activeType);
+            panel.classList.toggle("opacity-100", type === activeType);
+            panel.classList.toggle("opacity-0", type !== activeType);
+            panel.setAttribute("aria-hidden", type !== activeType);
+        }
+        if (tab) {
+            tab.classList.toggle("border-indigo-500", type === activeType);
+            tab.classList.toggle("text-indigo-600", type === activeType);
+            tab.classList.toggle("dark:text-indigo-400", type === activeType);
+            tab.classList.toggle("border-transparent", type !== activeType);
+            tab.classList.toggle("text-gray-500", type !== activeType);
+            tab.setAttribute("aria-selected", type === activeType);
+        }
+    });
+}
+
+function createPaginationControls(totalItems, itemsPerPage, onPageChange) {
+    const pagination = document.createElement("div");
+    pagination.className = "mt-4 flex justify-end space-x-2";
+    const totalPages = Math.ceil(totalItems / itemsPerPage);
+
+    for (let page = 1; page <= totalPages; page++) {
+        const button = document.createElement("button");
+        button.className = `px-3 py-1 rounded ${page === 1 ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`;
+        button.textContent = page;
+        button.onclick = () => {
+            onPageChange(page);
+            pagination.querySelectorAll("button").forEach((btn) => {
+                btn.className = `px-3 py-1 rounded ${btn === button ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`;
+            });
+        };
+        pagination.appendChild(button);
+    }
+
+    return pagination;
+}
+
+function updateTableRows(panel, entityType, data, page) {
+    const tbody = panel.querySelector("tbody");
+    tbody.innerHTML = "";
+    const start = (page - 1) * 5;
+    const paginatedData = data.slice(start, start + 5);
+
+    paginatedData.forEach((item, index) => {
+        const row = document.createElement("tr");
+        // ... (same row creation logic as in createTopPerformersTable)
+        tbody.appendChild(row);
+    });
+}
+
+function exportMetricsToCSV(topData) {
+    const headers = [
+        "Entity Type",
+        "Rank",
+        "Name",
+        "Executions",
+        "Avg Response Time",
+        "Success Rate",
+        "Last Used",
+    ];
+    const rows = [];
+
+    ["tools", "resources", "prompts", "gateways", "servers"].forEach((type) => {
+        if (topData[type] && Array.isArray(topData[type])) {
+            topData[type].forEach((item, index) => {
+                rows.push([
+                    type,
+                    index + 1,
+                    `"${escapeHtml(item.name || "Unknown")}"`,
+                    formatNumber(
+                        item.executionCount ||
+                            item.execution_count ||
+                            item.executions ||
+                            0,
+                    ),
+                    item.avg_response_time || item.avgResponseTime
+                        ? `${Math.round(item.avg_response_time || item.avgResponseTime)}ms`
+                        : "N/A",
+                    `${calculateSuccessRate(item)}%`,
+                    formatLastUsed(item.last_execution || item.lastExecution),
+                ]);
+            });
+        }
+    });
+
+    const csv = [headers.join(","), ...rows.map((row) => row.join(","))].join(
+        "\n",
+    );
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `top_performers_${new Date().toISOString()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 /**
  * SECURITY: Create top item card with safe content handling
  */
-function createTopItemCard(title, items) {
-    try {
-        const card = document.createElement("div");
-        card.className = "bg-gray-50 rounded p-4 dark:bg-gray-700";
+// function createTopItemCard(title, items) {
+//     try {
+//         const card = document.createElement("div");
+//         card.className = "bg-gray-50 rounded p-4 dark:bg-gray-700";
 
-        const cardTitle = document.createElement("h4");
-        cardTitle.className = "font-medium mb-2 dark:text-gray-200";
-        cardTitle.textContent = `Top ${title}`;
-        card.appendChild(cardTitle);
+//         const cardTitle = document.createElement("h4");
+//         cardTitle.className = "font-medium mb-2 dark:text-gray-200";
+//         cardTitle.textContent = `Top ${title}`;
+//         card.appendChild(cardTitle);
 
-        const list = document.createElement("ul");
-        list.className = "space-y-1";
+//         const list = document.createElement("ul");
+//         list.className = "space-y-1";
 
-        items.slice(0, 5).forEach((item) => {
-            const listItem = document.createElement("li");
-            listItem.className =
-                "text-sm text-gray-600 dark:text-gray-300 flex justify-between";
+//         items.slice(0, 5).forEach((item) => {
+//             const listItem = document.createElement("li");
+//             listItem.className =
+//                 "text-sm text-gray-600 dark:text-gray-300 flex justify-between";
 
-            const nameSpan = document.createElement("span");
-            nameSpan.textContent = item.name || "Unknown";
+//             const nameSpan = document.createElement("span");
+//             nameSpan.textContent = item.name || "Unknown";
 
-            const countSpan = document.createElement("span");
-            countSpan.className = "font-medium";
-            countSpan.textContent = String(item.executions || 0);
+//             const countSpan = document.createElement("span");
+//             countSpan.className = "font-medium";
+//             countSpan.textContent = String(item.executions || 0);
 
-            listItem.appendChild(nameSpan);
-            listItem.appendChild(countSpan);
-            list.appendChild(listItem);
-        });
+//             listItem.appendChild(nameSpan);
+//             listItem.appendChild(countSpan);
+//             list.appendChild(listItem);
+//         });
 
-        card.appendChild(list);
-        return card;
-    } catch (error) {
-        console.error("Error creating top item card:", error);
-        return document.createElement("div"); // Safe fallback
-    }
-}
+//         card.appendChild(list);
+//         return card;
+//     } catch (error) {
+//         console.error("Error creating top item card:", error);
+//         return document.createElement("div"); // Safe fallback
+//     }
+// }
 
 /**
  * SECURITY: Create performance metrics card with safe display
@@ -1417,14 +1918,12 @@ async function editTool(toolId) {
         const response = await fetchWithTimeout(
             `${window.ROOT_PATH}/admin/tools/${toolId}`,
         );
-
         if (!response.ok) {
             // If the response is not OK, throw an error
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
         const tool = await response.json();
-
         const isInactiveCheckedBool = isInactiveChecked("tools");
         let hiddenField = safeGetElement("edit-show-inactive");
         if (!hiddenField) {
@@ -1447,15 +1946,21 @@ async function editTool(toolId) {
 
         // Validate and set fields
         const nameValidation = validateInputName(tool.name, "tool");
+        const customNameValidation = validateInputName(tool.customName, "tool");
+
         const urlValidation = validateUrl(tool.url);
 
         const nameField = safeGetElement("edit-tool-name");
+        const customNameField = safeGetElement("edit-tool-custom-name");
         const urlField = safeGetElement("edit-tool-url");
         const descField = safeGetElement("edit-tool-description");
         const typeField = safeGetElement("edit-tool-type");
 
         if (nameField && nameValidation.valid) {
             nameField.value = nameValidation.value;
+        }
+        if (customNameField && customNameValidation.valid) {
+            customNameField.value = customNameValidation.value;
         }
         if (urlField && urlValidation.valid) {
             urlField.value = urlValidation.value;
@@ -1465,6 +1970,12 @@ async function editTool(toolId) {
         }
         if (typeField) {
             typeField.value = tool.integrationType || "MCP";
+        }
+
+        // Set tags field
+        const tagsField = safeGetElement("edit-tool-tags");
+        if (tagsField) {
+            tagsField.value = tool.tags ? tool.tags.join(", ") : "";
         }
 
         // Handle JSON fields safely with validation
@@ -1517,22 +2028,113 @@ async function editTool(toolId) {
             window.editToolSchemaEditor.refresh();
         }
 
-        // Trigger change event for integration type
+        // Prefill integration type from DB and set request types accordingly
         if (typeField) {
-            const event = new Event("change");
-            typeField.dispatchEvent(event);
+            typeField.value = tool.integrationType || "REST";
+            // Disable integration type field for MCP tools (cannot be changed)
+            if (tool.integrationType === "MCP") {
+                typeField.disabled = true;
+            } else {
+                typeField.disabled = false;
+            }
+            updateEditToolRequestTypes(tool.requestType || null); // preselect from DB
+            updateEditToolUrl(tool.url || null);
         }
 
-        // Set Request Type field
+        // Request Type field handling (disable for MCP)
         const requestTypeField = safeGetElement("edit-tool-request-type");
         if (requestTypeField) {
-            requestTypeField.value = tool.requestType || "SSE";
+            if ((tool.integrationType || "REST") === "MCP") {
+                requestTypeField.value = "";
+                requestTypeField.disabled = true; // disabled -> not submitted
+            } else {
+                requestTypeField.disabled = false;
+                requestTypeField.value = tool.requestType || ""; // keep DB verb or blank
+            }
         }
 
         // Set auth type field
         const authTypeField = safeGetElement("edit-auth-type");
         if (authTypeField) {
             authTypeField.value = tool.auth?.authType || "";
+        }
+        const editAuthTokenField = safeGetElement("edit-auth-token");
+        // Prefill integration type from DB and set request types accordingly
+        if (typeField) {
+            // Always set value from DB, never from previous UI state
+            typeField.value = tool.integrationType;
+            // Remove any previous hidden field for type
+            const prevHiddenType = document.getElementById(
+                "hidden-edit-tool-type",
+            );
+            if (prevHiddenType) {
+                prevHiddenType.remove();
+            }
+            // Remove any previous hidden field for authType
+            const prevHiddenAuthType = document.getElementById(
+                "hidden-edit-auth-type",
+            );
+            if (prevHiddenAuthType) {
+                prevHiddenAuthType.remove();
+            }
+            // Disable integration type field for MCP tools (cannot be changed)
+            if (tool.integrationType === "MCP") {
+                typeField.disabled = true;
+                if (authTypeField) {
+                    authTypeField.disabled = true;
+                    // Add hidden field for authType
+                    const hiddenAuthTypeField = document.createElement("input");
+                    hiddenAuthTypeField.type = "hidden";
+                    hiddenAuthTypeField.name = authTypeField.name;
+                    hiddenAuthTypeField.value = authTypeField.value;
+                    hiddenAuthTypeField.id = "hidden-edit-auth-type";
+                    authTypeField.form.appendChild(hiddenAuthTypeField);
+                }
+                if (urlField) {
+                    urlField.readOnly = true;
+                }
+                if (headersField) {
+                    headersField.setAttribute("readonly", "readonly");
+                }
+                if (schemaField) {
+                    schemaField.setAttribute("readonly", "readonly");
+                }
+                if (editAuthTokenField) {
+                    editAuthTokenField.setAttribute("readonly", "readonly");
+                }
+                if (window.editToolHeadersEditor) {
+                    window.editToolHeadersEditor.setOption("readOnly", true);
+                }
+                if (window.editToolSchemaEditor) {
+                    window.editToolSchemaEditor.setOption("readOnly", true);
+                }
+            } else {
+                typeField.disabled = false;
+                if (authTypeField) {
+                    authTypeField.disabled = false;
+                }
+                if (urlField) {
+                    urlField.readOnly = false;
+                }
+                if (headersField) {
+                    headersField.removeAttribute("readonly");
+                }
+                if (schemaField) {
+                    schemaField.removeAttribute("readonly");
+                }
+                if (editAuthTokenField) {
+                    editAuthTokenField.removeAttribute("readonly");
+                }
+                if (window.editToolHeadersEditor) {
+                    window.editToolHeadersEditor.setOption("readOnly", false);
+                }
+                if (window.editToolSchemaEditor) {
+                    window.editToolSchemaEditor.setOption("readOnly", false);
+                }
+            }
+            // Update request types and URL field
+            updateEditToolRequestTypes(tool.requestType || null);
+            updateEditToolUrl(tool.url || null);
         }
 
         // Auth containers
@@ -1692,6 +2294,25 @@ async function viewResource(resourceUri) {
                 container.appendChild(p);
             });
 
+            // Tags section
+            const tagsP = document.createElement("p");
+            const tagsStrong = document.createElement("strong");
+            tagsStrong.textContent = "Tags: ";
+            tagsP.appendChild(tagsStrong);
+
+            if (resource.tags && resource.tags.length > 0) {
+                resource.tags.forEach((tag) => {
+                    const tagSpan = document.createElement("span");
+                    tagSpan.className =
+                        "inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full mr-1 mb-1 dark:bg-blue-900 dark:text-blue-200";
+                    tagSpan.textContent = tag;
+                    tagsP.appendChild(tagSpan);
+                });
+            } else {
+                tagsP.appendChild(document.createTextNode("None"));
+            }
+            container.appendChild(tagsP);
+
             // Status with safe styling
             const statusP = document.createElement("p");
             const statusStrong = document.createElement("strong");
@@ -1787,6 +2408,73 @@ async function viewResource(resourceUri) {
                 container.appendChild(metricsDiv);
             }
 
+            // Add metadata section
+            const metadataDiv = document.createElement("div");
+            metadataDiv.className = "mt-6 border-t pt-4";
+
+            const metadataTitle = document.createElement("strong");
+            metadataTitle.textContent = "Metadata:";
+            metadataDiv.appendChild(metadataTitle);
+
+            const metadataGrid = document.createElement("div");
+            metadataGrid.className = "grid grid-cols-2 gap-4 mt-2 text-sm";
+
+            const metadataFields = [
+                {
+                    label: "Created By",
+                    value: resource.createdBy || "Legacy Entity",
+                },
+                {
+                    label: "Created At",
+                    value: resource.createdAt
+                        ? new Date(resource.createdAt).toLocaleString()
+                        : "Pre-metadata",
+                },
+                {
+                    label: "Created From",
+                    value: resource.createdFromIp || "Unknown",
+                },
+                {
+                    label: "Created Via",
+                    value: resource.createdVia || "Unknown",
+                },
+                {
+                    label: "Last Modified By",
+                    value: resource.modifiedBy || "N/A",
+                },
+                {
+                    label: "Last Modified At",
+                    value: resource.modifiedAt
+                        ? new Date(resource.modifiedAt).toLocaleString()
+                        : "N/A",
+                },
+                { label: "Version", value: resource.version || "1" },
+                {
+                    label: "Import Batch",
+                    value: resource.importBatchId || "N/A",
+                },
+            ];
+
+            metadataFields.forEach((field) => {
+                const fieldDiv = document.createElement("div");
+
+                const labelSpan = document.createElement("span");
+                labelSpan.className =
+                    "font-medium text-gray-600 dark:text-gray-400";
+                labelSpan.textContent = field.label + ":";
+
+                const valueSpan = document.createElement("span");
+                valueSpan.className = "ml-2";
+                valueSpan.textContent = field.value;
+
+                fieldDiv.appendChild(labelSpan);
+                fieldDiv.appendChild(valueSpan);
+                metadataGrid.appendChild(fieldDiv);
+            });
+
+            metadataDiv.appendChild(metadataGrid);
+            container.appendChild(metadataDiv);
+
             // Replace content safely
             resourceDetailsDiv.innerHTML = "";
             resourceDetailsDiv.appendChild(container);
@@ -1861,6 +2549,13 @@ async function editResource(resourceUri) {
         if (mimeField) {
             mimeField.value = resource.mimeType || "";
         }
+
+        // Set tags field
+        const tagsField = safeGetElement("edit-resource-tags");
+        if (tagsField) {
+            tagsField.value = resource.tags ? resource.tags.join(", ") : "";
+        }
+
         if (contentField) {
             let contentStr = extractContent(
                 content,
@@ -1947,6 +2642,25 @@ async function viewPrompt(promptName) {
                 p.appendChild(document.createTextNode(field.value));
                 container.appendChild(p);
             });
+
+            // Tags section
+            const tagsP = document.createElement("p");
+            const tagsStrong = document.createElement("strong");
+            tagsStrong.textContent = "Tags: ";
+            tagsP.appendChild(tagsStrong);
+
+            if (prompt.tags && prompt.tags.length > 0) {
+                prompt.tags.forEach((tag) => {
+                    const tagSpan = document.createElement("span");
+                    tagSpan.className =
+                        "inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full mr-1 mb-1 dark:bg-blue-900 dark:text-blue-200";
+                    tagSpan.textContent = tag;
+                    tagsP.appendChild(tagSpan);
+                });
+            } else {
+                tagsP.appendChild(document.createTextNode("None"));
+            }
+            container.appendChild(tagsP);
 
             // Status
             const statusP = document.createElement("p");
@@ -2049,6 +2763,67 @@ async function viewPrompt(promptName) {
                 container.appendChild(metricsDiv);
             }
 
+            // Add metadata section
+            const metadataDiv = document.createElement("div");
+            metadataDiv.className = "mt-6 border-t pt-4";
+
+            const metadataTitle = document.createElement("strong");
+            metadataTitle.textContent = "Metadata:";
+            metadataDiv.appendChild(metadataTitle);
+
+            const metadataGrid = document.createElement("div");
+            metadataGrid.className = "grid grid-cols-2 gap-4 mt-2 text-sm";
+
+            const metadataFields = [
+                {
+                    label: "Created By",
+                    value: prompt.createdBy || "Legacy Entity",
+                },
+                {
+                    label: "Created At",
+                    value: prompt.createdAt
+                        ? new Date(prompt.createdAt).toLocaleString()
+                        : "Pre-metadata",
+                },
+                {
+                    label: "Created From",
+                    value: prompt.createdFromIp || "Unknown",
+                },
+                { label: "Created Via", value: prompt.createdVia || "Unknown" },
+                {
+                    label: "Last Modified By",
+                    value: prompt.modifiedBy || "N/A",
+                },
+                {
+                    label: "Last Modified At",
+                    value: prompt.modifiedAt
+                        ? new Date(prompt.modifiedAt).toLocaleString()
+                        : "N/A",
+                },
+                { label: "Version", value: prompt.version || "1" },
+                { label: "Import Batch", value: prompt.importBatchId || "N/A" },
+            ];
+
+            metadataFields.forEach((field) => {
+                const fieldDiv = document.createElement("div");
+
+                const labelSpan = document.createElement("span");
+                labelSpan.className =
+                    "font-medium text-gray-600 dark:text-gray-400";
+                labelSpan.textContent = field.label + ":";
+
+                const valueSpan = document.createElement("span");
+                valueSpan.className = "ml-2";
+                valueSpan.textContent = field.value;
+
+                fieldDiv.appendChild(labelSpan);
+                fieldDiv.appendChild(valueSpan);
+                metadataGrid.appendChild(fieldDiv);
+            });
+
+            metadataDiv.appendChild(metadataGrid);
+            container.appendChild(metadataDiv);
+
             // Replace content safely
             promptDetailsDiv.innerHTML = "";
             promptDetailsDiv.appendChild(container);
@@ -2114,6 +2889,13 @@ async function editPrompt(promptName) {
         if (descField) {
             descField.value = prompt.description || "";
         }
+
+        // Set tags field
+        const tagsField = safeGetElement("edit-prompt-tags");
+        if (tagsField) {
+            tagsField.value = prompt.tags ? prompt.tags.join(", ") : "";
+        }
+
         if (templateField) {
             templateField.value = prompt.template || "";
         }
@@ -2188,6 +2970,24 @@ async function viewGateway(gatewayId) {
                 { label: "Description", value: gateway.description || "N/A" },
             ];
 
+            // Add tags field with special handling
+            const tagsP = document.createElement("p");
+            const tagsStrong = document.createElement("strong");
+            tagsStrong.textContent = "Tags: ";
+            tagsP.appendChild(tagsStrong);
+            if (gateway.tags && gateway.tags.length > 0) {
+                gateway.tags.forEach((tag, index) => {
+                    const tagSpan = document.createElement("span");
+                    tagSpan.className =
+                        "inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full mr-1";
+                    tagSpan.textContent = tag;
+                    tagsP.appendChild(tagSpan);
+                });
+            } else {
+                tagsP.appendChild(document.createTextNode("No tags"));
+            }
+            container.appendChild(tagsP);
+
             fields.forEach((field) => {
                 const p = document.createElement("p");
                 const strong = document.createElement("strong");
@@ -2235,6 +3035,73 @@ async function viewGateway(gatewayId) {
 
             statusP.appendChild(statusSpan);
             container.appendChild(statusP);
+
+            // Add metadata section
+            const metadataDiv = document.createElement("div");
+            metadataDiv.className = "mt-6 border-t pt-4";
+
+            const metadataTitle = document.createElement("strong");
+            metadataTitle.textContent = "Metadata:";
+            metadataDiv.appendChild(metadataTitle);
+
+            const metadataGrid = document.createElement("div");
+            metadataGrid.className = "grid grid-cols-2 gap-4 mt-2 text-sm";
+
+            const metadataFields = [
+                {
+                    label: "Created By",
+                    value: gateway.createdBy || "Legacy Entity",
+                },
+                {
+                    label: "Created At",
+                    value: gateway.createdAt
+                        ? new Date(gateway.createdAt).toLocaleString()
+                        : "Pre-metadata",
+                },
+                {
+                    label: "Created From",
+                    value: gateway.createdFromIp || "Unknown",
+                },
+                {
+                    label: "Created Via",
+                    value: gateway.createdVia || "Unknown",
+                },
+                {
+                    label: "Last Modified By",
+                    value: gateway.modifiedBy || "N/A",
+                },
+                {
+                    label: "Last Modified At",
+                    value: gateway.modifiedAt
+                        ? new Date(gateway.modifiedAt).toLocaleString()
+                        : "N/A",
+                },
+                { label: "Version", value: gateway.version || "1" },
+                {
+                    label: "Import Batch",
+                    value: gateway.importBatchId || "N/A",
+                },
+            ];
+
+            metadataFields.forEach((field) => {
+                const fieldDiv = document.createElement("div");
+
+                const labelSpan = document.createElement("span");
+                labelSpan.className =
+                    "font-medium text-gray-600 dark:text-gray-400";
+                labelSpan.textContent = field.label + ":";
+
+                const valueSpan = document.createElement("span");
+                valueSpan.className = "ml-2";
+                valueSpan.textContent = field.value;
+
+                fieldDiv.appendChild(labelSpan);
+                fieldDiv.appendChild(valueSpan);
+                metadataGrid.appendChild(fieldDiv);
+            });
+
+            metadataDiv.appendChild(metadataGrid);
+            container.appendChild(metadataDiv);
 
             gatewayDetailsDiv.innerHTML = "";
             gatewayDetailsDiv.appendChild(container);
@@ -2305,6 +3172,12 @@ async function editGateway(gatewayId) {
             descField.value = gateway.description || "";
         }
 
+        // Set tags field
+        const tagsField = safeGetElement("edit-gateway-tags");
+        if (tagsField) {
+            tagsField.value = gateway.tags ? gateway.tags.join(", ") : "";
+        }
+
         if (transportField) {
             transportField.value = gateway.transport || "SSE"; // falls back to SSE(default)
         }
@@ -2321,6 +3194,7 @@ async function editGateway(gatewayId) {
         const authHeadersSection = safeGetElement(
             "auth-headers-fields-gw-edit",
         );
+        const authOAuthSection = safeGetElement("auth-oauth-fields-gw-edit");
 
         // Individual fields
         const authUsernameField = safeGetElement(
@@ -2341,6 +3215,24 @@ async function editGateway(gatewayId) {
             "auth-headers-fields-gw-edit",
         )?.querySelector("input[name='auth_header_value']");
 
+        // OAuth fields
+        const oauthGrantTypeField = safeGetElement("oauth-grant-type-gw-edit");
+        const oauthClientIdField = safeGetElement("oauth-client-id-gw-edit");
+        const oauthClientSecretField = safeGetElement(
+            "oauth-client-secret-gw-edit",
+        );
+        const oauthTokenUrlField = safeGetElement("oauth-token-url-gw-edit");
+        const oauthAuthUrlField = safeGetElement(
+            "oauth-authorization-url-gw-edit",
+        );
+        const oauthRedirectUriField = safeGetElement(
+            "oauth-redirect-uri-gw-edit",
+        );
+        const oauthScopesField = safeGetElement("oauth-scopes-gw-edit");
+        const oauthAuthCodeFields = safeGetElement(
+            "oauth-auth-code-fields-gw-edit",
+        );
+
         // Hide all auth sections first
         if (authBasicSection) {
             authBasicSection.style.display = "none";
@@ -2350,6 +3242,9 @@ async function editGateway(gatewayId) {
         }
         if (authHeadersSection) {
             authHeadersSection.style.display = "none";
+        }
+        if (authOAuthSection) {
+            authOAuthSection.style.display = "none";
         }
 
         switch (gateway.authType) {
@@ -2383,10 +3278,67 @@ async function editGateway(gatewayId) {
                     }
                 }
                 break;
+            case "oauth":
+                if (authOAuthSection) {
+                    authOAuthSection.style.display = "block";
+                }
+                // Populate OAuth fields if available
+                if (gateway.oauthConfig) {
+                    const config = gateway.oauthConfig;
+                    if (oauthGrantTypeField && config.grant_type) {
+                        oauthGrantTypeField.value = config.grant_type;
+                        // Show/hide authorization code fields based on grant type
+                        if (oauthAuthCodeFields) {
+                            oauthAuthCodeFields.style.display =
+                                config.grant_type === "authorization_code"
+                                    ? "block"
+                                    : "none";
+                        }
+                    }
+                    if (oauthClientIdField && config.client_id) {
+                        oauthClientIdField.value = config.client_id;
+                    }
+                    if (oauthClientSecretField) {
+                        oauthClientSecretField.value = ""; // Don't populate secret for security
+                    }
+                    if (oauthTokenUrlField && config.token_url) {
+                        oauthTokenUrlField.value = config.token_url;
+                    }
+                    if (oauthAuthUrlField && config.authorization_url) {
+                        oauthAuthUrlField.value = config.authorization_url;
+                    }
+                    if (oauthRedirectUriField && config.redirect_uri) {
+                        oauthRedirectUriField.value = config.redirect_uri;
+                    }
+                    if (
+                        oauthScopesField &&
+                        config.scopes &&
+                        Array.isArray(config.scopes)
+                    ) {
+                        oauthScopesField.value = config.scopes.join(" ");
+                    }
+                }
+                break;
             case "":
             default:
                 // No auth – keep everything hidden
                 break;
+        }
+
+        // Handle passthrough headers
+        const passthroughHeadersField = safeGetElement(
+            "edit-gateway-passthrough-headers",
+        );
+        if (passthroughHeadersField) {
+            if (
+                gateway.passthroughHeaders &&
+                Array.isArray(gateway.passthroughHeaders)
+            ) {
+                passthroughHeadersField.value =
+                    gateway.passthroughHeaders.join(", ");
+            } else {
+                passthroughHeadersField.value = "";
+            }
         }
 
         openModal("gateway-edit-modal");
@@ -2439,6 +3391,25 @@ async function viewServer(serverId) {
                 container.appendChild(p);
             });
 
+            // Tags section
+            const tagsP = document.createElement("p");
+            const tagsStrong = document.createElement("strong");
+            tagsStrong.textContent = "Tags: ";
+            tagsP.appendChild(tagsStrong);
+
+            if (server.tags && server.tags.length > 0) {
+                server.tags.forEach((tag) => {
+                    const tagSpan = document.createElement("span");
+                    tagSpan.className =
+                        "inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full mr-1 mb-1 dark:bg-blue-900 dark:text-blue-200";
+                    tagSpan.textContent = tag;
+                    tagsP.appendChild(tagSpan);
+                });
+            } else {
+                tagsP.appendChild(document.createTextNode("None"));
+            }
+            container.appendChild(tagsP);
+
             // Status
             const statusP = document.createElement("p");
             const statusStrong = document.createElement("strong");
@@ -2454,6 +3425,67 @@ async function viewServer(serverId) {
             statusSpan.textContent = server.isActive ? "Active" : "Inactive";
             statusP.appendChild(statusSpan);
             container.appendChild(statusP);
+
+            // Add metadata section
+            const metadataDiv = document.createElement("div");
+            metadataDiv.className = "mt-6 border-t pt-4";
+
+            const metadataTitle = document.createElement("strong");
+            metadataTitle.textContent = "Metadata:";
+            metadataDiv.appendChild(metadataTitle);
+
+            const metadataGrid = document.createElement("div");
+            metadataGrid.className = "grid grid-cols-2 gap-4 mt-2 text-sm";
+
+            const metadataFields = [
+                {
+                    label: "Created By",
+                    value: server.createdBy || "Legacy Entity",
+                },
+                {
+                    label: "Created At",
+                    value: server.createdAt
+                        ? new Date(server.createdAt).toLocaleString()
+                        : "Pre-metadata",
+                },
+                {
+                    label: "Created From",
+                    value: server.createdFromIp || "Unknown",
+                },
+                { label: "Created Via", value: server.createdVia || "Unknown" },
+                {
+                    label: "Last Modified By",
+                    value: server.modifiedBy || "N/A",
+                },
+                {
+                    label: "Last Modified At",
+                    value: server.modifiedAt
+                        ? new Date(server.modifiedAt).toLocaleString()
+                        : "N/A",
+                },
+                { label: "Version", value: server.version || "1" },
+                { label: "Import Batch", value: server.importBatchId || "N/A" },
+            ];
+
+            metadataFields.forEach((field) => {
+                const fieldDiv = document.createElement("div");
+
+                const labelSpan = document.createElement("span");
+                labelSpan.className =
+                    "font-medium text-gray-600 dark:text-gray-400";
+                labelSpan.textContent = field.label + ":";
+
+                const valueSpan = document.createElement("span");
+                valueSpan.className = "ml-2";
+                valueSpan.textContent = field.value;
+
+                fieldDiv.appendChild(labelSpan);
+                fieldDiv.appendChild(valueSpan);
+                metadataGrid.appendChild(fieldDiv);
+            });
+
+            metadataDiv.appendChild(metadataGrid);
+            container.appendChild(metadataDiv);
 
             serverDetailsDiv.innerHTML = "";
             serverDetailsDiv.appendChild(container);
@@ -2520,6 +3552,12 @@ async function editServer(serverId) {
         }
         if (descField) {
             descField.value = server.description || "";
+        }
+
+        // Set tags field
+        const tagsField = safeGetElement("edit-server-tags");
+        if (tagsField) {
+            tagsField.value = server.tags ? server.tags.join(", ") : "";
         }
 
         openModal("server-edit-modal");
@@ -2603,6 +3641,15 @@ function showTab(tabName) {
                     }
                 }
 
+                if (tabName === "a2a-agents") {
+                    // Load A2A agents list if not already loaded
+                    const agentsList = safeGetElement("a2a-agents-list");
+                    if (agentsList && agentsList.innerHTML.trim() === "") {
+                        // Trigger HTMX load manually
+                        window.htmx.trigger(agentsList, "load");
+                    }
+                }
+
                 if (tabName === "version-info") {
                     const versionPanel = safeGetElement("version-info-panel");
                     if (versionPanel && versionPanel.innerHTML.trim() === "") {
@@ -2637,6 +3684,30 @@ function showTab(tabName) {
                             });
                     }
                 }
+
+                if (tabName === "export-import") {
+                    // Initialize export/import functionality when tab is shown
+                    if (!panel.classList.contains("hidden")) {
+                        console.log(
+                            "🔄 Initializing export/import tab content",
+                        );
+                        try {
+                            // Ensure the export/import functionality is initialized
+                            if (typeof initializeExportImport === "function") {
+                                initializeExportImport();
+                            }
+                            // Load recent imports
+                            if (typeof loadRecentImports === "function") {
+                                loadRecentImports();
+                            }
+                        } catch (error) {
+                            console.error(
+                                "Error loading export/import content:",
+                                error,
+                            );
+                        }
+                    }
+                }
             } catch (error) {
                 console.error(
                     `Error in tab ${tabName} content loading:`,
@@ -2661,6 +3732,7 @@ function handleAuthTypeSelection(
     basicFields,
     bearerFields,
     headersFields,
+    oauthFields,
 ) {
     if (!basicFields || !bearerFields || !headersFields) {
         console.warn("Auth field elements not found");
@@ -2669,19 +3741,47 @@ function handleAuthTypeSelection(
 
     // Hide all fields first
     [basicFields, bearerFields, headersFields].forEach((field) => {
-        field.style.display = "none";
+        if (field) {
+            field.style.display = "none";
+        }
     });
+
+    // Hide OAuth fields if they exist
+    if (oauthFields) {
+        oauthFields.style.display = "none";
+    }
 
     // Show relevant field based on selection
     switch (value) {
         case "basic":
-            basicFields.style.display = "block";
+            if (basicFields) {
+                basicFields.style.display = "block";
+            }
             break;
         case "bearer":
-            bearerFields.style.display = "block";
+            if (bearerFields) {
+                bearerFields.style.display = "block";
+            }
             break;
-        case "authheaders":
-            headersFields.style.display = "block";
+        case "authheaders": {
+            if (headersFields) {
+                headersFields.style.display = "block";
+                // Ensure at least one header row is present
+                const containerId =
+                    headersFields.querySelector('[id$="-container"]')?.id;
+                if (containerId) {
+                    const container = document.getElementById(containerId);
+                    if (container && container.children.length === 0) {
+                        addAuthHeader(containerId);
+                    }
+                }
+            }
+            break;
+        }
+        case "oauth":
+            if (oauthFields) {
+                oauthFields.style.display = "block";
+            }
             break;
         default:
             // All fields already hidden
@@ -2958,8 +4058,8 @@ function createParameterForm(parameterCount) {
 // ===================================================================
 
 const integrationRequestMap = {
-    MCP: ["SSE", "STREAMABLE", "STDIO"],
     REST: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    MCP: [],
 };
 
 function updateRequestTypeOptions(preselectedValue = null) {
@@ -2993,18 +4093,30 @@ function updateRequestTypeOptions(preselectedValue = null) {
 function updateEditToolRequestTypes(selectedMethod = null) {
     const editToolTypeSelect = safeGetElement("edit-tool-type");
     const editToolRequestTypeSelect = safeGetElement("edit-tool-request-type");
-
     if (!editToolTypeSelect || !editToolRequestTypeSelect) {
         return;
     }
 
+    // Track previous value using a data attribute
+    if (!editToolTypeSelect.dataset.prevValue) {
+        editToolTypeSelect.dataset.prevValue = editToolTypeSelect.value;
+    }
+
+    // const prevType = editToolTypeSelect.dataset.prevValue;
     const selectedType = editToolTypeSelect.value;
     const allowedMethods = integrationRequestMap[selectedType] || [];
 
-    // Clear existing options
-    editToolRequestTypeSelect.innerHTML = "";
+    // If this integration has no HTTP verbs (MCP), clear & disable the control
+    if (allowedMethods.length === 0) {
+        editToolRequestTypeSelect.innerHTML = "";
+        editToolRequestTypeSelect.value = "";
+        editToolRequestTypeSelect.disabled = true;
+        return;
+    }
 
-    // Populate new options
+    // Otherwise populate and enable
+    editToolRequestTypeSelect.disabled = false;
+    editToolRequestTypeSelect.innerHTML = "";
     allowedMethods.forEach((method) => {
         const option = document.createElement("option");
         option.value = method;
@@ -3012,7 +4124,6 @@ function updateEditToolRequestTypes(selectedMethod = null) {
         editToolRequestTypeSelect.appendChild(option);
     });
 
-    // Set the pre-selected method, if valid
     if (selectedMethod && allowedMethods.includes(selectedMethod)) {
         editToolRequestTypeSelect.value = selectedMethod;
     }
@@ -3022,6 +4133,27 @@ function updateEditToolRequestTypes(selectedMethod = null) {
 // TOOL SELECT FUNCTIONALITY
 // ===================================================================
 
+// Prevent manual REST→MCP changes in edit-tool-form
+document.addEventListener("DOMContentLoaded", function () {
+    const editToolTypeSelect = document.getElementById("edit-tool-type");
+    if (editToolTypeSelect) {
+        // Store the initial value for comparison
+        editToolTypeSelect.dataset.prevValue = editToolTypeSelect.value;
+
+        editToolTypeSelect.addEventListener("change", function (e) {
+            const prevType = this.dataset.prevValue;
+            const selectedType = this.value;
+            if (prevType === "REST" && selectedType === "MCP") {
+                alert("You cannot change integration type from REST to MCP.");
+                this.value = prevType;
+                // Optionally, reset any dependent fields here
+            } else {
+                this.dataset.prevValue = selectedType;
+            }
+        });
+    }
+});
+//= ==================================================================
 function initToolSelect(
     selectId,
     pillsId,
@@ -3245,6 +4377,7 @@ async function testTool(toolId) {
         }
 
         const tool = await response.json();
+        console.log(`Tool ${toolId} fetched successfully`, tool);
         toolInputSchemaRegistry = tool;
 
         // 7. CLEAN STATE before proceeding
@@ -3307,27 +4440,31 @@ async function testTool(toolId) {
 
                 // Field label - use textContent to avoid double escaping
                 const label = document.createElement("label");
-                label.textContent = keyValidation.value;
                 label.className =
                     "block text-sm font-medium text-gray-700 dark:text-gray-300";
+
+                // Create span for label text
+                const labelText = document.createElement("span");
+                labelText.textContent = keyValidation.value;
+                label.appendChild(labelText);
+
+                // Add red star if field is required
+                if (schema.required && schema.required.includes(key)) {
+                    const requiredMark = document.createElement("span");
+                    requiredMark.textContent = " *";
+                    requiredMark.className = "text-red-500";
+                    label.appendChild(requiredMark);
+                }
+
                 fieldDiv.appendChild(label);
 
                 // Description help text - use textContent
                 if (prop.description) {
                     const description = document.createElement("small");
-                    description.textContent = prop.description; // NO escapeHtml here
+                    description.textContent = prop.description;
                     description.className = "text-gray-500 block mb-1";
                     fieldDiv.appendChild(description);
                 }
-
-                // Input field with validation
-                const input = document.createElement("input");
-                input.name = keyValidation.value;
-                input.type = "text";
-                input.required =
-                    schema.required && schema.required.includes(key);
-                input.className =
-                    "mt-1 block w-full rounded-md border border-gray-500 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 text-gray-700 dark:text-gray-300 dark:border-gray-700 dark:focus:border-indigo-400 dark:focus:ring-indigo-400";
 
                 if (prop.type === "array") {
                     const arrayContainer = document.createElement("div");
@@ -3343,18 +4480,27 @@ async function testTool(toolId) {
                             schema.required && schema.required.includes(key);
                         input.className =
                             "mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 text-gray-700 dark:text-gray-300 dark:border-gray-700 dark:focus:border-indigo-400 dark:focus:ring-indigo-400";
-                        if (prop.items && prop.items.type === "number") {
-                            input.type = "number";
-                        } else if (
-                            prop.items &&
-                            prop.items.type === "boolean"
+
+                        const itemTypes = Array.isArray(prop.items?.anyOf)
+                            ? prop.items.anyOf.map((t) => t.type)
+                            : [prop.items?.type];
+
+                        if (
+                            itemTypes.includes("number") ||
+                            itemTypes.includes("integer")
                         ) {
+                            input.type = "number";
+                            input.step = itemTypes.includes("integer")
+                                ? "1"
+                                : "any";
+                        } else if (itemTypes.includes("boolean")) {
                             input.type = "checkbox";
                             input.value = "true";
                             input.checked = value === true || value === "true";
                         } else {
                             input.type = "text";
                         }
+
                         if (
                             typeof value === "string" ||
                             typeof value === "number"
@@ -3386,34 +4532,68 @@ async function testTool(toolId) {
                         arrayContainer.appendChild(createArrayInput());
                     });
 
-                    arrayContainer.appendChild(createArrayInput());
+                    if (Array.isArray(prop.default)) {
+                        if (prop.default.length > 0) {
+                            prop.default.forEach((val) => {
+                                arrayContainer.appendChild(
+                                    createArrayInput(val),
+                                );
+                            });
+                        } else {
+                            // Create one empty input for empty default arrays
+                            arrayContainer.appendChild(createArrayInput());
+                        }
+                    } else {
+                        arrayContainer.appendChild(createArrayInput());
+                    }
 
                     fieldDiv.appendChild(arrayContainer);
                     fieldDiv.appendChild(addBtn);
                 } else {
-                    // Input field with validation
-                    const input = document.createElement("input");
-                    input.name = keyValidation.value;
-                    input.required =
-                        schema.required && schema.required.includes(key);
-                    input.className =
-                        "mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 text-gray-700 dark:text-gray-300 dark:border-gray-700 dark:focus:border-indigo-400 dark:focus:ring-indigo-400";
-                    // Add validation based on type
-                    if (prop.type === "text") {
-                        input.type = "text";
-                    } else if (prop.type === "number") {
-                        input.type = "number";
-                    } else if (prop.type === "boolean") {
-                        input.type = "checkbox";
-                        input.className =
-                            "mt-1 h-4 w-4 text-indigo-600 dark:text-indigo-200 border border-gray-300 rounded";
+                    // Input field with validation (with multiline support)
+                    let fieldInput;
+                    const isTextType = prop.type === "text";
+                    if (isTextType) {
+                        fieldInput = document.createElement("textarea");
+                        fieldInput.rows = 4;
+                    } else {
+                        fieldInput = document.createElement("input");
+                        if (prop.type === "number" || prop.type === "integer") {
+                            fieldInput.type = "number";
+                        } else if (prop.type === "boolean") {
+                            fieldInput.type = "checkbox";
+                        } else {
+                            fieldInput = document.createElement("textarea");
+                            fieldInput.rows = 1;
+                        }
                     }
-                    fieldDiv.appendChild(input);
+
+                    fieldInput.name = keyValidation.value;
+                    fieldInput.required =
+                        schema.required && schema.required.includes(key);
+                    fieldInput.className =
+                        prop.type === "boolean"
+                            ? "mt-1 h-4 w-4 text-indigo-600 dark:text-indigo-200 border border-gray-300 rounded"
+                            : "mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 text-gray-700 dark:text-gray-300 dark:border-gray-700 dark:focus:border-indigo-400 dark:focus:ring-indigo-400";
+
+                    // Set default values here
+                    if (prop.default !== undefined) {
+                        if (fieldInput.type === "checkbox") {
+                            fieldInput.checked = prop.default === true;
+                        } else if (isTextType) {
+                            fieldInput.value = prop.default;
+                        } else {
+                            fieldInput.value = prop.default;
+                        }
+                    }
+
+                    fieldDiv.appendChild(fieldInput);
                 }
 
                 container.appendChild(fieldDiv);
             }
         }
+
         openModal("tool-test-modal");
         console.log("✓ Tool test modal loaded successfully");
     } catch (error) {
@@ -3507,19 +4687,77 @@ async function runToolTest() {
                 }
                 let value;
                 if (prop.type === "array") {
-                    value = formData.getAll(key);
-                    if (prop.items && prop.items.type === "number") {
-                        value = value.map((v) => (v === "" ? null : Number(v)));
-                    } else if (prop.items && prop.items.type === "boolean") {
-                        value = value.map((v) => v === "true" || v === true);
+                    const inputValues = formData.getAll(key);
+                    try {
+                        // Convert values based on the items schema type
+                        if (prop.items) {
+                            const itemType = Array.isArray(prop.items.anyOf)
+                                ? prop.items.anyOf.map((t) => t.type)
+                                : [prop.items.type];
+
+                            if (
+                                itemType.includes("number") ||
+                                itemType.includes("integer")
+                            ) {
+                                value = inputValues.map((v) => {
+                                    const num = Number(v);
+                                    if (isNaN(num)) {
+                                        throw new Error(`Invalid number: ${v}`);
+                                    }
+                                    return num;
+                                });
+                            } else if (itemType.includes("boolean")) {
+                                value = inputValues.map(
+                                    (v) => v === "true" || v === true,
+                                );
+                            } else if (itemType.includes("object")) {
+                                value = inputValues.map((v) => {
+                                    try {
+                                        const parsed = JSON.parse(v);
+                                        if (
+                                            typeof parsed !== "object" ||
+                                            Array.isArray(parsed)
+                                        ) {
+                                            throw new Error(
+                                                "Value must be an object",
+                                            );
+                                        }
+                                        return parsed;
+                                    } catch {
+                                        throw new Error(
+                                            `Invalid object format for ${key}`,
+                                        );
+                                    }
+                                });
+                            } else {
+                                value = inputValues;
+                            }
+                        }
+
+                        // Handle empty values
+                        if (
+                            value.length === 0 ||
+                            (value.length === 1 && value[0] === "")
+                        ) {
+                            if (
+                                schema.required &&
+                                schema.required.includes(key)
+                            ) {
+                                params[keyValidation.value] = [];
+                            }
+                            continue;
+                        }
+                        params[keyValidation.value] = value;
+                    } catch (error) {
+                        console.error(
+                            `Error parsing array values for ${key}:`,
+                            error,
+                        );
+                        showErrorMessage(
+                            `Invalid input format for ${key}. Please check the values are in correct format.`,
+                        );
+                        throw error;
                     }
-                    if (
-                        value.length === 0 ||
-                        (value.length === 1 && value[0] === "")
-                    ) {
-                        continue;
-                    }
-                    params[keyValidation.value] = value;
                 } else {
                     value = formData.get(key);
                     if (value === null || value === undefined || value === "") {
@@ -3551,14 +4789,61 @@ async function runToolTest() {
             params,
         };
 
+        // Parse custom headers from the passthrough headers field
+        const requestHeaders = {
+            "Content-Type": "application/json",
+        };
+
+        const passthroughHeadersField = document.getElementById(
+            "test-passthrough-headers",
+        );
+        if (passthroughHeadersField && passthroughHeadersField.value.trim()) {
+            const headerLines = passthroughHeadersField.value
+                .trim()
+                .split("\n");
+            for (const line of headerLines) {
+                const trimmedLine = line.trim();
+                if (trimmedLine) {
+                    const colonIndex = trimmedLine.indexOf(":");
+                    if (colonIndex > 0) {
+                        const headerName = trimmedLine
+                            .substring(0, colonIndex)
+                            .trim();
+                        const headerValue = trimmedLine
+                            .substring(colonIndex + 1)
+                            .trim();
+
+                        // Validate header name and value
+                        const validation = validatePassthroughHeader(
+                            headerName,
+                            headerValue,
+                        );
+                        if (!validation.valid) {
+                            showErrorMessage(
+                                `Invalid header: ${validation.error}`,
+                            );
+                            return;
+                        }
+
+                        if (headerName && headerValue) {
+                            requestHeaders[headerName] = headerValue;
+                        }
+                    } else if (colonIndex === -1) {
+                        showErrorMessage(
+                            `Invalid header format: "${trimmedLine}". Expected format: "Header-Name: Value"`,
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
         // Use longer timeout for test execution
         const response = await fetchWithTimeout(
             `${window.ROOT_PATH}/rpc`,
             {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: requestHeaders,
                 body: JSON.stringify(payload),
                 credentials: "include",
             },
@@ -3721,6 +5006,7 @@ async function testGateway(gatewayURL) {
                     {
                         mode: "application/json",
                         lineNumbers: true,
+                        lineWrapping: true,
                     },
                 );
                 gatewayTestHeadersEditor.setSize(null, 100);
@@ -3736,6 +5022,7 @@ async function testGateway(gatewayURL) {
                     {
                         mode: "application/json",
                         lineNumbers: true,
+                        lineWrapping: true,
                     },
                 );
                 gatewayTestBodyEditor.setSize(null, 100);
@@ -4095,6 +5382,7 @@ async function viewTool(toolId) {
           <p><strong>URL:</strong> <span class="tool-url"></span></p>
           <p><strong>Type:</strong> <span class="tool-type"></span></p>
           <p><strong>Description:</strong> <span class="tool-description"></span></p>
+          <p><strong>Tags:</strong> <span class="tool-tags"></span></p>
           <p><strong>Request Type:</strong> <span class="tool-request-type"></span></p>
           ${authHTML}
           ${renderAnnotations(tool.annotations)}
@@ -4119,6 +5407,43 @@ async function viewTool(toolId) {
               <li>Last Execution Time: <span class="metric-last-time"></span></li>
             </ul>
           </div>
+          <div class="mt-6 border-t pt-4">
+            <strong>Metadata:</strong>
+            <div class="grid grid-cols-2 gap-4 mt-2 text-sm">
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Created By:</span>
+                <span class="ml-2 metadata-created-by"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Created At:</span>
+                <span class="ml-2 metadata-created-at"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Created From:</span>
+                <span class="ml-2 metadata-created-from"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Created Via:</span>
+                <span class="ml-2 metadata-created-via"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Last Modified By:</span>
+                <span class="ml-2 metadata-modified-by"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Last Modified At:</span>
+                <span class="ml-2 metadata-modified-at"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Version:</span>
+                <span class="ml-2 metadata-version"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Import Batch:</span>
+                <span class="ml-2 metadata-import-batch"></span>
+              </div>
+            </div>
+          </div>
         </div>
       `;
 
@@ -4137,6 +5462,22 @@ async function viewTool(toolId) {
             setTextSafely(".tool-url", tool.url);
             setTextSafely(".tool-type", tool.integrationType);
             setTextSafely(".tool-description", tool.description);
+
+            // Set tags as HTML with badges
+            const tagsElement = toolDetailsDiv.querySelector(".tool-tags");
+            if (tagsElement) {
+                if (tool.tags && tool.tags.length > 0) {
+                    tagsElement.innerHTML = tool.tags
+                        .map(
+                            (tag) =>
+                                `<span class="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full mr-1 mb-1 dark:bg-blue-900 dark:text-blue-200">${tag}</span>`,
+                        )
+                        .join("");
+                } else {
+                    tagsElement.textContent = "None";
+                }
+            }
+
             setTextSafely(".tool-request-type", tool.requestType);
             setTextSafely(
                 ".tool-headers",
@@ -4198,6 +5539,38 @@ async function viewTool(toolId) {
             setTextSafely(
                 ".metric-last-time",
                 tool.metrics?.lastExecutionTime ?? "N/A",
+            );
+
+            // Set metadata fields safely with appropriate fallbacks for legacy entities
+            setTextSafely(
+                ".metadata-created-by",
+                tool.createdBy || "Legacy Entity",
+            );
+            setTextSafely(
+                ".metadata-created-at",
+                tool.createdAt
+                    ? new Date(tool.createdAt).toLocaleString()
+                    : "Pre-metadata",
+            );
+            setTextSafely(
+                ".metadata-created-from",
+                tool.createdFromIp || "Unknown",
+            );
+            setTextSafely(
+                ".metadata-created-via",
+                tool.createdVia || "Unknown",
+            );
+            setTextSafely(".metadata-modified-by", tool.modifiedBy || "N/A");
+            setTextSafely(
+                ".metadata-modified-at",
+                tool.modifiedAt
+                    ? new Date(tool.modifiedAt).toLocaleString()
+                    : "N/A",
+            );
+            setTextSafely(".metadata-version", tool.version || "1");
+            setTextSafely(
+                ".metadata-import-batch",
+                tool.importBatchId || "N/A",
             );
         }
 
@@ -4281,6 +5654,96 @@ async function handleGatewayFormSubmit(e) {
         const isInactiveCheckedBool = isInactiveChecked("gateways");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
 
+        // Process passthrough headers - convert comma-separated string to array
+        const passthroughHeadersString = formData.get("passthrough_headers");
+        if (passthroughHeadersString && passthroughHeadersString.trim()) {
+            // Split by comma and clean up each header name
+            const passthroughHeaders = passthroughHeadersString
+                .split(",")
+                .map((header) => header.trim())
+                .filter((header) => header.length > 0);
+
+            // Validate each header name
+            for (const headerName of passthroughHeaders) {
+                if (!HEADER_NAME_REGEX.test(headerName)) {
+                    showErrorMessage(
+                        `Invalid passthrough header name: "${headerName}". Only letters, numbers, and hyphens are allowed.`,
+                    );
+                    return;
+                }
+            }
+
+            // Remove the original string and add as JSON array
+            formData.delete("passthrough_headers");
+            formData.append(
+                "passthrough_headers",
+                JSON.stringify(passthroughHeaders),
+            );
+        }
+
+        // Handle auth_headers JSON field
+        const authHeadersJson = formData.get("auth_headers");
+        if (authHeadersJson) {
+            try {
+                const authHeaders = JSON.parse(authHeadersJson);
+                if (Array.isArray(authHeaders) && authHeaders.length > 0) {
+                    // Remove the JSON string and add as parsed data for backend processing
+                    formData.delete("auth_headers");
+                    formData.append(
+                        "auth_headers",
+                        JSON.stringify(authHeaders),
+                    );
+                }
+            } catch (e) {
+                console.error("Invalid auth_headers JSON:", e);
+            }
+        }
+
+        // Handle OAuth configuration
+        const authType = formData.get("auth_type");
+        if (authType === "oauth") {
+            const oauthConfig = {
+                grant_type: formData.get("oauth_grant_type"),
+                client_id: formData.get("oauth_client_id"),
+                client_secret: formData.get("oauth_client_secret"),
+                token_url: formData.get("oauth_token_url"),
+                scopes: formData.get("oauth_scopes")
+                    ? formData
+                          .get("oauth_scopes")
+                          .split(" ")
+                          .filter((s) => s.trim())
+                    : [],
+            };
+
+            // Add authorization code specific fields
+            if (oauthConfig.grant_type === "authorization_code") {
+                oauthConfig.authorization_url = formData.get(
+                    "oauth_authorization_url",
+                );
+                oauthConfig.redirect_uri = formData.get("oauth_redirect_uri");
+
+                // Add token management options
+                oauthConfig.token_management = {
+                    store_tokens: formData.get("oauth_store_tokens") === "on",
+                    auto_refresh: formData.get("oauth_auto_refresh") === "on",
+                    refresh_threshold_seconds: 300,
+                };
+            }
+
+            // Remove individual OAuth fields and add as oauth_config
+            formData.delete("oauth_grant_type");
+            formData.delete("oauth_client_id");
+            formData.delete("oauth_client_secret");
+            formData.delete("oauth_token_url");
+            formData.delete("oauth_scopes");
+            formData.delete("oauth_authorization_url");
+            formData.delete("oauth_redirect_uri");
+            formData.delete("oauth_store_tokens");
+            formData.delete("oauth_auto_refresh");
+
+            formData.append("oauth_config", JSON.stringify(oauthConfig));
+        }
+
         const response = await fetchWithTimeout(
             `${window.ROOT_PATH}/admin/gateways`,
             {
@@ -4288,10 +5751,10 @@ async function handleGatewayFormSubmit(e) {
                 body: formData,
             },
         );
-
         const result = await response.json();
-        if (!result.success) {
-            throw new Error(result.message || "An error occurred");
+
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to add gateway");
         } else {
             const redirectUrl = isInactiveCheckedBool
                 ? `${window.ROOT_PATH}/admin?include_inactive=true#gateways`
@@ -4352,10 +5815,9 @@ async function handleResourceFormSubmit(e) {
                 body: formData,
             },
         );
-
         const result = await response.json();
-        if (!result.success) {
-            throw new Error(result.message || "An error occurred");
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to add Resource");
         } else {
             const redirectUrl = isInactiveCheckedBool
                 ? `${window.ROOT_PATH}/admin?include_inactive=true#resources`
@@ -4411,10 +5873,9 @@ async function handlePromptFormSubmit(e) {
                 body: formData,
             },
         );
-
         const result = await response.json();
-        if (!result.success) {
-            throw new Error(result.message || "An error occurred");
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to add prompt");
         }
         // Only redirect on success
         const redirectUrl = isInactiveCheckedBool
@@ -4468,8 +5929,8 @@ async function handleEditPromptFormSubmit(e) {
         });
 
         const result = await response.json();
-        if (!result.success) {
-            throw new Error(result.message || "An error occurred");
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to edit Prompt");
         }
         // Only redirect on success
         const redirectUrl = isInactiveCheckedBool
@@ -4519,11 +5980,9 @@ async function handleServerFormSubmit(e) {
                 redirect: "manual",
             },
         );
-
         const result = await response.json();
-        if (!result.success) {
-            console.log(result.message);
-            throw new Error(result.message || "Failed to add server.");
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to add server.");
         } else {
             // Success redirect
             const redirectUrl = isInactiveCheckedBool
@@ -4603,10 +6062,9 @@ async function handleToolFormSubmit(event) {
                 body: formData,
             },
         );
-
         const result = await response.json();
-        if (!result.success) {
-            throw new Error(result.message || "An error occurred");
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to add tool");
         } else {
             const redirectUrl = isInactiveCheckedBool
                 ? `${window.ROOT_PATH}/admin?include_inactive=true#tools`
@@ -4657,11 +6115,10 @@ async function handleEditToolFormSubmit(event) {
             body: formData,
             headers: { "X-Requested-With": "XMLHttpRequest" },
         });
-        console.log("response:", response);
+
         const result = await response.json();
-        console.log("result edit tool form:", result);
-        if (!result.success) {
-            throw new Error(result.message || "An error occurred");
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to edit tool");
         } else {
             const redirectUrl = isInactiveCheckedBool
                 ? `${window.ROOT_PATH}/admin?include_inactive=true#tools`
@@ -4670,6 +6127,209 @@ async function handleEditToolFormSubmit(event) {
         }
     } catch (error) {
         console.error("Fetch error:", error);
+        showErrorMessage(error.message);
+    }
+}
+async function handleEditGatewayFormSubmit(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    try {
+        // Validate form inputs
+        const name = formData.get("name");
+        const url = formData.get("url");
+
+        const nameValidation = validateInputName(name, "gateway");
+        const urlValidation = validateUrl(url);
+
+        if (!nameValidation.valid) {
+            throw new Error(nameValidation.error);
+        }
+
+        if (!urlValidation.valid) {
+            throw new Error(urlValidation.error);
+        }
+
+        // Handle passthrough headers
+        const passthroughHeadersString =
+            formData.get("passthrough_headers") || "";
+        const passthroughHeaders = passthroughHeadersString
+            .split(",")
+            .map((header) => header.trim())
+            .filter((header) => header.length > 0);
+
+        // Validate each header name
+        for (const headerName of passthroughHeaders) {
+            if (headerName && !HEADER_NAME_REGEX.test(headerName)) {
+                showErrorMessage(
+                    `Invalid passthrough header name: "${headerName}". Only letters, numbers, and hyphens are allowed.`,
+                );
+                return;
+            }
+        }
+
+        formData.append(
+            "passthrough_headers",
+            JSON.stringify(passthroughHeaders),
+        );
+
+        // Handle OAuth configuration
+        const authType = formData.get("auth_type");
+        if (authType === "oauth") {
+            const oauthConfig = {
+                grant_type: formData.get("oauth_grant_type"),
+                client_id: formData.get("oauth_client_id"),
+                client_secret: formData.get("oauth_client_secret"),
+                token_url: formData.get("oauth_token_url"),
+                scopes: formData.get("oauth_scopes")
+                    ? formData
+                          .get("oauth_scopes")
+                          .split(" ")
+                          .filter((s) => s.trim())
+                    : [],
+            };
+
+            // Add authorization code specific fields
+            if (oauthConfig.grant_type === "authorization_code") {
+                oauthConfig.authorization_url = formData.get(
+                    "oauth_authorization_url",
+                );
+                oauthConfig.redirect_uri = formData.get("oauth_redirect_uri");
+            }
+
+            // Remove individual OAuth fields and add as oauth_config
+            formData.delete("oauth_grant_type");
+            formData.delete("oauth_client_id");
+            formData.delete("oauth_client_secret");
+            formData.delete("oauth_token_url");
+            formData.delete("oauth_scopes");
+            formData.delete("oauth_authorization_url");
+            formData.delete("oauth_redirect_uri");
+
+            formData.append("oauth_config", JSON.stringify(oauthConfig));
+        }
+
+        const isInactiveCheckedBool = isInactiveChecked("gateways");
+        formData.append("is_inactive_checked", isInactiveCheckedBool);
+        // Submit via fetch
+        const response = await fetch(form.action, {
+            method: "POST",
+            body: formData,
+        });
+        const result = await response.json();
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to edit gateway");
+        }
+        // Only redirect on success
+        const redirectUrl = isInactiveCheckedBool
+            ? `${window.ROOT_PATH}/admin?include_inactive=true#gateways`
+            : `${window.ROOT_PATH}/admin#gateways`;
+        window.location.href = redirectUrl;
+    } catch (error) {
+        console.error("Error:", error);
+        showErrorMessage(error.message);
+    }
+}
+
+async function handleEditServerFormSubmit(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+
+    try {
+        // Validate inputs
+        const name = formData.get("name");
+        const nameValidation = validateInputName(name, "server");
+        if (!nameValidation.valid) {
+            throw new Error(nameValidation.error);
+        }
+
+        // Save CodeMirror editors' contents if present
+        if (window.promptToolHeadersEditor) {
+            window.promptToolHeadersEditor.save();
+        }
+        if (window.promptToolSchemaEditor) {
+            window.promptToolSchemaEditor.save();
+        }
+
+        const isInactiveCheckedBool = isInactiveChecked("servers");
+        formData.append("is_inactive_checked", isInactiveCheckedBool);
+
+        // Submit via fetch
+        const response = await fetch(form.action, {
+            method: "POST",
+            body: formData,
+        });
+        const result = await response.json();
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to edit server");
+        }
+        // Only redirect on success
+        else {
+            // Redirect to the appropriate page based on inactivity checkbox
+            const redirectUrl = isInactiveCheckedBool
+                ? `${window.ROOT_PATH}/admin?include_inactive=true#catalog`
+                : `${window.ROOT_PATH}/admin#catalog`;
+            window.location.href = redirectUrl;
+        }
+    } catch (error) {
+        console.error("Error:", error);
+        showErrorMessage(error.message);
+    }
+}
+
+async function handleEditResFormSubmit(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+
+    try {
+        // Validate inputs
+        const name = formData.get("name");
+        const uri = formData.get("uri");
+        const nameValidation = validateInputName(name, "resource");
+        const uriValidation = validateInputName(uri, "resource URI");
+
+        if (!nameValidation.valid) {
+            showErrorMessage(nameValidation.error);
+            return;
+        }
+
+        if (!uriValidation.valid) {
+            showErrorMessage(uriValidation.error);
+            return;
+        }
+
+        // Save CodeMirror editors' contents if present
+        if (window.promptToolHeadersEditor) {
+            window.promptToolHeadersEditor.save();
+        }
+        if (window.promptToolSchemaEditor) {
+            window.promptToolSchemaEditor.save();
+        }
+
+        const isInactiveCheckedBool = isInactiveChecked("resources");
+        formData.append("is_inactive_checked", isInactiveCheckedBool);
+        // Submit via fetch
+        const response = await fetch(form.action, {
+            method: "POST",
+            body: formData,
+        });
+
+        const result = await response.json();
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to edit resource");
+        }
+        // Only redirect on success
+        else {
+            // Redirect to the appropriate page based on inactivity checkbox
+            const redirectUrl = isInactiveCheckedBool
+                ? `${window.ROOT_PATH}/admin?include_inactive=true#resources`
+                : `${window.ROOT_PATH}/admin#resources`;
+            window.location.href = redirectUrl;
+        }
+    } catch (error) {
+        console.error("Error:", error);
         showErrorMessage(error.message);
     }
 }
@@ -4946,6 +6606,26 @@ document.addEventListener("DOMContentLoaded", () => {
         // 4. Handle initial tab/state
         initializeTabState();
 
+        // 5. Set up form validation
+        setupFormValidation();
+
+        // 6. Setup bulk import modal
+        try {
+            setupBulkImportModal();
+        } catch (error) {
+            console.error("Error setting up bulk import modal:", error);
+        }
+
+        // 7. Initialize export/import functionality
+        try {
+            initializeExportImport();
+        } catch (error) {
+            console.error(
+                "Error setting up export/import functionality:",
+                error,
+            );
+        }
+
         // // ✅ 4.1 Set up tab button click handlers
         // document.querySelectorAll('.tab-button').forEach(button => {
         //     button.addEventListener('click', () => {
@@ -4958,9 +6638,6 @@ document.addEventListener("DOMContentLoaded", () => {
         //         document.getElementById(tabId).classList.remove('hidden');
         //     });
         // });
-
-        // 5. Set up form validation
-        setupFormValidation();
 
         // Mark as initialized
         AppState.isInitialized = true;
@@ -5046,6 +6723,7 @@ function initializeCodeMirrorEditors() {
                         autoCloseBrackets: true,
                         matchBrackets: true,
                         tabSize: 2,
+                        lineWrapping: true,
                     },
                 );
                 console.log(`✓ Initialized ${config.varName}`);
@@ -5099,8 +6777,11 @@ function setupTabNavigation() {
         "resources",
         "prompts",
         "gateways",
+        "a2a-agents",
         "roots",
         "metrics",
+        "logs",
+        "export-import",
         "version-info",
     ];
 
@@ -5145,6 +6826,7 @@ function setupAuthenticationToggles() {
             basicId: "auth-basic-fields-gw-edit",
             bearerId: "auth-bearer-fields-gw-edit",
             headersId: "auth-headers-fields-gw-edit",
+            oauthId: "auth-oauth-fields-gw-edit",
         },
         {
             id: "edit-auth-type",
@@ -5176,6 +6858,21 @@ function setupFormHandlers() {
     const gatewayForm = safeGetElement("add-gateway-form");
     if (gatewayForm) {
         gatewayForm.addEventListener("submit", handleGatewayFormSubmit);
+
+        // Add OAuth authentication type change handler
+        const authTypeField = safeGetElement("auth-type-gw");
+        if (authTypeField) {
+            authTypeField.addEventListener("change", handleAuthTypeChange);
+        }
+
+        // Add OAuth grant type change handler
+        const oauthGrantTypeField = safeGetElement("oauth-grant-type-gw");
+        if (oauthGrantTypeField) {
+            oauthGrantTypeField.addEventListener(
+                "change",
+                handleOAuthGrantTypeChange,
+            );
+        }
     }
 
     const resourceForm = safeGetElement("add-resource-form");
@@ -5198,6 +6895,15 @@ function setupFormHandlers() {
         });
     }
 
+    // Add OAuth grant type change handler for Edit Gateway modal
+    const editOAuthGrantTypeField = safeGetElement("oauth-grant-type-gw-edit");
+    if (editOAuthGrantTypeField) {
+        editOAuthGrantTypeField.addEventListener(
+            "change",
+            handleEditOAuthGrantTypeChange,
+        );
+    }
+
     const toolForm = safeGetElement("add-tool-form");
     if (toolForm) {
         toolForm.addEventListener("submit", handleToolFormSubmit);
@@ -5218,14 +6924,26 @@ function setupFormHandlers() {
         serverForm.addEventListener("submit", handleServerFormSubmit);
     }
 
-    const editResourceForm = safeGetElement("edit-resource-form");
-    if (editResourceForm) {
-        editResourceForm.addEventListener("submit", () => {
-            if (window.editResourceContentEditor) {
-                window.editResourceContentEditor.save();
+    const editServerForm = safeGetElement("edit-server-form");
+    if (editServerForm) {
+        editServerForm.addEventListener("submit", handleEditServerFormSubmit);
+        editServerForm.addEventListener("click", () => {
+            if (getComputedStyle(editServerForm).display !== "none") {
+                refreshEditors();
             }
         });
     }
+
+    const editResourceForm = safeGetElement("edit-resource-form");
+    if (editResourceForm) {
+        editResourceForm.addEventListener("submit", handleEditResFormSubmit);
+        editResourceForm.addEventListener("click", () => {
+            if (getComputedStyle(editResourceForm).display !== "none") {
+                refreshEditors();
+            }
+        });
+    }
+
     const editToolForm = safeGetElement("edit-tool-form");
     if (editToolForm) {
         editToolForm.addEventListener("submit", handleEditToolFormSubmit);
@@ -5234,6 +6952,129 @@ function setupFormHandlers() {
                 refreshEditors();
             }
         });
+    }
+
+    const editGatewayForm = safeGetElement("edit-gateway-form");
+    if (editGatewayForm) {
+        editGatewayForm.addEventListener("submit", handleEditGatewayFormSubmit);
+        editGatewayForm.addEventListener("click", () => {
+            if (getComputedStyle(editGatewayForm).display !== "none") {
+                refreshEditors();
+            }
+        });
+    }
+}
+
+function handleAuthTypeChange() {
+    const authType = this.value;
+    const basicFields = safeGetElement("auth-basic-fields-gw");
+    const bearerFields = safeGetElement("auth-bearer-fields-gw");
+    const headersFields = safeGetElement("auth-headers-fields-gw");
+    const oauthFields = safeGetElement("auth-oauth-fields-gw");
+
+    // Hide all auth sections first
+    if (basicFields) {
+        basicFields.style.display = "none";
+    }
+    if (bearerFields) {
+        bearerFields.style.display = "none";
+    }
+    if (headersFields) {
+        headersFields.style.display = "none";
+    }
+    if (oauthFields) {
+        oauthFields.style.display = "none";
+    }
+
+    // Show the appropriate section
+    switch (authType) {
+        case "basic":
+            if (basicFields) {
+                basicFields.style.display = "block";
+            }
+            break;
+        case "bearer":
+            if (bearerFields) {
+                bearerFields.style.display = "block";
+            }
+            break;
+        case "authheaders":
+            if (headersFields) {
+                headersFields.style.display = "block";
+            }
+            break;
+        case "oauth":
+            if (oauthFields) {
+                oauthFields.style.display = "block";
+            }
+            break;
+        default:
+            // No auth - keep everything hidden
+            break;
+    }
+}
+
+function handleOAuthGrantTypeChange() {
+    const grantType = this.value;
+    const authCodeFields = safeGetElement("oauth-auth-code-fields-gw");
+
+    if (authCodeFields) {
+        if (grantType === "authorization_code") {
+            authCodeFields.style.display = "block";
+
+            // Make authorization code specific fields required
+            const requiredFields =
+                authCodeFields.querySelectorAll('input[type="url"]');
+            requiredFields.forEach((field) => {
+                field.required = true;
+            });
+
+            // Show additional validation for required fields
+            console.log(
+                "Authorization Code flow selected - additional fields are now required",
+            );
+        } else {
+            authCodeFields.style.display = "none";
+
+            // Remove required validation for hidden fields
+            const requiredFields =
+                authCodeFields.querySelectorAll('input[type="url"]');
+            requiredFields.forEach((field) => {
+                field.required = false;
+            });
+        }
+    }
+}
+
+function handleEditOAuthGrantTypeChange() {
+    const grantType = this.value;
+    const authCodeFields = safeGetElement("oauth-auth-code-fields-gw-edit");
+
+    if (authCodeFields) {
+        if (grantType === "authorization_code") {
+            authCodeFields.style.display = "block";
+
+            // Make authorization code specific fields required
+            const requiredFields =
+                authCodeFields.querySelectorAll('input[type="url"]');
+            requiredFields.forEach((field) => {
+                field.required = true;
+            });
+
+            // Show additional validation for required fields
+            console.log(
+                "Authorization Code flow selected - additional fields are now required",
+            );
+        } else {
+            authCodeFields.style.display = "none";
+
+            // Remove required validation for hidden fields
+            const requiredFields =
+                authCodeFields.querySelectorAll('input[type="url"]');
+            requiredFields.forEach((field) => {
+                field.required = false;
+            });
+        }
     }
 }
 
@@ -5290,10 +7131,10 @@ function setupIntegrationTypeHandlers() {
 
     const editToolTypeSelect = safeGetElement("edit-tool-type");
     if (editToolTypeSelect) {
-        editToolTypeSelect.value = "REST";
-        updateEditToolRequestTypes("PUT");
-        editToolTypeSelect.addEventListener("change", () =>
-            updateEditToolRequestTypes(),
+        editToolTypeSelect.addEventListener(
+            "change",
+            () => updateEditToolRequestTypes(),
+            // updateEditToolUrl(),
         );
     }
 }
@@ -5376,4 +7217,1846 @@ window.runToolTest = runToolTest;
 window.closeModal = closeModal;
 window.testGateway = testGateway;
 
+// ===============================================
+// CONFIG EXPORT FUNCTIONALITY
+// ===============================================
+
+/**
+ * Global variables to store current config data
+ */
+let currentConfigData = null;
+let currentConfigType = null;
+let currentServerName = null;
+let currentServerId = null;
+
+/**
+ * Show the config selection modal
+ * @param {string} serverId - The server UUID
+ * @param {string} serverName - The server name
+ */
+function showConfigSelectionModal(serverId, serverName) {
+    currentServerId = serverId;
+    currentServerName = serverName;
+
+    const serverNameDisplay = safeGetElement("server-name-display");
+    if (serverNameDisplay) {
+        serverNameDisplay.textContent = serverName;
+    }
+
+    openModal("config-selection-modal");
+}
+
+/**
+ * Generate and show configuration for selected type
+ * @param {string} configType - Configuration type: 'stdio', 'sse', or 'http'
+ */
+async function generateAndShowConfig(configType) {
+    try {
+        console.log(
+            `Generating ${configType} config for server ${currentServerId}`,
+        );
+
+        // First, fetch the server details
+        const response = await fetchWithTimeout(
+            `${window.ROOT_PATH}/admin/servers/${currentServerId}`,
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const server = await response.json();
+
+        // Generate the configuration
+        const config = generateConfig(server, configType);
+
+        // Store data for modal
+        currentConfigData = config;
+        currentConfigType = configType;
+
+        // Close selection modal and show config display modal
+        closeModal("config-selection-modal");
+        showConfigDisplayModal(server, configType, config);
+
+        console.log("✓ Config generated successfully");
+    } catch (error) {
+        console.error("Error generating config:", error);
+        const errorMessage = handleFetchError(error, "generate configuration");
+        showErrorMessage(errorMessage);
+    }
+}
+
+/**
+ * Export server configuration in specified format
+ * @param {string} serverId - The server UUID
+ * @param {string} configType - Configuration type: 'stdio', 'sse', or 'http'
+ */
+async function exportServerConfig(serverId, configType) {
+    try {
+        console.log(`Exporting ${configType} config for server ${serverId}`);
+
+        // First, fetch the server details
+        const response = await fetchWithTimeout(
+            `${window.ROOT_PATH}/admin/servers/${serverId}`,
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const server = await response.json();
+
+        // Generate the configuration
+        const config = generateConfig(server, configType);
+
+        // Store data for modal
+        currentConfigData = config;
+        currentConfigType = configType;
+        currentServerName = server.name;
+
+        // Show the modal with the config
+        showConfigDisplayModal(server, configType, config);
+
+        console.log("✓ Config generated successfully");
+    } catch (error) {
+        console.error("Error generating config:", error);
+        const errorMessage = handleFetchError(error, "generate configuration");
+        showErrorMessage(errorMessage);
+    }
+}
+
+/**
+ * Generate configuration object based on server and type
+ * @param {Object} server - Server object from API
+ * @param {string} configType - Configuration type
+ * @returns {Object} - Generated configuration object
+ */
+function generateConfig(server, configType) {
+    const currentHost = window.location.hostname;
+    const currentPort =
+        window.location.port ||
+        (window.location.protocol === "https:" ? "443" : "80");
+    const protocol = window.location.protocol;
+    const baseUrl = `${protocol}//${currentHost}${currentPort !== "80" && currentPort !== "443" ? ":" + currentPort : ""}`;
+
+    // Clean server name for use as config key (alphanumeric and hyphens only)
+    const cleanServerName = server.name
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "");
+
+    switch (configType) {
+        case "stdio":
+            return {
+                mcpServers: {
+                    [cleanServerName]: {
+                        command: "python",
+                        args: ["-m", "mcpgateway.wrapper"],
+                        env: {
+                            MCP_AUTH: "your-token-here",
+                            MCP_SERVER_URL: `${baseUrl}/servers/${server.id}/mcp`,
+                            MCP_TOOL_CALL_TIMEOUT: "120",
+                        },
+                    },
+                },
+            };
+
+        case "sse":
+            return {
+                mcpServers: {
+                    [cleanServerName]: {
+                        type: "sse",
+                        url: `${baseUrl}/servers/${server.id}/sse`,
+                        headers: {
+                            Authorization: "Bearer your-token-here",
+                        },
+                    },
+                },
+            };
+
+        case "http":
+            return {
+                mcpServers: {
+                    [cleanServerName]: {
+                        type: "http",
+                        url: `${baseUrl}/servers/${server.id}`,
+                        headers: {
+                            Authorization: "Bearer your-token-here",
+                        },
+                    },
+                },
+            };
+
+        default:
+            throw new Error(`Unknown config type: ${configType}`);
+    }
+}
+
+/**
+ * Show the config display modal with generated configuration
+ * @param {Object} server - Server object
+ * @param {string} configType - Configuration type
+ * @param {Object} config - Generated configuration
+ */
+function showConfigDisplayModal(server, configType, config) {
+    const descriptions = {
+        stdio: "Configuration for Claude Desktop, CLI tools, and stdio-based MCP clients",
+        sse: "Configuration for LangChain, LlamaIndex, and other SSE-based frameworks",
+        http: "Configuration for REST clients and HTTP-based MCP integrations",
+    };
+
+    const usageInstructions = {
+        stdio: "Save as .mcp.json in your user directory or use in Claude Desktop settings",
+        sse: "Use with MCP client libraries that support Server-Sent Events transport",
+        http: "Use with HTTP clients or REST API wrappers for MCP protocol",
+    };
+
+    // Update modal content
+    const descriptionEl = safeGetElement("config-description");
+    const usageEl = safeGetElement("config-usage");
+    const contentEl = safeGetElement("config-content");
+
+    if (descriptionEl) {
+        descriptionEl.textContent = `${descriptions[configType]} for server "${server.name}"`;
+    }
+
+    if (usageEl) {
+        usageEl.textContent = usageInstructions[configType];
+    }
+
+    if (contentEl) {
+        contentEl.value = JSON.stringify(config, null, 2);
+    }
+
+    // Update title and open the modal
+    const titleEl = safeGetElement("config-display-title");
+    if (titleEl) {
+        titleEl.textContent = `${configType.toUpperCase()} Configuration for ${server.name}`;
+    }
+    openModal("config-display-modal");
+}
+
+/**
+ * Copy configuration to clipboard
+ */
+async function copyConfigToClipboard() {
+    try {
+        const contentEl = safeGetElement("config-content");
+        if (!contentEl) {
+            throw new Error("Config content not found");
+        }
+
+        await navigator.clipboard.writeText(contentEl.value);
+        showSuccessMessage("Configuration copied to clipboard!");
+    } catch (error) {
+        console.error("Error copying to clipboard:", error);
+
+        // Fallback: select the text for manual copying
+        const contentEl = safeGetElement("config-content");
+        if (contentEl) {
+            contentEl.select();
+            contentEl.setSelectionRange(0, 99999); // For mobile devices
+            showErrorMessage("Please copy the selected text manually (Ctrl+C)");
+        } else {
+            showErrorMessage("Failed to copy configuration");
+        }
+    }
+}
+
+/**
+ * Download configuration as JSON file
+ */
+function downloadConfig() {
+    if (!currentConfigData || !currentConfigType || !currentServerName) {
+        showErrorMessage("No configuration data available");
+        return;
+    }
+
+    try {
+        const content = JSON.stringify(currentConfigData, null, 2);
+        const blob = new Blob([content], { type: "application/json" });
+        const url = window.URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${currentServerName}-${currentConfigType}-config.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        showSuccessMessage(`Configuration downloaded as ${a.download}`);
+    } catch (error) {
+        console.error("Error downloading config:", error);
+        showErrorMessage("Failed to download configuration");
+    }
+}
+
+/**
+ * Go back to config selection modal
+ */
+function goBackToSelection() {
+    closeModal("config-display-modal");
+    openModal("config-selection-modal");
+}
+
+// Export functions to global scope immediately after definition
+window.showConfigSelectionModal = showConfigSelectionModal;
+window.generateAndShowConfig = generateAndShowConfig;
+window.exportServerConfig = exportServerConfig;
+window.copyConfigToClipboard = copyConfigToClipboard;
+window.downloadConfig = downloadConfig;
+window.goBackToSelection = goBackToSelection;
+
+// ===============================================
+// TAG FILTERING FUNCTIONALITY
+// ===============================================
+
+/**
+ * Extract all unique tags from entities in a given entity type
+ * @param {string} entityType - The entity type (tools, resources, prompts, servers, gateways)
+ * @returns {Array<string>} - Array of unique tags
+ */
+function extractAvailableTags(entityType) {
+    const tags = new Set();
+    const tableSelector = `#${entityType}-panel tbody tr:not(.inactive-row)`;
+    const rows = document.querySelectorAll(tableSelector);
+
+    console.log(
+        `[DEBUG] extractAvailableTags for ${entityType}: Found ${rows.length} rows`,
+    );
+
+    // Find the Tags column index by examining the table header
+    const tableHeaderSelector = `#${entityType}-panel thead tr th`;
+    const headerCells = document.querySelectorAll(tableHeaderSelector);
+    let tagsColumnIndex = -1;
+
+    headerCells.forEach((header, index) => {
+        const headerText = header.textContent.trim().toLowerCase();
+        if (headerText === "tags") {
+            tagsColumnIndex = index;
+            console.log(
+                `[DEBUG] Found Tags column at index ${index} for ${entityType}`,
+            );
+        }
+    });
+
+    if (tagsColumnIndex === -1) {
+        console.log(`[DEBUG] Could not find Tags column for ${entityType}`);
+        return [];
+    }
+
+    rows.forEach((row, index) => {
+        const cells = row.querySelectorAll("td");
+
+        if (tagsColumnIndex < cells.length) {
+            const tagsCell = cells[tagsColumnIndex];
+
+            // Look for tag badges ONLY within the Tags column
+            const tagElements = tagsCell.querySelectorAll(`
+                span.inline-flex.items-center.px-2.py-0\\.5.rounded.text-xs.font-medium.bg-blue-100.text-blue-800,
+                span.inline-block.bg-blue-100.text-blue-800.text-xs.px-2.py-1.rounded-full
+            `);
+
+            console.log(
+                `[DEBUG] Row ${index}: Found ${tagElements.length} tag elements in Tags column`,
+            );
+
+            tagElements.forEach((tagEl) => {
+                const tagText = tagEl.textContent.trim();
+                console.log(
+                    `[DEBUG] Row ${index}: Tag element text: "${tagText}"`,
+                );
+
+                // Basic validation for tag content
+                if (
+                    tagText &&
+                    tagText !== "No tags" &&
+                    tagText !== "None" &&
+                    tagText !== "N/A" &&
+                    tagText.length >= 2 &&
+                    tagText.length <= 50
+                ) {
+                    tags.add(tagText);
+                    console.log(
+                        `[DEBUG] Row ${index}: Added tag: "${tagText}"`,
+                    );
+                } else {
+                    console.log(
+                        `[DEBUG] Row ${index}: Filtered out: "${tagText}"`,
+                    );
+                }
+            });
+        }
+    });
+
+    const result = Array.from(tags).sort();
+    console.log(
+        `[DEBUG] extractAvailableTags for ${entityType}: Final result:`,
+        result,
+    );
+    return result;
+}
+
+/**
+ * Update the available tags display for an entity type
+ * @param {string} entityType - The entity type
+ */
+function updateAvailableTags(entityType) {
+    const availableTagsContainer = document.getElementById(
+        `${entityType}-available-tags`,
+    );
+    if (!availableTagsContainer) {
+        return;
+    }
+
+    const tags = extractAvailableTags(entityType);
+    availableTagsContainer.innerHTML = "";
+
+    if (tags.length === 0) {
+        availableTagsContainer.innerHTML =
+            '<span class="text-sm text-gray-500">No tags found</span>';
+        return;
+    }
+
+    tags.forEach((tag) => {
+        const tagButton = document.createElement("button");
+        tagButton.type = "button";
+        tagButton.className =
+            "inline-flex items-center px-2 py-1 text-xs font-medium rounded-full text-blue-700 bg-blue-100 hover:bg-blue-200 cursor-pointer";
+        tagButton.textContent = tag;
+        tagButton.title = `Click to filter by "${tag}"`;
+        tagButton.onclick = () => addTagToFilter(entityType, tag);
+        availableTagsContainer.appendChild(tagButton);
+    });
+}
+
+/**
+ * Add a tag to the filter input
+ * @param {string} entityType - The entity type
+ * @param {string} tag - The tag to add
+ */
+function addTagToFilter(entityType, tag) {
+    const filterInput = document.getElementById(`${entityType}-tag-filter`);
+    if (!filterInput) {
+        return;
+    }
+
+    const currentTags = filterInput.value
+        .split(",")
+        .map((t) => t.trim())
+        .filter((t) => t);
+    if (!currentTags.includes(tag)) {
+        currentTags.push(tag);
+        filterInput.value = currentTags.join(", ");
+        filterEntitiesByTags(entityType, filterInput.value);
+    }
+}
+
+/**
+ * Filter entities by tags
+ * @param {string} entityType - The entity type (tools, resources, prompts, servers, gateways)
+ * @param {string} tagsInput - Comma-separated string of tags to filter by
+ */
+function filterEntitiesByTags(entityType, tagsInput) {
+    const filterTags = tagsInput
+        .split(",")
+        .map((tag) => tag.trim().toLowerCase())
+        .filter((tag) => tag);
+    const tableSelector = `#${entityType}-panel tbody tr`;
+    const rows = document.querySelectorAll(tableSelector);
+
+    let visibleCount = 0;
+
+    rows.forEach((row) => {
+        if (filterTags.length === 0) {
+            // Show all rows when no filter is applied
+            row.style.display = "";
+            visibleCount++;
+            return;
+        }
+
+        // Extract tags from this row using specific tag selectors (not status badges)
+        const rowTags = new Set();
+        const tagElements = row.querySelectorAll(`
+            span.inline-flex.items-center.px-2.py-0\\.5.rounded.text-xs.font-medium.bg-blue-100.text-blue-800,
+            span.inline-block.bg-blue-100.text-blue-800.text-xs.px-2.py-1.rounded-full
+        `);
+        tagElements.forEach((tagEl) => {
+            const tagText = tagEl.textContent.trim().toLowerCase();
+            // Filter out any remaining non-tag content
+            if (
+                tagText &&
+                tagText !== "no tags" &&
+                tagText !== "none" &&
+                tagText !== "active" &&
+                tagText !== "inactive" &&
+                tagText !== "online" &&
+                tagText !== "offline"
+            ) {
+                rowTags.add(tagText);
+            }
+        });
+
+        // Check if any of the filter tags match any of the row tags (OR logic)
+        const hasMatchingTag = filterTags.some((filterTag) =>
+            Array.from(rowTags).some(
+                (rowTag) =>
+                    rowTag.includes(filterTag) || filterTag.includes(rowTag),
+            ),
+        );
+
+        if (hasMatchingTag) {
+            row.style.display = "";
+            visibleCount++;
+        } else {
+            row.style.display = "none";
+        }
+    });
+
+    // Update empty state message
+    updateFilterEmptyState(entityType, visibleCount, filterTags.length > 0);
+}
+
+/**
+ * Update empty state message when filtering
+ * @param {string} entityType - The entity type
+ * @param {number} visibleCount - Number of visible entities
+ * @param {boolean} isFiltering - Whether filtering is active
+ */
+function updateFilterEmptyState(entityType, visibleCount, isFiltering) {
+    const tableContainer = document.querySelector(
+        `#${entityType}-panel .overflow-x-auto`,
+    );
+    if (!tableContainer) {
+        return;
+    }
+
+    let emptyMessage = tableContainer.querySelector(
+        ".tag-filter-empty-message",
+    );
+
+    if (visibleCount === 0 && isFiltering) {
+        if (!emptyMessage) {
+            emptyMessage = document.createElement("div");
+            emptyMessage.className =
+                "tag-filter-empty-message text-center py-8 text-gray-500";
+            emptyMessage.innerHTML = `
+                <div class="flex flex-col items-center">
+                    <svg class="w-12 h-12 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    <h3 class="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No matching ${entityType}</h3>
+                    <p class="text-gray-500 dark:text-gray-400">No ${entityType} found with the specified tags. Try adjusting your filter or <button onclick="clearTagFilter('${entityType}')" class="text-indigo-600 hover:text-indigo-500 underline">clear the filter</button>.</p>
+                </div>
+            `;
+            tableContainer.appendChild(emptyMessage);
+        }
+        emptyMessage.style.display = "block";
+    } else if (emptyMessage) {
+        emptyMessage.style.display = "none";
+    }
+}
+
+/**
+ * Clear the tag filter for an entity type
+ * @param {string} entityType - The entity type
+ */
+function clearTagFilter(entityType) {
+    const filterInput = document.getElementById(`${entityType}-tag-filter`);
+    if (filterInput) {
+        filterInput.value = "";
+        filterEntitiesByTags(entityType, "");
+    }
+}
+
+/**
+ * Initialize tag filtering for all entity types on page load
+ */
+function initializeTagFiltering() {
+    const entityTypes = [
+        "catalog",
+        "tools",
+        "resources",
+        "prompts",
+        "servers",
+        "gateways",
+    ];
+
+    entityTypes.forEach((entityType) => {
+        // Update available tags on page load
+        updateAvailableTags(entityType);
+
+        // Set up event listeners for tab switching to refresh tags
+        const tabButton = document.getElementById(`tab-${entityType}`);
+        if (tabButton) {
+            tabButton.addEventListener("click", () => {
+                // Delay to ensure tab content is visible
+                setTimeout(() => updateAvailableTags(entityType), 100);
+            });
+        }
+    });
+}
+
+// Initialize tag filtering when page loads
+document.addEventListener("DOMContentLoaded", function () {
+    initializeTagFiltering();
+});
+
+// Expose tag filtering functions to global scope
+window.filterEntitiesByTags = filterEntitiesByTags;
+window.clearTagFilter = clearTagFilter;
+window.updateAvailableTags = updateAvailableTags;
+
+// ===================================================================
+// MULTI-HEADER AUTHENTICATION MANAGEMENT
+// ===================================================================
+
+/**
+ * Global counter for unique header IDs
+ */
+let headerCounter = 0;
+
+/**
+ * Add a new authentication header row to the specified container
+ * @param {string} containerId - ID of the container to add the header row to
+ */
+function addAuthHeader(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        console.error(`Container with ID ${containerId} not found`);
+        return;
+    }
+
+    const headerId = `auth-header-${++headerCounter}`;
+
+    const headerRow = document.createElement("div");
+    headerRow.className = "flex items-center space-x-2";
+    headerRow.id = headerId;
+
+    headerRow.innerHTML = `
+        <div class="flex-1">
+            <input
+                type="text"
+                placeholder="Header Key (e.g., X-API-Key)"
+                class="auth-header-key block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300 text-sm"
+                oninput="updateAuthHeadersJSON('${containerId}')"
+            />
+        </div>
+        <div class="flex-1">
+            <input
+                type="password"
+                placeholder="Header Value"
+                class="auth-header-value block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300 text-sm"
+                oninput="updateAuthHeadersJSON('${containerId}')"
+            />
+        </div>
+        <button
+            type="button"
+            onclick="removeAuthHeader('${headerId}', '${containerId}')"
+            class="inline-flex items-center px-2 py-1 border border-transparent text-sm leading-4 font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-300 dark:hover:bg-red-800"
+            title="Remove header"
+        >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+            </svg>
+        </button>
+    `;
+
+    container.appendChild(headerRow);
+    updateAuthHeadersJSON(containerId);
+
+    // Focus on the key input of the new header
+    const keyInput = headerRow.querySelector(".auth-header-key");
+    if (keyInput) {
+        keyInput.focus();
+    }
+}
+
+/**
+ * Remove an authentication header row
+ * @param {string} headerId - ID of the header row to remove
+ * @param {string} containerId - ID of the container to update
+ */
+function removeAuthHeader(headerId, containerId) {
+    const headerRow = document.getElementById(headerId);
+    if (headerRow) {
+        headerRow.remove();
+        updateAuthHeadersJSON(containerId);
+    }
+}
+
+/**
+ * Update the JSON representation of authentication headers
+ * @param {string} containerId - ID of the container with headers
+ */
+function updateAuthHeadersJSON(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        return;
+    }
+
+    const headers = [];
+    const headerRows = container.querySelectorAll('[id^="auth-header-"]');
+    const duplicateKeys = new Set();
+    const seenKeys = new Set();
+    let hasValidationErrors = false;
+
+    headerRows.forEach((row) => {
+        const keyInput = row.querySelector(".auth-header-key");
+        const valueInput = row.querySelector(".auth-header-value");
+
+        if (keyInput && valueInput) {
+            const key = keyInput.value.trim();
+            const value = valueInput.value.trim();
+
+            // Skip completely empty rows
+            if (!key && !value) {
+                return;
+            }
+
+            // Require key but allow empty values
+            if (!key) {
+                keyInput.setCustomValidity("Header key is required");
+                keyInput.reportValidity();
+                hasValidationErrors = true;
+                return;
+            }
+
+            // Validate header key format (letters, numbers, hyphens, underscores)
+            if (!/^[a-zA-Z0-9\-_]+$/.test(key)) {
+                keyInput.setCustomValidity(
+                    "Header keys should contain only letters, numbers, hyphens, and underscores",
+                );
+                keyInput.reportValidity();
+                hasValidationErrors = true;
+                return;
+            } else {
+                keyInput.setCustomValidity("");
+            }
+
+            // Track duplicate keys
+            if (seenKeys.has(key.toLowerCase())) {
+                duplicateKeys.add(key);
+            }
+            seenKeys.add(key.toLowerCase());
+
+            headers.push({
+                key,
+                value, // Allow empty values
+            });
+        }
+    });
+
+    // Find the corresponding JSON input field
+    let jsonInput = null;
+    if (containerId === "auth-headers-container") {
+        jsonInput = document.getElementById("auth-headers-json");
+    } else if (containerId === "auth-headers-container-gw") {
+        jsonInput = document.getElementById("auth-headers-json-gw");
+    } else if (containerId === "edit-auth-headers-container") {
+        jsonInput = document.getElementById("edit-auth-headers-json");
+    } else if (containerId === "auth-headers-container-gw-edit") {
+        jsonInput = document.getElementById("auth-headers-json-gw-edit");
+    }
+
+    // Warn about duplicate keys in console
+    if (duplicateKeys.size > 0 && !hasValidationErrors) {
+        console.warn(
+            "Duplicate header keys detected (last value will be used):",
+            Array.from(duplicateKeys),
+        );
+    }
+
+    // Check for excessive headers
+    if (headers.length > 100) {
+        console.error("Maximum of 100 headers allowed per gateway");
+        return;
+    }
+
+    if (jsonInput) {
+        jsonInput.value = headers.length > 0 ? JSON.stringify(headers) : "";
+    }
+}
+
+/**
+ * Load existing authentication headers for editing
+ * @param {string} containerId - ID of the container to populate
+ * @param {Array} headers - Array of header objects with key and value properties
+ */
+function loadAuthHeaders(containerId, headers) {
+    const container = document.getElementById(containerId);
+    if (!container || !headers || !Array.isArray(headers)) {
+        return;
+    }
+
+    // Clear existing headers
+    container.innerHTML = "";
+
+    // Add each header
+    headers.forEach((header) => {
+        if (header.key && header.value) {
+            addAuthHeader(containerId);
+            // Find the last added header row and populate it
+            const headerRows = container.querySelectorAll(
+                '[id^="auth-header-"]',
+            );
+            const lastRow = headerRows[headerRows.length - 1];
+            if (lastRow) {
+                const keyInput = lastRow.querySelector(".auth-header-key");
+                const valueInput = lastRow.querySelector(".auth-header-value");
+                if (keyInput && valueInput) {
+                    keyInput.value = header.key;
+                    valueInput.value = header.value;
+                }
+            }
+        }
+    });
+
+    updateAuthHeadersJSON(containerId);
+}
+
+// Expose authentication header functions to global scope
+window.addAuthHeader = addAuthHeader;
+window.removeAuthHeader = removeAuthHeader;
+window.updateAuthHeadersJSON = updateAuthHeadersJSON;
+window.loadAuthHeaders = loadAuthHeaders;
+
+/**
+ * Fetch tools from MCP server after OAuth completion for Authorization Code flow
+ * @param {string} gatewayId - ID of the gateway to fetch tools for
+ * @param {string} gatewayName - Name of the gateway for display purposes
+ */
+async function fetchToolsForGateway(gatewayId, gatewayName) {
+    const button = document.getElementById(`fetch-tools-${gatewayId}`);
+    if (!button) {
+        return;
+    }
+
+    // Disable button and show loading state
+    button.disabled = true;
+    button.textContent = "⏳ Fetching...";
+    button.className =
+        "inline-block bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded text-sm mr-2";
+
+    try {
+        const response = await fetch(`/oauth/fetch-tools/${gatewayId}`, {
+            method: "POST",
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            // Success
+            button.textContent = "✅ Tools Fetched";
+            button.className =
+                "inline-block bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm mr-2";
+
+            // Show success message
+            showSuccessMessage(
+                `Successfully fetched ${result.tools_created} tools from ${gatewayName}`,
+            );
+
+            // Refresh the page to show the new tools
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            throw new Error(result.detail || "Failed to fetch tools");
+        }
+    } catch (error) {
+        console.error("Failed to fetch tools:", error);
+
+        // Show error state
+        button.textContent = "❌ Retry";
+        button.className =
+            "inline-block bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm mr-2";
+        button.disabled = false;
+
+        // Show error message
+        showErrorMessage(
+            `Failed to fetch tools from ${gatewayName}: ${error.message}`,
+        );
+    }
+}
+
+// Expose fetch tools function to global scope
+window.fetchToolsForGateway = fetchToolsForGateway;
+
 console.log("🛡️ ContextForge MCP Gateway admin.js initialized");
+
+// ===================================================================
+// BULK IMPORT TOOLS — MODAL WIRING
+// ===================================================================
+
+function setupBulkImportModal() {
+    const openBtn = safeGetElement("open-bulk-import", true);
+    const modalId = "bulk-import-modal";
+    const modal = safeGetElement(modalId, true);
+
+    if (!openBtn || !modal) {
+        console.warn(
+            "Bulk Import modal wiring skipped (missing button or modal).",
+        );
+        return;
+    }
+
+    // avoid double-binding if admin.js gets evaluated more than once
+    if (openBtn.dataset.wired === "1") {
+        return;
+    }
+    openBtn.dataset.wired = "1";
+
+    const closeBtn = safeGetElement("close-bulk-import", true);
+    const backdrop = safeGetElement("bulk-import-backdrop", true);
+    const resultEl = safeGetElement("import-result", true);
+
+    const focusTarget =
+        modal?.querySelector("#tools_json") ||
+        modal?.querySelector("#tools_file") ||
+        modal?.querySelector("[data-autofocus]");
+
+    // helpers
+    const open = (e) => {
+        if (e) {
+            e.preventDefault();
+        }
+        // clear previous results each time we open
+        if (resultEl) {
+            resultEl.innerHTML = "";
+        }
+        openModal(modalId);
+        // prevent background scroll
+        document.documentElement.classList.add("overflow-hidden");
+        document.body.classList.add("overflow-hidden");
+        if (focusTarget) {
+            setTimeout(() => focusTarget.focus(), 0);
+        }
+        return false;
+    };
+
+    const close = () => {
+        // also clear results on close to keep things tidy
+        closeModal(modalId, "import-result");
+        document.documentElement.classList.remove("overflow-hidden");
+        document.body.classList.remove("overflow-hidden");
+    };
+
+    // wire events
+    openBtn.addEventListener("click", open);
+
+    if (closeBtn) {
+        closeBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            close();
+        });
+    }
+
+    // click on backdrop only (not the dialog content) closes the modal
+    if (backdrop) {
+        backdrop.addEventListener("click", (e) => {
+            if (e.target === backdrop) {
+                close();
+            }
+        });
+    }
+
+    // ESC to close
+    modal.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            e.stopPropagation();
+            close();
+        }
+    });
+
+    // FORM SUBMISSION → handle bulk import
+    const form = safeGetElement("bulk-import-form", true);
+    if (form) {
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const resultEl = safeGetElement("import-result", true);
+            const indicator = safeGetElement("bulk-import-indicator", true);
+
+            try {
+                const formData = new FormData();
+
+                // Get JSON from textarea or file
+                const jsonTextarea = form?.querySelector('[name="tools_json"]');
+                const fileInput = form?.querySelector('[name="tools_file"]');
+
+                let hasData = false;
+
+                // Check for file upload first (takes precedence)
+                if (fileInput && fileInput.files.length > 0) {
+                    formData.append("tools_file", fileInput.files[0]);
+                    hasData = true;
+                } else if (jsonTextarea && jsonTextarea.value.trim()) {
+                    // Validate JSON before sending
+                    try {
+                        const toolsData = JSON.parse(jsonTextarea.value);
+                        if (!Array.isArray(toolsData)) {
+                            throw new Error("JSON must be an array of tools");
+                        }
+                        formData.append("tools", jsonTextarea.value);
+                        hasData = true;
+                    } catch (err) {
+                        if (resultEl) {
+                            resultEl.innerHTML = `
+                                <div class="mt-2 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                                    <p class="font-semibold">Invalid JSON</p>
+                                    <p class="text-sm mt-1">${escapeHtml(err.message)}</p>
+                                </div>
+                            `;
+                        }
+                        return;
+                    }
+                }
+
+                if (!hasData) {
+                    if (resultEl) {
+                        resultEl.innerHTML = `
+                            <div class="mt-2 p-3 bg-yellow-100 border border-yellow-400 text-yellow-700 rounded">
+                                <p class="text-sm">Please provide JSON data or upload a file</p>
+                            </div>
+                        `;
+                    }
+                    return;
+                }
+
+                // Show loading state
+                if (indicator) {
+                    indicator.style.display = "flex";
+                }
+
+                // Submit to backend
+                const response = await fetchWithTimeout(
+                    `${window.ROOT_PATH}/admin/tools/import`,
+                    {
+                        method: "POST",
+                        body: formData,
+                    },
+                );
+
+                const result = await response.json();
+
+                // Display results
+                if (resultEl) {
+                    if (result.success) {
+                        resultEl.innerHTML = `
+                            <div class="mt-2 p-3 bg-green-100 border border-green-400 text-green-700 rounded">
+                                <p class="font-semibold">Import Successful</p>
+                                <p class="text-sm mt-1">${escapeHtml(result.message)}</p>
+                            </div>
+                        `;
+
+                        // Close modal and refresh page after delay
+                        setTimeout(() => {
+                            closeModal("bulk-import-modal");
+                            window.location.reload();
+                        }, 2000);
+                    } else if (result.imported > 0) {
+                        // Partial success
+                        let detailsHtml = "";
+                        if (result.details && result.details.failed) {
+                            detailsHtml =
+                                '<ul class="mt-2 text-sm list-disc list-inside">';
+                            result.details.failed.forEach((item) => {
+                                detailsHtml += `<li><strong>${escapeHtml(item.name)}:</strong> ${escapeHtml(item.error)}</li>`;
+                            });
+                            detailsHtml += "</ul>";
+                        }
+
+                        resultEl.innerHTML = `
+                            <div class="mt-2 p-3 bg-yellow-100 border border-yellow-400 text-yellow-700 rounded">
+                                <p class="font-semibold">Partial Import</p>
+                                <p class="text-sm mt-1">${escapeHtml(result.message)}</p>
+                                ${detailsHtml}
+                            </div>
+                        `;
+                    } else {
+                        // Complete failure
+                        resultEl.innerHTML = `
+                            <div class="mt-2 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                                <p class="font-semibold">Import Failed</p>
+                                <p class="text-sm mt-1">${escapeHtml(result.message)}</p>
+                            </div>
+                        `;
+                    }
+                }
+            } catch (error) {
+                console.error("Bulk import error:", error);
+                if (resultEl) {
+                    resultEl.innerHTML = `
+                        <div class="mt-2 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                            <p class="font-semibold">Import Error</p>
+                            <p class="text-sm mt-1">${escapeHtml(error.message || "An unexpected error occurred")}</p>
+                        </div>
+                    `;
+                }
+            } finally {
+                // Hide loading state
+                if (indicator) {
+                    indicator.style.display = "none";
+                }
+            }
+
+            return false;
+        });
+    }
+}
+
+// ===================================================================
+// EXPORT/IMPORT FUNCTIONALITY
+// ===================================================================
+
+/**
+ * Initialize export/import functionality
+ */
+function initializeExportImport() {
+    // Prevent double initialization
+    if (window.exportImportInitialized) {
+        console.log("🔄 Export/import already initialized, skipping");
+        return;
+    }
+
+    console.log("🔄 Initializing export/import functionality");
+
+    // Export button handlers
+    const exportAllBtn = document.getElementById("export-all-btn");
+    const exportSelectedBtn = document.getElementById("export-selected-btn");
+
+    if (exportAllBtn) {
+        exportAllBtn.addEventListener("click", handleExportAll);
+    }
+
+    if (exportSelectedBtn) {
+        exportSelectedBtn.addEventListener("click", handleExportSelected);
+    }
+
+    // Import functionality
+    const importDropZone = document.getElementById("import-drop-zone");
+    const importFileInput = document.getElementById("import-file-input");
+    const importValidateBtn = document.getElementById("import-validate-btn");
+    const importExecuteBtn = document.getElementById("import-execute-btn");
+
+    if (importDropZone && importFileInput) {
+        // File input handler
+        importDropZone.addEventListener("click", () => importFileInput.click());
+        importFileInput.addEventListener("change", handleFileSelect);
+
+        // Drag and drop handlers
+        importDropZone.addEventListener("dragover", handleDragOver);
+        importDropZone.addEventListener("drop", handleFileDrop);
+        importDropZone.addEventListener("dragleave", handleDragLeave);
+    }
+
+    if (importValidateBtn) {
+        importValidateBtn.addEventListener("click", () => handleImport(true));
+    }
+
+    if (importExecuteBtn) {
+        importExecuteBtn.addEventListener("click", () => handleImport(false));
+    }
+
+    // Load recent imports when tab is shown
+    loadRecentImports();
+
+    // Mark as initialized
+    window.exportImportInitialized = true;
+}
+
+/**
+ * Handle export all configuration
+ */
+async function handleExportAll() {
+    console.log("📤 Starting export all configuration");
+
+    try {
+        showExportProgress(true);
+
+        const options = getExportOptions();
+        const params = new URLSearchParams();
+
+        if (options.types.length > 0) {
+            params.append("types", options.types.join(","));
+        }
+        if (options.tags) {
+            params.append("tags", options.tags);
+        }
+        if (options.includeInactive) {
+            params.append("include_inactive", "true");
+        }
+        if (!options.includeDependencies) {
+            params.append("include_dependencies", "false");
+        }
+
+        const response = await fetch(`/admin/export/configuration?${params}`, {
+            method: "GET",
+            headers: {
+                Authorization: `Bearer ${getCookie("jwt_token")}`,
+            },
+        });
+
+        if (!response.ok) {
+            throw new Error(`Export failed: ${response.statusText}`);
+        }
+
+        // Create download
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `mcpgateway-export-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        showNotification("✅ Export completed successfully!", "success");
+    } catch (error) {
+        console.error("Export error:", error);
+        showNotification(`❌ Export failed: ${error.message}`, "error");
+    } finally {
+        showExportProgress(false);
+    }
+}
+
+/**
+ * Handle export selected configuration
+ */
+async function handleExportSelected() {
+    console.log("📋 Starting selective export");
+
+    try {
+        showExportProgress(true);
+
+        // This would need entity selection logic - for now, just do a filtered export
+        await handleExportAll(); // Simplified implementation
+    } catch (error) {
+        console.error("Selective export error:", error);
+        showNotification(
+            `❌ Selective export failed: ${error.message}`,
+            "error",
+        );
+    } finally {
+        showExportProgress(false);
+    }
+}
+
+/**
+ * Get export options from form
+ */
+function getExportOptions() {
+    const types = [];
+
+    if (document.getElementById("export-tools")?.checked) {
+        types.push("tools");
+    }
+    if (document.getElementById("export-gateways")?.checked) {
+        types.push("gateways");
+    }
+    if (document.getElementById("export-servers")?.checked) {
+        types.push("servers");
+    }
+    if (document.getElementById("export-prompts")?.checked) {
+        types.push("prompts");
+    }
+    if (document.getElementById("export-resources")?.checked) {
+        types.push("resources");
+    }
+    if (document.getElementById("export-roots")?.checked) {
+        types.push("roots");
+    }
+
+    return {
+        types,
+        tags: document.getElementById("export-tags")?.value || "",
+        includeInactive:
+            document.getElementById("export-include-inactive")?.checked ||
+            false,
+        includeDependencies:
+            document.getElementById("export-include-dependencies")?.checked ||
+            true,
+    };
+}
+
+/**
+ * Show/hide export progress
+ */
+function showExportProgress(show) {
+    const progressEl = document.getElementById("export-progress");
+    if (progressEl) {
+        progressEl.classList.toggle("hidden", !show);
+        if (show) {
+            let progress = 0;
+            const progressBar = document.getElementById("export-progress-bar");
+            const interval = setInterval(() => {
+                progress += 10;
+                if (progressBar) {
+                    progressBar.style.width = `${Math.min(progress, 90)}%`;
+                }
+                if (progress >= 100) {
+                    clearInterval(interval);
+                }
+            }, 200);
+        }
+    }
+}
+
+/**
+ * Handle file selection for import
+ */
+function handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (file) {
+        processImportFile(file);
+    }
+}
+
+/**
+ * Handle drag over for file drop
+ */
+function handleDragOver(event) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    event.currentTarget.classList.add(
+        "border-blue-500",
+        "bg-blue-50",
+        "dark:bg-blue-900",
+    );
+}
+
+/**
+ * Handle drag leave
+ */
+function handleDragLeave(event) {
+    event.preventDefault();
+    event.currentTarget.classList.remove(
+        "border-blue-500",
+        "bg-blue-50",
+        "dark:bg-blue-900",
+    );
+}
+
+/**
+ * Handle file drop
+ */
+function handleFileDrop(event) {
+    event.preventDefault();
+    event.currentTarget.classList.remove(
+        "border-blue-500",
+        "bg-blue-50",
+        "dark:bg-blue-900",
+    );
+
+    const files = event.dataTransfer.files;
+    if (files.length > 0) {
+        processImportFile(files[0]);
+    }
+}
+
+/**
+ * Process selected import file
+ */
+function processImportFile(file) {
+    console.log("📁 Processing import file:", file.name);
+
+    if (!file.type.includes("json")) {
+        showNotification("❌ Please select a JSON file", "error");
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function (e) {
+        try {
+            const importData = JSON.parse(e.target.result);
+
+            // Validate basic structure
+            if (!importData.version || !importData.entities) {
+                throw new Error("Invalid import file format");
+            }
+
+            // Store import data and enable buttons
+            window.currentImportData = importData;
+
+            const validateBtn = document.getElementById("import-validate-btn");
+            const executeBtn = document.getElementById("import-execute-btn");
+
+            if (validateBtn) {
+                validateBtn.disabled = false;
+            }
+            if (executeBtn) {
+                executeBtn.disabled = false;
+            }
+
+            // Update drop zone to show file loaded
+            updateDropZoneStatus(file.name, importData);
+
+            showNotification(`✅ Import file loaded: ${file.name}`, "success");
+        } catch (error) {
+            console.error("File processing error:", error);
+            showNotification(`❌ Invalid JSON file: ${error.message}`, "error");
+        }
+    };
+
+    reader.readAsText(file);
+}
+
+/**
+ * Update drop zone to show loaded file
+ */
+function updateDropZoneStatus(fileName, importData) {
+    const dropZone = document.getElementById("import-drop-zone");
+    if (dropZone) {
+        const entityCounts = importData.metadata?.entity_counts || {};
+        const totalEntities = Object.values(entityCounts).reduce(
+            (sum, count) => sum + count,
+            0,
+        );
+
+        dropZone.innerHTML = `
+            <div class="space-y-2">
+                <svg class="mx-auto h-8 w-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <div class="text-sm text-gray-900 dark:text-white font-medium">
+                    📁 ${escapeHtml(fileName)}
+                </div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">
+                    ${totalEntities} entities • Version ${escapeHtml(importData.version || "unknown")}
+                </div>
+                <button class="text-xs text-blue-600 dark:text-blue-400 hover:underline" onclick="resetImportFile()">
+                    Choose different file
+                </button>
+            </div>
+        `;
+    }
+}
+
+/**
+ * Reset import file selection
+ */
+function resetImportFile() {
+    window.currentImportData = null;
+
+    const dropZone = document.getElementById("import-drop-zone");
+    if (dropZone) {
+        dropZone.innerHTML = `
+            <div class="space-y-2">
+                <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3-3m-3 3l3 3m-3-3V8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <div class="text-sm text-gray-600 dark:text-gray-300">
+                    <span class="font-medium text-blue-600 dark:text-blue-400">Click to upload</span>
+                    or drag and drop
+                </div>
+                <p class="text-xs text-gray-500 dark:text-gray-400">JSON export files only</p>
+            </div>
+        `;
+    }
+
+    const validateBtn = document.getElementById("import-validate-btn");
+    const executeBtn = document.getElementById("import-execute-btn");
+
+    if (validateBtn) {
+        validateBtn.disabled = true;
+    }
+    if (executeBtn) {
+        executeBtn.disabled = true;
+    }
+
+    // Hide status section
+    const statusSection = document.getElementById("import-status-section");
+    if (statusSection) {
+        statusSection.classList.add("hidden");
+    }
+}
+
+/**
+ * Handle import (validate or execute)
+ */
+async function handleImport(dryRun = false) {
+    console.log(`🔄 Starting import (dry_run=${dryRun})`);
+
+    if (!window.currentImportData) {
+        showNotification("❌ Please select an import file first", "error");
+        return;
+    }
+
+    try {
+        showImportProgress(true);
+
+        const conflictStrategy =
+            document.getElementById("import-conflict-strategy")?.value ||
+            "update";
+        const rekeySecret =
+            document.getElementById("import-rekey-secret")?.value || null;
+
+        const requestData = {
+            import_data: window.currentImportData,
+            conflict_strategy: conflictStrategy,
+            dry_run: dryRun,
+            rekey_secret: rekeySecret,
+        };
+
+        const response = await fetch("/admin/import/configuration", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${getCookie("jwt_token")}`,
+            },
+            body: JSON.stringify(requestData),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(
+                errorData.detail || `Import failed: ${response.statusText}`,
+            );
+        }
+
+        const result = await response.json();
+        displayImportResults(result, dryRun);
+
+        if (!dryRun) {
+            // Refresh the current tab data if import was successful
+            refreshCurrentTabData();
+        }
+    } catch (error) {
+        console.error("Import error:", error);
+        showNotification(`❌ Import failed: ${error.message}`, "error");
+    } finally {
+        showImportProgress(false);
+    }
+}
+
+/**
+ * Display import results
+ */
+function displayImportResults(result, isDryRun) {
+    const statusSection = document.getElementById("import-status-section");
+    if (statusSection) {
+        statusSection.classList.remove("hidden");
+    }
+
+    const progress = result.progress || {};
+
+    // Update progress bars and counts
+    updateImportCounts(progress);
+
+    // Show messages
+    displayImportMessages(result.errors || [], result.warnings || [], isDryRun);
+
+    const action = isDryRun ? "validation" : "import";
+    const statusText = result.status || "completed";
+    showNotification(`✅ ${action} ${statusText}!`, "success");
+}
+
+/**
+ * Update import progress counts
+ */
+function updateImportCounts(progress) {
+    const total = progress.total || 0;
+    const processed = progress.processed || 0;
+    const created = progress.created || 0;
+    const updated = progress.updated || 0;
+    const failed = progress.failed || 0;
+
+    document.getElementById("import-total").textContent = total;
+    document.getElementById("import-created").textContent = created;
+    document.getElementById("import-updated").textContent = updated;
+    document.getElementById("import-failed").textContent = failed;
+
+    // Update progress bar
+    const progressBar = document.getElementById("import-progress-bar");
+    const progressText = document.getElementById("import-progress-text");
+
+    if (progressBar && progressText && total > 0) {
+        const percentage = Math.round((processed / total) * 100);
+        progressBar.style.width = `${percentage}%`;
+        progressText.textContent = `${percentage}%`;
+    }
+}
+
+/**
+ * Display import messages (errors and warnings)
+ */
+function displayImportMessages(errors, warnings, isDryRun) {
+    const messagesContainer = document.getElementById("import-messages");
+    if (!messagesContainer) {
+        return;
+    }
+
+    messagesContainer.innerHTML = "";
+
+    // Show errors
+    if (errors.length > 0) {
+        const errorDiv = document.createElement("div");
+        errorDiv.className =
+            "bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-600 text-red-700 dark:text-red-300 px-4 py-3 rounded";
+        errorDiv.innerHTML = `
+            <div class="font-bold">❌ Errors (${errors.length})</div>
+            <ul class="mt-2 text-sm list-disc list-inside">
+                ${errors
+                    .slice(0, 5)
+                    .map((error) => `<li>${escapeHtml(error)}</li>`)
+                    .join("")}
+                ${errors.length > 5 ? `<li class="text-gray-600 dark:text-gray-400">... and ${errors.length - 5} more errors</li>` : ""}
+            </ul>
+        `;
+        messagesContainer.appendChild(errorDiv);
+    }
+
+    // Show warnings
+    if (warnings.length > 0) {
+        const warningDiv = document.createElement("div");
+        warningDiv.className =
+            "bg-yellow-100 dark:bg-yellow-900 border border-yellow-400 dark:border-yellow-600 text-yellow-700 dark:text-yellow-300 px-4 py-3 rounded";
+        const warningTitle = isDryRun ? "🔍 Would Import" : "⚠️ Warnings";
+        warningDiv.innerHTML = `
+            <div class="font-bold">${warningTitle} (${warnings.length})</div>
+            <ul class="mt-2 text-sm list-disc list-inside">
+                ${warnings
+                    .slice(0, 5)
+                    .map((warning) => `<li>${escapeHtml(warning)}</li>`)
+                    .join("")}
+                ${warnings.length > 5 ? `<li class="text-gray-600 dark:text-gray-400">... and ${warnings.length - 5} more warnings</li>` : ""}
+            </ul>
+        `;
+        messagesContainer.appendChild(warningDiv);
+    }
+}
+
+/**
+ * Show/hide import progress
+ */
+function showImportProgress(show) {
+    // Disable/enable buttons during operation
+    const validateBtn = document.getElementById("import-validate-btn");
+    const executeBtn = document.getElementById("import-execute-btn");
+
+    if (validateBtn) {
+        validateBtn.disabled = show;
+    }
+    if (executeBtn) {
+        executeBtn.disabled = show;
+    }
+}
+
+/**
+ * Load recent import operations
+ */
+async function loadRecentImports() {
+    try {
+        const response = await fetch("/admin/import/status", {
+            headers: {
+                Authorization: `Bearer ${getCookie("jwt_token")}`,
+            },
+        });
+
+        if (response.ok) {
+            const imports = await response.json();
+            console.log("Loaded recent imports:", imports.length);
+        }
+    } catch (error) {
+        console.error("Failed to load recent imports:", error);
+    }
+}
+
+/**
+ * Refresh current tab data after successful import
+ */
+function refreshCurrentTabData() {
+    // Find the currently active tab and refresh its data
+    const activeTab = document.querySelector(".tab-link.border-indigo-500");
+    if (activeTab) {
+        const href = activeTab.getAttribute("href");
+        if (href === "#catalog") {
+            // Refresh servers
+            if (typeof window.loadCatalog === "function") {
+                window.loadCatalog();
+            }
+        } else if (href === "#tools") {
+            // Refresh tools
+            if (typeof window.loadTools === "function") {
+                window.loadTools();
+            }
+        } else if (href === "#gateways") {
+            // Refresh gateways
+            if (typeof window.loadGateways === "function") {
+                window.loadGateways();
+            }
+        }
+        // Add other tab refresh logic as needed
+    }
+}
+
+/**
+ * Show notification (simple implementation)
+ */
+function showNotification(message, type = "info") {
+    console.log(`${type.toUpperCase()}: ${message}`);
+
+    // Create a simple toast notification
+    const toast = document.createElement("div");
+    toast.className = `fixed top-4 right-4 z-50 px-4 py-3 rounded-md text-sm font-medium max-w-sm ${
+        type === "success"
+            ? "bg-green-100 text-green-800 border border-green-400"
+            : type === "error"
+              ? "bg-red-100 text-red-800 border border-red-400"
+              : "bg-blue-100 text-blue-800 border border-blue-400"
+    }`;
+    toast.textContent = message;
+
+    document.body.appendChild(toast);
+
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.parentNode.removeChild(toast);
+        }
+    }, 5000);
+}
+
+/**
+ * Utility function to get cookie value
+ */
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) {
+        return parts.pop().split(";").shift();
+    }
+    return "";
+}
+
+// Expose functions used in dynamically generated HTML
+window.resetImportFile = resetImportFile;
+
+// ===================================================================
+// A2A AGENT TESTING FUNCTIONALITY
+// ===================================================================
+
+/**
+ * Test an A2A agent by making a direct invocation call
+ * @param {string} agentId - ID of the agent to test
+ * @param {string} agentName - Name of the agent for display
+ * @param {string} endpointUrl - Endpoint URL of the agent
+ */
+async function testA2AAgent(agentId, agentName, endpointUrl) {
+    try {
+        // Show loading state
+        const testResult = document.getElementById(`test-result-${agentId}`);
+        testResult.innerHTML =
+            '<div class="text-blue-600">🔄 Testing agent...</div>';
+        testResult.classList.remove("hidden");
+
+        // Get auth token from cookie or local storage
+        let token = getCookie("jwt_token");
+
+        // Try alternative cookie names if primary not found
+        if (!token) {
+            token = getCookie("access_token") || getCookie("auth_token");
+        }
+
+        // Try to get from localStorage as fallback
+        if (!token) {
+            token =
+                localStorage.getItem("jwt_token") ||
+                localStorage.getItem("auth_token");
+        }
+
+        // Debug logging
+        console.log("Available cookies:", document.cookie);
+        console.log(
+            "Found token:",
+            token ? "Yes (length: " + token.length + ")" : "No",
+        );
+
+        // Prepare headers
+        const headers = {
+            "Content-Type": "application/json",
+        };
+
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+        } else {
+            // Fallback to basic auth if JWT not available
+            console.warn("JWT token not found, attempting basic auth fallback");
+            headers.Authorization = "Basic " + btoa("admin:changeme"); // Default admin credentials
+        }
+
+        // Test payload is now determined server-side based on agent configuration
+        const testPayload = {};
+
+        // Make test request to A2A agent via admin endpoint
+        const response = await fetchWithTimeout(
+            `${window.ROOT_PATH}/admin/a2a/${agentId}/test`,
+            {
+                method: "POST",
+                headers,
+                body: JSON.stringify(testPayload),
+            },
+            10000, // 10 second timeout
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+
+        // Display result
+        let resultHtml;
+        if (!result.success || result.error) {
+            resultHtml = `
+                <div class="text-red-600">
+                    <div>❌ Test Failed</div>
+                    <div class="text-xs mt-1">Error: ${escapeHtml(result.error || "Unknown error")}</div>
+                </div>`;
+        } else {
+            // Check if the agent result contains an error (agent-level error)
+            const agentResult = result.result;
+            if (agentResult && agentResult.error) {
+                resultHtml = `
+                    <div class="text-yellow-600">
+                        <div>⚠️ Agent Error</div>
+                        <div class="text-xs mt-1">Agent Response: ${escapeHtml(JSON.stringify(agentResult).substring(0, 150))}...</div>
+                    </div>`;
+            } else {
+                resultHtml = `
+                    <div class="text-green-600">
+                        <div>✅ Test Successful</div>
+                        <div class="text-xs mt-1">Response: ${escapeHtml(JSON.stringify(agentResult).substring(0, 150))}...</div>
+                    </div>`;
+            }
+        }
+
+        testResult.innerHTML = resultHtml;
+
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+            testResult.classList.add("hidden");
+        }, 10000);
+    } catch (error) {
+        console.error("A2A agent test failed:", error);
+
+        const testResult = document.getElementById(`test-result-${agentId}`);
+        testResult.innerHTML = `
+            <div class="text-red-600">
+                <div>❌ Test Failed</div>
+                <div class="text-xs mt-1">Error: ${escapeHtml(error.message)}</div>
+            </div>`;
+        testResult.classList.remove("hidden");
+
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+            testResult.classList.add("hidden");
+        }, 10000);
+    }
+}
+
+// Expose A2A test function to global scope
+window.testA2AAgent = testA2AAgent;

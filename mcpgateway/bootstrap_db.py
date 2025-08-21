@@ -17,12 +17,23 @@ The script:
 
 It is intended to be invoked via ``python3 -m mcpgateway.bootstrap_db`` or
 directly with ``python3 mcpgateway/bootstrap_db.py``.
+
+Examples:
+    >>> from mcpgateway.bootstrap_db import logging_service, logger
+    >>> logging_service is not None
+    True
+    >>> logger is not None
+    True
+    >>> hasattr(logger, 'info')
+    True
+    >>> from mcpgateway.bootstrap_db import Base
+    >>> hasattr(Base, 'metadata')
+    True
 """
 
 # Standard
 import asyncio
 from importlib.resources import files
-import logging
 
 # Third-Party
 from alembic import command
@@ -32,8 +43,11 @@ from sqlalchemy import create_engine, inspect
 # First-Party
 from mcpgateway.config import settings
 from mcpgateway.db import Base
+from mcpgateway.services.logging_service import LoggingService
 
-logger = logging.getLogger(__name__)
+# Initialize logging service first
+logging_service = LoggingService()
+logger = logging_service.get_logger(__name__)
 
 
 async def main() -> None:

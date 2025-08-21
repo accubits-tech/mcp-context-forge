@@ -25,14 +25,18 @@ Examples:
 """
 
 # Standard
-import logging
 from typing import Any, Dict
 
 # Third-Party
 from pydantic import ValidationError
 from sqlalchemy.exc import DatabaseError, IntegrityError
 
-logger = logging.getLogger(__name__)
+# First-Party
+from mcpgateway.services.logging_service import LoggingService
+
+# Initialize logging service first
+logging_service = LoggingService()
+logger = logging_service.get_logger(__name__)
 
 
 class ErrorFormatter:
@@ -83,7 +87,7 @@ class ErrorFormatter:
             ...     result = ErrorFormatter.format_validation_error(e)
             <class 'pydantic_core._pydantic_core.ValidationError'>
             >>> result['message']
-            'Validation failed'
+            'Validation failed: Name must start with a letter and contain only letters, numbers, and underscores'
             >>> result['success']
             False
             >>> len(result['details']) > 0
@@ -124,7 +128,8 @@ class ErrorFormatter:
         errors = []
 
         for err in error.errors():
-            field = err.get("loc", ["field"])[-1]
+            loc = err.get("loc", ["field"])
+            field = loc[-1] if loc else "field"
             msg = err.get("msg", "Invalid value")
 
             # Map technical messages to user-friendly ones
@@ -134,7 +139,7 @@ class ErrorFormatter:
         # Log the full error for debugging
         logger.debug(f"Validation error: {error}")
 
-        return {"message": "Validation failed", "details": errors, "success": False}
+        return {"message": f"Validation failed: {user_message}", "details": errors, "success": False}
 
     @staticmethod
     def _get_user_message(field: str, technical_msg: str) -> str:

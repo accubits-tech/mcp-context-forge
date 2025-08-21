@@ -2,7 +2,7 @@
 
 1. **Install Minikube and kubectl** (Docker or Podman driver required).
 2. Start a local cluster with Ingress and DNS addons.
-3. Load the `ghcr.io/ibm/mcp-context-forge:latest` image into Minikube.
+3. Load the `ghcr.io/ibm/mcp-context-forge:0.5.0` image into Minikube.
 4. Apply your Kubernetes manifests.
 5. Access the Gateway at [http://gateway.local](http://gateway.local) or `127.0.0.1:80` via NGINX Ingress.
 
@@ -131,21 +131,21 @@ kubectl get pods -n ingress-nginx
 make minikube-image-load
 ```
 
-This target builds the `ghcr.io/ibm/mcp-context-forge:latest` image and loads it into Minikube.
+This target builds the `ghcr.io/ibm/mcp-context-forge:0.5.0` image and loads it into Minikube.
 
 ### Alternative methods
 
 * **Pre-cache a remote image:**
 
   ```bash
-  minikube cache add ghcr.io/ibm/mcp-context-forge:latest
+  minikube cache add ghcr.io/ibm/mcp-context-forge:0.5.0
   minikube cache reload
   ```
 
 * **Load a local tarball:**
 
   ```bash
-  docker save ghcr.io/ibm/mcp-context-forge:latest | minikube image load -
+  docker save ghcr.io/ibm/mcp-context-forge:0.5.0 | minikube image load -
   ```
 
 ---
@@ -162,20 +162,20 @@ This applies the Kubernetes manifests. Alternative manual step:
 
 ```bash
 # PostgreSQL
-kubectl apply -f k8s/postgres-config.yaml
-kubectl apply -f k8s/postgres-pv.yaml
-kubectl apply -f k8s/postgres-pvc.yaml
-kubectl apply -f k8s/postgres-deployment.yaml
-kubectl apply -f k8s/postgres-service.yaml
+kubectl apply -f deployment/k8s/postgres-config.yaml
+kubectl apply -f deployment/k8s/postgres-pv.yaml
+kubectl apply -f deployment/k8s/postgres-pvc.yaml
+kubectl apply -f deployment/k8s/postgres-deployment.yaml
+kubectl apply -f deployment/k8s/postgres-service.yaml
 
 # Redis
-kubectl apply -f k8s/redis-deployment.yaml
-kubectl apply -f k8s/redis-service.yaml
+kubectl apply -f deployment/k8s/redis-deployment.yaml
+kubectl apply -f deployment/k8s/redis-service.yaml
 
 # MCP Gateway
-kubectl apply -f k8s/mcp-context-forge-deployment.yaml
-kubectl apply -f k8s/mcp-context-forge-service.yaml
-kubectl apply -f k8s/mcp-context-forge-ingress.yaml
+kubectl apply -f deployment/k8s/mcp-context-forge-deployment.yaml
+kubectl apply -f deployment/k8s/mcp-context-forge-service.yaml
+kubectl apply -f deployment/k8s/mcp-context-forge-ingress.yaml
 ```
 
 If you've enabled `ingress-dns`, set the Ingress `host:` to `gateway.local`. Otherwise, omit the `host:` and access via NodePort.
@@ -282,7 +282,7 @@ curl http://gateway.local/health
 | ------------------- | ---------------------- | ------------------------------------------------------------ |
 | Pause cluster       | `make minikube-stop`   | `minikube stop -p mcpgw`                                     |
 | Delete cluster      | `make minikube-delete` | `minikube delete -p mcpgw`                                   |
-| Remove cached image | -                      | `minikube cache delete ghcr.io/ibm/mcp-context-forge:latest` |
+| Remove cached image | -                      | `minikube cache delete ghcr.io/ibm/mcp-context-forge:0.5.0` |
 
 ---
 

@@ -18,7 +18,7 @@
 # report issues (linters). Modified files will need to be staged again.
 # -----------------------------------------------------------------------------
 
-exclude: '(^|/)(\.pre-commit-config\.yaml|normalize_special_characters\.py|test_input_validation\.py)$'  # ignore these files
+exclude: '(^|/)(\.pre-commit-config\.yaml|normalize_special_characters\.py|test_input_validation\.py)$|.*\.(jinja|j2)$'  # ignore these files and jinja templates
 
 repos:
   # -----------------------------------------------------------------------------
@@ -368,7 +368,7 @@ repos:
         description: Verifies test files in tests/ directories start with `test_`.
         language: python
         files: (^|/)tests/.+\.py$
-        exclude: ^tests/.*/pages/.*\.py$  # Exclude page object files
+        exclude: ^tests/.*/(pages|helpers|fuzzers|scripts|fixtures)/.*\.py$  # Exclude page object, helper, fuzzer, script, and fixture files
         args: [--pytest-test-first] # `test_.*\.py`
 
   # - repo: https://github.com/pycqa/flake8
@@ -482,8 +482,8 @@ repos:
       - id: remove-tabs
         name: 🚀 Remove Tabs
         description: Replaces tabs by whitespaces.
-        # exclude root-level Makefiles and any path ending in /Makefile or .mk
-        exclude: '(^|/)Makefile$|\.mk$'
+        # exclude root-level Makefiles and any path ending in /Makefile or .mk or .jinja
+        exclude: '(^|/)Makefile$|(\.mk|\.jinja)$'
 
   # -----------------------------------------------------------------------------
   # 🚫 Branch Protection Hooks
