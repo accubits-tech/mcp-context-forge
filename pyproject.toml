@@ -75,6 +75,10 @@ dependencies = [
     "typer>=0.16.0",
     "uvicorn>=0.35.0",
     "zeroconf>=0.147.0",
+    # CrewAI and OpenAPI support
+    "crewai>=0.80.0",
+    "openapi-spec-validator>=0.7.0",
+    "pyyaml>=6.0.2",
 ]
 
 # ----------------------------------------------------------------

@@ -35,7 +35,7 @@ from urllib.parse import urlparse, urlunparse
 import uuid
 
 # Third-Party
-from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Depends, FastAPI, File, HTTPException, Request, status, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.background import BackgroundTasks
 from fastapi.exception_handlers import request_validation_exception_handler as fastapi_default_validation_handler
 from fastapi.exceptions import RequestValidationError
@@ -104,6 +104,8 @@ from mcpgateway.services.root_service import RootService
 from mcpgateway.services.server_service import ServerError, ServerNameConflictError, ServerNotFoundError, ServerService
 from mcpgateway.services.tag_service import TagService
 from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, ToolNotFoundError, ToolService
+from mcpgateway.services.openapi_service import OpenAPIService, OpenAPIError, OpenAPIValidationError, OpenAPIParsingError
+from mcpgateway.agents.openapi_agent import OpenAPIAgent
 from mcpgateway.transports.sse_transport import SSETransport
 from mcpgateway.transports.streamablehttp_transport import SessionManagerWrapper, streamable_http_auth
 from mcpgateway.utils.db_isready import wait_for_db_ready
@@ -147,6 +149,8 @@ tool_service = ToolService()
 resource_service = ResourceService()
 prompt_service = PromptService()
 gateway_service = GatewayService()
+openapi_service = OpenAPIService()
+openapi_agent = OpenAPIAgent()
 root_service = RootService()
 completion_service = CompletionService()
 sampling_handler = SamplingHandler()
@@ -1713,6 +1717,375 @@ async def toggle_tool_status(
         }
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+########################
+# OpenAPI Tools APIs   #
+########################
+
+@tool_router.post("/openapi/upload", response_model=Dict[str, Any])
+async def upload_openapi_spec(
+    file: UploadFile = File(...),
+    base_url: Optional[str] = None,
+    gateway_id: Optional[str] = None,
+    tags: Optional[str] = None,
+    preview_only: bool = False,
+    enhance_with_ai: bool = True,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Upload OpenAPI specification file and generate tools.
+
+    Args:
+        file: OpenAPI specification file (JSON/YAML)
+        base_url: Override base URL from specification
+        gateway_id: Gateway ID to associate tools with
+        tags: Comma-separated additional tags for tools
+        preview_only: If True, only preview tools without creating them
+        enhance_with_ai: If True, use CrewAI agent to enhance descriptions
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Dict containing operation results and tool information
+
+    Raises:
+        HTTPException: If upload or processing fails
+    """
+    try:
+        logger.info(f"User {user} uploading OpenAPI spec file: {file.filename}")
+
+        # Read file content
+        content = await file.read()
+
+        # Determine content type from file extension
+        content_type = "json"
+        if file.filename and (file.filename.endswith('.yaml') or file.filename.endswith('.yml')):
+            content_type = "yaml"
+
+        # Parse additional tags
+        additional_tags = []
+        if tags:
+            additional_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+        # Parse OpenAPI specification
+        spec = await openapi_service.parse_openapi_spec(content.decode('utf-8'), content_type)
+
+        if preview_only:
+            # Return preview without creating tools
+            previews = await openapi_service.preview_tools(spec)
+            return {
+                "status": "preview",
+                "message": f"Preview generated from {file.filename}",
+                "api_info": {
+                    "title": spec.get("info", {}).get("title", "Unknown API"),
+                    "version": spec.get("info", {}).get("version", "unknown"),
+                    "openapi_version": spec.get("openapi", "unknown")
+                },
+                "tool_count": len(previews),
+                "tools": previews
+            }
+
+        # Generate tools from specification
+        tools = await openapi_service.generate_tools_from_spec(
+            spec,
+            base_url=base_url,
+            gateway_id=gateway_id,
+            tags=additional_tags
+        )
+
+        # Enhance tools with AI if requested
+        if enhance_with_ai and tools:
+            logger.info("Enhancing tool descriptions with CrewAI agent")
+            try:
+                # Generate comprehensive analysis
+                analysis = await openapi_agent.generate_comprehensive_analysis(spec)
+
+                # Convert tools to dict format for enhancement
+                tools_dict = [
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "url": str(tool.url),
+                        "method": tool.request_type,
+                        "path": tool.annotations.get("openapi_path", ""),
+                        "operation_id": tool.annotations.get("openapi_operation_id", ""),
+                        "tags": tool.tags,
+                        "annotations": tool.annotations,
+                        "requires_auth": tool.auth is not None,
+                        "auth_type": tool.auth.auth_type if tool.auth else None,
+                        "input_schema": tool.input_schema
+                    }
+                    for tool in tools
+                ]
+
+                # Enhance descriptions with AI
+                enhanced_tools_dict = await openapi_agent.enhance_tool_descriptions(tools_dict, analysis)
+
+                # Update original tools with enhanced information
+                for i, enhanced in enumerate(enhanced_tools_dict):
+                    if i < len(tools):
+                        if enhanced.get("name"):
+                            tools[i].name = enhanced["name"]
+                        if enhanced.get("description"):
+                            tools[i].description = enhanced["description"]
+                        if enhanced.get("tags"):
+                            tools[i].tags = enhanced["tags"]
+                        if enhanced.get("annotations"):
+                            tools[i].annotations.update(enhanced["annotations"])
+
+                logger.info(f"Enhanced {len(tools)} tools with AI analysis")
+            except Exception as ai_error:
+                logger.warning(f"AI enhancement failed: {str(ai_error)}, proceeding with basic tools")
+
+        # Create tools in database
+        created_tools = []
+        failed_tools = []
+
+        for tool in tools:
+            try:
+                # Extract metadata from request
+                # Note: Using a mock request for metadata capture since file upload doesn't have standard request
+                class MockRequest:
+                    headers = {}
+                    client = type('Client', (), {'host': 'unknown'})()
+
+                metadata = MetadataCapture.extract_creation_metadata(MockRequest(), user)
+                metadata["created_via"] = "openapi_upload"
+
+                created_tool = await tool_service.register_tool(
+                    db=db,
+                    tool=tool,
+                    created_by=metadata["created_by"],
+                    created_from_ip=metadata["created_from_ip"],
+                    created_via=metadata["created_via"],
+                    created_user_agent=metadata["created_user_agent"],
+                    import_batch_id=metadata.get("import_batch_id"),
+                    federation_source=metadata.get("federation_source")
+                )
+                created_tools.append(created_tool.model_dump(by_alias=True))
+
+            except Exception as tool_error:
+                logger.error(f"Failed to create tool {tool.name}: {str(tool_error)}")
+                failed_tools.append({
+                    "name": tool.name,
+                    "error": str(tool_error)
+                })
+
+        return {
+            "status": "success",
+            "message": f"Processed OpenAPI specification from {file.filename}",
+            "api_info": {
+                "title": spec.get("info", {}).get("title", "Unknown API"),
+                "version": spec.get("info", {}).get("version", "unknown"),
+                "openapi_version": spec.get("openapi", "unknown")
+            },
+            "tools_created": len(created_tools),
+            "tools_failed": len(failed_tools),
+            "created_tools": created_tools,
+            "failed_tools": failed_tools,
+            "ai_enhanced": enhance_with_ai and len(tools) > 0
+        }
+
+    except OpenAPIValidationError as e:
+        logger.error(f"OpenAPI validation failed for {file.filename}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid OpenAPI specification: {str(e)}")
+    except OpenAPIParsingError as e:
+        logger.error(f"OpenAPI parsing failed for {file.filename}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse OpenAPI specification: {str(e)}")
+    except OpenAPIError as e:
+        logger.error(f"OpenAPI processing failed for {file.filename}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"OpenAPI processing error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error processing {file.filename}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@tool_router.post("/openapi/url", response_model=Dict[str, Any])
+async def process_openapi_url(
+    url: str = Body(..., embed=True),
+    base_url: Optional[str] = Body(None),
+    gateway_id: Optional[str] = Body(None),
+    tags: Optional[str] = Body(None),
+    preview_only: bool = Body(False),
+    enhance_with_ai: bool = Body(True),
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Process OpenAPI specification from URL and generate tools.
+
+    Args:
+        url: URL to OpenAPI specification
+        base_url: Override base URL from specification
+        gateway_id: Gateway ID to associate tools with
+        tags: Comma-separated additional tags for tools
+        preview_only: If True, only preview tools without creating them
+        enhance_with_ai: If True, use CrewAI agent to enhance descriptions
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Dict containing operation results and tool information
+
+    Raises:
+        HTTPException: If URL fetch or processing fails
+    """
+    try:
+        logger.info(f"User {user} processing OpenAPI spec from URL: {url}")
+
+        # Fetch OpenAPI specification from URL
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            content = response.text
+
+        # Determine content type from response headers or URL
+        content_type = "json"
+        if "yaml" in response.headers.get("content-type", "").lower() or url.endswith(('.yaml', '.yml')):
+            content_type = "yaml"
+
+        # Parse additional tags
+        additional_tags = []
+        if tags:
+            additional_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+        # Parse OpenAPI specification
+        spec = await openapi_service.parse_openapi_spec(content, content_type)
+
+        if preview_only:
+            # Return preview without creating tools
+            previews = await openapi_service.preview_tools(spec)
+            return {
+                "status": "preview",
+                "message": f"Preview generated from {url}",
+                "source_url": url,
+                "api_info": {
+                    "title": spec.get("info", {}).get("title", "Unknown API"),
+                    "version": spec.get("info", {}).get("version", "unknown"),
+                    "openapi_version": spec.get("openapi", "unknown")
+                },
+                "tool_count": len(previews),
+                "tools": previews
+            }
+
+        # Generate tools from specification
+        tools = await openapi_service.generate_tools_from_spec(
+            spec,
+            base_url=base_url,
+            gateway_id=gateway_id,
+            tags=additional_tags
+        )
+
+        # Enhance tools with AI if requested
+        if enhance_with_ai and tools:
+            logger.info("Enhancing tool descriptions with CrewAI agent")
+            try:
+                # Generate comprehensive analysis
+                analysis = await openapi_agent.generate_comprehensive_analysis(spec, {"source_url": url})
+
+                # Convert tools to dict format for enhancement
+                tools_dict = [
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "url": str(tool.url),
+                        "method": tool.request_type,
+                        "path": tool.annotations.get("openapi_path", ""),
+                        "operation_id": tool.annotations.get("openapi_operation_id", ""),
+                        "tags": tool.tags,
+                        "annotations": tool.annotations,
+                        "requires_auth": tool.auth is not None,
+                        "auth_type": tool.auth.auth_type if tool.auth else None,
+                        "input_schema": tool.input_schema
+                    }
+                    for tool in tools
+                ]
+
+                # Enhance descriptions with AI
+                enhanced_tools_dict = await openapi_agent.enhance_tool_descriptions(tools_dict, analysis)
+
+                # Update original tools with enhanced information
+                for i, enhanced in enumerate(enhanced_tools_dict):
+                    if i < len(tools):
+                        if enhanced.get("name"):
+                            tools[i].name = enhanced["name"]
+                        if enhanced.get("description"):
+                            tools[i].description = enhanced["description"]
+                        if enhanced.get("tags"):
+                            tools[i].tags = enhanced["tags"]
+                        if enhanced.get("annotations"):
+                            tools[i].annotations.update(enhanced["annotations"])
+
+                logger.info(f"Enhanced {len(tools)} tools with AI analysis")
+            except Exception as ai_error:
+                logger.warning(f"AI enhancement failed: {str(ai_error)}, proceeding with basic tools")
+
+        # Create tools in database
+        created_tools = []
+        failed_tools = []
+
+        for tool in tools:
+            try:
+                # Extract metadata from request
+                # Note: Using a mock request for metadata capture
+                class MockRequest:
+                    headers = {}
+                    client = type('Client', (), {'host': 'unknown'})()
+
+                metadata = MetadataCapture.extract_creation_metadata(MockRequest(), user)
+                metadata["created_via"] = "openapi_url"
+
+                created_tool = await tool_service.register_tool(
+                    db=db,
+                    tool=tool,
+                    created_by=metadata["created_by"],
+                    created_from_ip=metadata["created_from_ip"],
+                    created_via=metadata["created_via"],
+                    created_user_agent=metadata["created_user_agent"],
+                    import_batch_id=metadata.get("import_batch_id"),
+                    federation_source=metadata.get("federation_source")
+                )
+                created_tools.append(created_tool.model_dump(by_alias=True))
+
+            except Exception as tool_error:
+                logger.error(f"Failed to create tool {tool.name}: {str(tool_error)}")
+                failed_tools.append({
+                    "name": tool.name,
+                    "error": str(tool_error)
+                })
+
+        return {
+            "status": "success",
+            "message": f"Processed OpenAPI specification from {url}",
+            "source_url": url,
+            "api_info": {
+                "title": spec.get("info", {}).get("title", "Unknown API"),
+                "version": spec.get("info", {}).get("version", "unknown"),
+                "openapi_version": spec.get("openapi", "unknown")
+            },
+            "tools_created": len(created_tools),
+            "tools_failed": len(failed_tools),
+            "created_tools": created_tools,
+            "failed_tools": failed_tools,
+            "ai_enhanced": enhance_with_ai and len(tools) > 0
+        }
+
+    except httpx.HTTPError as e:
+        logger.error(f"Failed to fetch OpenAPI spec from {url}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch OpenAPI specification: {str(e)}")
+    except OpenAPIValidationError as e:
+        logger.error(f"OpenAPI validation failed for {url}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid OpenAPI specification: {str(e)}")
+    except OpenAPIParsingError as e:
+        logger.error(f"OpenAPI parsing failed for {url}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse OpenAPI specification: {str(e)}")
+    except OpenAPIError as e:
+        logger.error(f"OpenAPI processing failed for {url}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"OpenAPI processing error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error processing {url}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 #################

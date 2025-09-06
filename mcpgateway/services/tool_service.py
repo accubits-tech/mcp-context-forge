@@ -261,24 +261,68 @@ class ToolService:
 
         decoded_auth_value = decode_auth(tool.auth_value)
         if tool.auth_type == "basic":
-            decoded_bytes = base64.b64decode(decoded_auth_value["Authorization"].split("Basic ")[1])
-            username, password = decoded_bytes.decode("utf-8").split(":")
-            tool_dict["auth"] = {
-                "auth_type": "basic",
-                "username": username,
-                "password": "********" if password else None,
-            }
+            if decoded_auth_value and "Authorization" in decoded_auth_value:
+                try:
+                    auth_header = decoded_auth_value["Authorization"]
+                    if auth_header and "Basic " in auth_header:
+                        decoded_bytes = base64.b64decode(auth_header.split("Basic ")[1])
+                        username, password = decoded_bytes.decode("utf-8").split(":", 1)
+                        tool_dict["auth"] = {
+                            "auth_type": "basic",
+                            "username": username,
+                            "password": "********" if password else None,
+                        }
+                    else:
+                        tool_dict["auth"] = {
+                            "auth_type": "basic",
+                            "username": None,
+                            "password": None,
+                        }
+                except (ValueError, KeyError, base64.binascii.Error):
+                    tool_dict["auth"] = {
+                        "auth_type": "basic",
+                        "username": None,
+                        "password": None,
+                    }
+            else:
+                tool_dict["auth"] = {
+                    "auth_type": "basic",
+                    "username": None,
+                    "password": None,
+                }
         elif tool.auth_type == "bearer":
-            tool_dict["auth"] = {
-                "auth_type": "bearer",
-                "token": "********" if decoded_auth_value["Authorization"] else None,
-            }
+            if decoded_auth_value and "Authorization" in decoded_auth_value:
+                tool_dict["auth"] = {
+                    "auth_type": "bearer",
+                    "token": "********" if decoded_auth_value["Authorization"] else None,
+                }
+            else:
+                tool_dict["auth"] = {
+                    "auth_type": "bearer",
+                    "token": None,
+                }
         elif tool.auth_type == "authheaders":
-            tool_dict["auth"] = {
-                "auth_type": "authheaders",
-                "auth_header_key": next(iter(decoded_auth_value)),
-                "auth_header_value": "********" if decoded_auth_value[next(iter(decoded_auth_value))] else None,
-            }
+            if decoded_auth_value:
+                try:
+                    header_key = next(iter(decoded_auth_value))
+                    tool_dict["auth"] = {
+                        "auth_type": "authheaders",
+                        "auth_header_key": header_key,
+                        "auth_header_value": "********" if decoded_auth_value.get(header_key) else None,
+                    }
+                except StopIteration:
+                    # Handle empty auth headers gracefully
+                    tool_dict["auth"] = {
+                        "auth_type": "authheaders",
+                        "auth_header_key": None,
+                        "auth_header_value": None,
+                    }
+            else:
+                tool_dict["auth"] = {
+                    "auth_type": "authheaders",
+                    "auth_header_key": None,
+                    "auth_header_value": None,
+                }
         else:
             tool_dict["auth"] = None
 
