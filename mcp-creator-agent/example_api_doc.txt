@@ -1,0 +1,17 @@
+Create a Python function that interacts with a REST API to fetch user data.
+
+The function should:
+- Accept a user ID as a parameter
+- Make an HTTP GET request to the API endpoint
+- Handle different HTTP status codes (200, 404, 500, etc.)
+- Parse the JSON response
+- Return structured user data
+- Include proper error handling for network issues
+- Log important events
+- Use the requests library for HTTP calls
+- Follow Python best practices and PEP 8 standards
+
+API Endpoint: https://api.example.com/users/{user_id}
+Expected Response Format: JSON with user information (id, name, email, etc.)
+
+The function should be production-ready with comprehensive error handling and logging.

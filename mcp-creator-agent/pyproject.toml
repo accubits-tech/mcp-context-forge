@@ -1,0 +1,109 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-creator-agent"
+version = "1.0.0"
+description = "A CrewAI agent that creates Python functions based on API documentation"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "MCP Context Forge Contributors", email = "noreply@example.com"}
+]
+keywords = ["mcp", "crewai", "ai", "agent", "python", "code-generation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.10"
+
+dependencies = [
+    # Core CrewAI and AI Framework
+    "crewai>=0.28.0",
+    "e2b-code-interpreter>=0.17.0",
+    
+    # LLM Providers
+    "openai>=1.0.0",
+    "anthropic>=0.7.0",
+    
+    # Web Framework (optional, for API endpoints)
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    
+    # Data and Validation
+    "pydantic>=2.5.0",
+    "python-dotenv>=1.0.0",
+    
+    # Utilities
+    "typing-extensions>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
+    
+    # Code Quality
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    
+    # Security
+    "bandit>=1.7.5",
+    
+    # Development
+    "pre-commit>=3.0.0",
+]
+
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
+]
+
+lint = [
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "bandit>=1.7.5",
+]
+
+[project.scripts]
+mcp-creator-agent = "mcp_creator_agent.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mcp_creator_agent*"]
+
+[tool.black]
+line-length = 200
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+line_length = 200
+
+[tool.ruff]
+target-version = "py310"
+line-length = 200
+select = ["E", "F", "W", "B", "ASYNC"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
