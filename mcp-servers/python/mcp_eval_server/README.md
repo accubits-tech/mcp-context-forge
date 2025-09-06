@@ -2,27 +2,10 @@
 ### *The Ultimate AI Evaluation Platform*
 
 > **🚀 Status**: Production Ready | **📊 Tools**: 63 Specialized Evaluation Tools | **🎯 Version**: 0.1.0
-> **👨‍💻 Author**: Mihai Criveti | **🏆 Code Quality**: Perfect 10/10 PyLint Score
+> **👨‍💻 Author**: Mihai Criveti | **🏆 Code Quality**: 10/10 PyLint Score
 > **🔬 Coverage**: Complete AI System Assessment | **⚡ Performance**: Optimized & Scalable
 
-A **revolutionary MCP server** providing the most comprehensive AI evaluation platform in the ecosystem. Features **63 specialized tools** across **14 categories** for complete AI system assessment using cutting-edge **LLM-as-a-judge techniques** combined with robust rule-based metrics.
-
-## 📈 **From 29 to 63 Tools - Epic Expansion!**
-
-🎯 **Original Foundation (29 tools)** → 🚀 **World-Class Platform (63 tools)**
-
-**🆕 NEW: +34 Advanced Evaluation Tools Added**
-- 🔗 **RAG Evaluation** (+8 tools) - Retrieval, grounding, hallucination detection
-- ⚖️ **Bias & Fairness** (+6 tools) - Demographic bias, intersectional analysis
-- 🛡️ **Robustness Testing** (+5 tools) - Adversarial attacks, injection resistance
-- 🔒 **Safety & Alignment** (+4 tools) - Harmful content, value alignment
-- 🌍 **Multilingual Support** (+4 tools) - Translation, cultural adaptation
-- ⚡ **Performance Monitoring** (+4 tools) - Latency, efficiency, memory tracking
-- 🔐 **Privacy & Data Protection** (+8 tools) - PII detection, compliance, anonymization
-
-## 🌟 **Complete AI Evaluation Ecosystem**
-
-The **MCP Evaluation Server** represents the pinnacle of AI evaluation technology - a comprehensive platform featuring **63 specialized tools** across **14 categories**. This revolutionary system combines cutting-edge **LLM-as-a-judge methodologies** with robust rule-based metrics to deliver unparalleled evaluation capabilities for modern AI systems.
+A **MCP server** providing the most comprehensive AI evaluation platform in the ecosystem. Features **63 specialized tools** across **14 categories** for complete AI system assessment using **LLM-as-a-judge techniques** combined with rule-based metrics.
 
 ## 🎯 **Tool Categories Overview**
 
@@ -46,15 +29,7 @@ The **MCP Evaluation Server** represents the pinnacle of AI evaluation technolog
 📊 **2 Calibration Tools** - Judge agreement testing, rubric optimization
 🏥 **4 Server Tools** - Health monitoring, cache statistics, system management
 
-## 🚀 **What Makes This Revolutionary?**
-
-### **🔥 Unmatched Scale & Scope**
-- **📊 63 Specialized Tools** across **14 categories** - *the most comprehensive platform available*
-- **🎯 Complete Coverage** - From basic quality checks to advanced adversarial testing
-- **🌍 Global Ready** - Multilingual evaluation with cultural adaptation assessment
-- **🔐 Enterprise Grade** - Privacy compliance, security testing, performance monitoring
-
-### **⚡ Cutting-Edge Technology**
+### **⚡ Technology**
 - **🤖 LLM-as-a-Judge** - GPT-4, Azure OpenAI, with position bias mitigation
 - **📈 Statistical Rigor** - Confidence intervals, significance testing, correlation analysis
 - **🎪 Multi-Modal Assessment** - Pattern matching + LLM evaluation + rule-based metrics
@@ -62,12 +37,17 @@ The **MCP Evaluation Server** represents the pinnacle of AI evaluation technolog
 
 ## 🚀 **Quick Start**
 
+### **📡 Multiple Server Modes**
+
+#### **🔌 MCP Server Mode (stdio)**
 ```bash
 # 🎯 One-command setup
 pip install -e ".[dev]"
 
-# 🔥 Launch the server (includes health endpoints!)
+# 🔥 Launch MCP server for Claude Desktop, MCP clients
 python -m mcp_eval_server.server
+# or
+make dev
 
 # 🏥 Health check (automatic on port 8080)
 curl http://localhost:8080/health   # ✅ Liveness probe
@@ -75,28 +55,32 @@ curl http://localhost:8080/ready    # 🎯 Readiness probe
 curl http://localhost:8080/metrics  # 📊 Performance metrics
 ```
 
-**🎉 That's it!** Your MCP client now has access to **63 specialized evaluation tools**!
+#### **🌐 REST API Server Mode (HTTP)**
+```bash
+# 🚀 Launch REST API server with FastAPI
+python -m mcp_eval_server.rest_server --port 8080 --host 0.0.0.0
+# or
+make serve-rest
 
-## 🆕 **NEW TOOLS SPOTLIGHT**
+# 📚 Interactive API documentation
+open http://localhost:8080/docs
 
-### **🔥 Most Requested Features - Now Available!**
+# 🧪 Quick API test
+curl http://localhost:8080/health
+curl http://localhost:8080/tools/categories
+```
 
-**🔗 RAG Evaluation** - *Finally!* Complete RAG system assessment
-**⚖️ Bias & Fairness** - *Essential!* Demographic bias and intersectional analysis
-**🛡️ Robustness Testing** - *Critical!* Adversarial attacks and security assessment
-**🔒 Safety & Alignment** - *Vital!* Harmful content detection and value alignment
-**🌍 Multilingual Support** - *Global!* Translation and cultural adaptation testing
-**⚡ Performance Monitoring** - *Powerful!* Real-time latency and efficiency tracking
-**🔐 Privacy & Compliance** - *Enterprise!* PII detection and regulatory compliance
+#### **🔄 HTTP Bridge Mode (MCP over HTTP)**
+```bash
+# 🌍 MCP protocol over HTTP with Server-Sent Events
+make serve-http
 
-### **💡 Revolutionary Capabilities Unlocked**
-- **🎯 RAG Groundedness** - Verify answers are properly grounded in context
-- **🚨 Hallucination Detection** - Identify contradictions with source material
-- **⚖️ Intersectional Bias** - Multi-dimensional fairness analysis
-- **🛡️ Prompt Injection Resistance** - Security testing against malicious prompts
-- **🌍 Cultural Sensitivity** - Cross-cultural appropriateness evaluation
-- **🔐 PII Exposure Detection** - Protect sensitive personal information
-- **⚡ Real-time Monitoring** - Live performance and health tracking
+# 📡 Access via JSON-RPC over HTTP on port 9000
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}' \
+     http://localhost:9000/
+```
+
 
 ## ✨ **Complete Tool Arsenal**
 
@@ -332,9 +316,9 @@ make lint
 
 ## 🎮 **Usage Examples**
 
-### **🎯 Advanced Response Evaluation**
+### **🎯 MCP Client Integration**
 ```python
-# Multi-criteria evaluation with custom weights
+# Multi-criteria evaluation with MCP client
 result = await mcp_client.call_tool("judge.evaluate_response", {
     "response": "Detailed technical explanation...",
     "criteria": [
@@ -355,6 +339,58 @@ result = await mcp_client.call_tool("judge.evaluate_response", {
     "judge_model": "gpt-4",
     "use_cot": True
 })
+```
+
+### **🌐 REST API Integration**
+```bash
+# Evaluate response via REST API
+curl -X POST http://localhost:8080/judge/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "response": "Paris is the capital of France",
+    "criteria": [
+      {
+        "name": "accuracy",
+        "description": "Factual accuracy",
+        "scale": "1-5",
+        "weight": 1.0
+      }
+    ],
+    "rubric": {
+      "criteria": [],
+      "scale_description": {
+        "1": "Wrong",
+        "5": "Correct"
+      }
+    },
+    "judge_model": "gpt-4o-mini"
+  }'
+```
+
+```python
+# Python REST API client
+import httpx
+import asyncio
+
+async def evaluate_via_rest():
+    async with httpx.AsyncClient() as client:
+        response = await client.post("http://localhost:8080/judge/evaluate", json={
+            "response": "Technical explanation...",
+            "criteria": [
+                {"name": "quality", "description": "Overall quality", "scale": "1-5", "weight": 1.0}
+            ],
+            "rubric": {
+                "criteria": [],
+                "scale_description": {"1": "Poor", "5": "Excellent"}
+            },
+            "judge_model": "gpt-4o-mini"
+        })
+        result = response.json()
+        return result
+
+# Run evaluation
+result = asyncio.run(evaluate_via_rest())
+print(f"Overall score: {result['overall_score']}")
 ```
 
 ### **⚖️ Advanced Pairwise Comparison**
@@ -801,8 +837,10 @@ benchmarks:
 | Mode | Command | Protocol | Port | Auth | Use Case |
 |------|---------|----------|------|------|----------|
 | **MCP Server** | `make dev` | stdio | none | none | Claude Desktop, MCP clients |
-| **HTTP Local** | `make serve-http` | JSON-RPC/HTTP | 9000 | none | Local development, testing |
-| **HTTP Public** | `make serve-http-public` | JSON-RPC/HTTP | 9000 | none | Remote access, integration |
+| **REST API** | `make serve-rest` | HTTP REST | 8080 | none | Direct HTTP API integration |
+| **REST Public** | `make serve-rest-public` | HTTP REST | 8080 | none | Public REST API access |
+| **HTTP Bridge** | `make serve-http` | JSON-RPC/HTTP | 9000 | none | MCP over HTTP, local testing |
+| **HTTP Public** | `make serve-http-public` | JSON-RPC/HTTP | 9000 | none | MCP over HTTP, remote access |
 | **Container** | `make run` | HTTP | 8080 | none | Docker deployment |
 
 ### **Immediate Quick Start**
@@ -817,19 +855,35 @@ make example               # Run evaluation example
 make test-mcp             # Test MCP protocol
 ```
 
-#### **Option 2: HTTP Server (REST API)**
+#### **Option 2: REST API Server (FastAPI)**
 ```bash
-# 1. Run HTTP server with Bearer token auth
-make serve-http           # Starts on http://localhost:9000
+# 1. Run native REST API server
+make serve-rest          # Starts on http://localhost:8080
 
-# 2. Test HTTP endpoints
-make test-http           # Test all endpoints
+# 2. Test REST API endpoints
+make test-rest           # Test all REST endpoints
 
-# 3. Get connection info
-make http-info           # Show complete HTTP setup guide
+# 3. View interactive documentation
+open http://localhost:8080/docs    # Swagger UI
+open http://localhost:8080/redoc   # ReDoc
+
+# 4. Get connection info
+make rest-info           # Show complete REST API guide
 ```
 
-#### **Option 3: Docker Deployment**
+#### **Option 3: HTTP Bridge (MCP over HTTP)**
+```bash
+# 1. Run MCP protocol over HTTP
+make serve-http          # Starts on http://localhost:9000
+
+# 2. Test HTTP endpoints
+make test-http           # Test MCP JSON-RPC endpoints
+
+# 3. Get connection info
+make http-info           # Show complete HTTP bridge guide
+```
+
+#### **Option 4: Docker Deployment**
 ```bash
 # Build and deploy
 make build && make run
@@ -851,9 +905,41 @@ result = await client.call_tool("judge.evaluate_response", {
 })
 ```
 
-#### **HTTP API Integration**
+#### **REST API Integration**
 ```bash
-# Start HTTP server
+# Start REST API server
+make serve-rest
+
+# Check server health
+curl http://localhost:8080/health
+
+# List tool categories
+curl http://localhost:8080/tools/categories
+
+# Evaluate response directly via REST
+curl -X POST http://localhost:8080/judge/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "response": "Paris is the capital of France.",
+    "criteria": [
+      {
+        "name": "accuracy",
+        "description": "Factual accuracy",
+        "scale": "1-5",
+        "weight": 1.0
+      }
+    ],
+    "rubric": {
+      "criteria": [],
+      "scale_description": {"1": "Wrong", "5": "Correct"}
+    },
+    "judge_model": "rule-based"
+  }'
+```
+
+#### **HTTP Bridge Integration (MCP over HTTP)**
+```bash
+# Start HTTP bridge server
 make serve-http
 
 # List available tools (JSON-RPC)
@@ -862,7 +948,7 @@ curl -X POST \
      -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}' \
      http://localhost:9000/
 
-# Evaluate response via HTTP (JSON-RPC)
+# Evaluate response via HTTP bridge (JSON-RPC)
 curl -X POST \
      -H "Content-Type: application/json" \
      -d '{
@@ -882,12 +968,60 @@ curl -X POST \
      http://localhost:9000/
 ```
 
-#### **Python HTTP Client Integration**
+#### **Python REST API Client Integration**
 ```python
 import httpx
 import asyncio
 
-async def evaluate_via_http():
+async def evaluate_via_rest_api():
+    """Example using native REST API endpoints."""
+    async with httpx.AsyncClient() as client:
+        base_url = "http://localhost:8080"
+
+        # Check health
+        health = await client.get(f"{base_url}/health")
+        print(f"Server status: {health.json()['status']}")
+
+        # List tool categories
+        categories = await client.get(f"{base_url}/tools/categories")
+        print(f"Available categories: {len(categories.json()['categories'])}")
+
+        # Evaluate response using REST endpoint
+        evaluation = await client.post(f"{base_url}/judge/evaluate", json={
+            "response": "Your AI response here",
+            "criteria": [
+                {"name": "quality", "description": "Overall quality", "scale": "1-5", "weight": 1.0}
+            ],
+            "rubric": {
+                "criteria": [],
+                "scale_description": {"1": "Poor", "5": "Excellent"}
+            },
+            "judge_model": "rule-based"
+        })
+        result = evaluation.json()
+        print(f"Evaluation score: {result['overall_score']}")
+
+        # Check content toxicity
+        toxicity = await client.post(f"{base_url}/quality/toxicity", json={
+            "content": "This is a test message",
+            "toxicity_categories": ["profanity", "hate_speech"],
+            "sensitivity_level": "moderate",
+            "judge_model": "rule-based"
+        })
+        result = toxicity.json()
+        print(f"Toxicity detected: {result['toxicity_detected']}")
+
+# Run evaluation
+asyncio.run(evaluate_via_rest_api())
+```
+
+#### **Python HTTP Bridge Client Integration**
+```python
+import httpx
+import asyncio
+
+async def evaluate_via_http_bridge():
+    """Example using MCP over HTTP bridge."""
     async with httpx.AsyncClient() as client:
         base_url = "http://localhost:9000"
 
@@ -925,137 +1059,5 @@ async def evaluate_via_http():
         print(f"Evaluation result: {result}")
 
 # Run evaluation
-asyncio.run(evaluate_via_http())
+asyncio.run(evaluate_via_http_bridge())
 ```
-
-## 🎖️ **Quality Assurance**
-
-### **Code Excellence**
-- 🏆 **Perfect 10/10 PyLint Score** - Mathematical code perfection
-- ✅ **100% Ruff Compliance** - Perfect formatting and style
-- ✅ **100% Flake8 Compliance** - Complete docstring and style compliance
-- 🔒 **Zero Security Issues** - All vulnerabilities resolved
-- 📚 **100% Documentation** - Complete Google-style docstring coverage
-
-### **Testing & Reliability**
-- ✅ **Comprehensive Test Suite** - Full pytest coverage with async testing
-- 🔄 **Continuous Integration** - Automated testing and quality checks
-- 📊 **Performance Testing** - Load testing and benchmark validation
-- 🛡️ **Security Testing** - Vulnerability scanning and penetration testing
-- 🔍 **Code Review** - Automated and manual code review processes
-
-## 📈 **Performance Metrics**
-
-### **Benchmark Results**
-- **Evaluation Speed**: Sub-2-second response times for standard evaluations
-- **Throughput**: 100+ evaluations per minute with parallel processing
-- **Judge Correlation**: >0.8 agreement with human expert evaluations
-- **Cache Efficiency**: >85% cache hit rate for repeated evaluations
-- **Resource Efficiency**: <500MB memory footprint per evaluation instance
-
-### **Scalability Characteristics**
-- **Horizontal Scaling**: Linear performance scaling across multiple instances
-- **Load Balancing**: Intelligent request distribution with health checking
-- **Auto-Scaling**: Dynamic resource allocation based on evaluation demand
-- **High Availability**: 99.9% uptime with automatic failover
-- **Disaster Recovery**: Backup and restore capabilities with point-in-time recovery
-
-## 🔗 **Ecosystem Integration**
-
-### **Deployment Modes**
-
-#### **🔌 MCP Server Mode (stdio)**
-- **Native MCP Protocol**: Direct stdio communication for Claude Desktop, MCP clients
-- **Zero Configuration**: No ports, no authentication setup required
-- **Optimal Performance**: Direct protocol communication without HTTP overhead
-- **Client Integration**: Perfect for Claude Desktop, MCP Inspector, development tools
-
-#### **🌐 HTTP Server Mode (REST API)**
-- **HTTP/REST API**: Accessible via standard HTTP requests with Bearer token auth
-- **Remote Access**: Can be deployed as a service and accessed from anywhere
-- **Language Agnostic**: Any programming language can integrate via HTTP
-- **Enterprise Ready**: Bearer token authentication, health checks, monitoring endpoints
-
-### **MCP Ecosystem**
-- **Full MCP Protocol Support**: Complete implementation of Model Context Protocol
-- **Tool Discovery**: Automatic tool registration and capability advertisement
-- **Session Management**: Persistent evaluation sessions with state management
-- **Event Streaming**: Real-time evaluation progress and result streaming
-
-### **AI Framework Integration**
-- **LangChain**: Direct integration with LangChain agents and chains
-- **LlamaIndex**: Seamless integration with LlamaIndex applications
-- **Autogen**: Multi-agent conversation evaluation capabilities
-- **Custom Frameworks**: Extensible integration API for any AI framework
-
-### **Enterprise Systems**
-- **Monitoring Platforms**: Integration with Prometheus, Grafana, DataDog
-- **CI/CD Systems**: GitHub Actions, Jenkins, GitLab CI integration
-- **Cloud Platforms**: Native support for AWS, Azure, GCP deployments
-- **Data Platforms**: Integration with data warehouses and analytics systems
-
-## 📞 **Support & Community**
-
-### **Documentation & Resources**
-- 📚 **Complete API Documentation** - Every tool and parameter documented
-- 🎓 **Tutorial Series** - Step-by-step guides for all use cases
-- 💡 **Best Practices Guide** - Expert recommendations and patterns
-- 🔧 **Troubleshooting Guide** - Common issues and solutions
-- 📊 **Performance Tuning** - Optimization recommendations and benchmarks
-
-### **Community & Support**
-- 🐛 **Issue Tracking** - GitHub issues for bug reports and feature requests
-- 💬 **Discussion Forums** - Community discussions and knowledge sharing
-- 📧 **Enterprise Support** - Professional support options for enterprise users
-- 🎯 **Feature Requests** - Community-driven feature development process
-- 🤝 **Contributing** - Open source contribution guidelines and processes
-
----
-
-## 🏆 **Achievement Unlocked: Ultimate AI Evaluation Platform**
-
-### **🎉 Epic Transformation Complete!**
-
-**📈 Growth Journey**: 29 tools → **63 specialized tools** (+34 new tools!)
-
-The **MCP Evaluation Server** now represents the absolute pinnacle of AI evaluation technology:
-
-### **🌟 What Makes This Extraordinary**
-- **🏆 Perfect Code Quality** - 10/10 PyLint score across all 63 tools
-- **🔬 Comprehensive Coverage** - **63 specialized tools** across **14 categories**
-- **🚀 Production-Grade** - Enterprise deployment ready with health monitoring
-- **🧪 Research-Grade Accuracy** - Human-calibrated LLM-as-a-judge evaluations
-- **🏗️ Innovative Architecture** - Extensible framework with configurable rubrics
-- **🔐 Security & Privacy** - Built-in privacy compliance and security testing
-- **🌍 Global Ready** - Multilingual support with cultural sensitivity
-- **⚡ Performance Optimized** - Resource monitoring and efficiency tracking
-
-### **🎯 Use Cases Covered**
-✅ **RAG Systems** - Retrieval, grounding, hallucination detection
-✅ **Bias Testing** - Demographic fairness, intersectional analysis
-✅ **Security Assessment** - Adversarial robustness, injection resistance
-✅ **Safety Compliance** - Harmful content detection, value alignment
-✅ **Multilingual AI** - Translation quality, cultural adaptation
-✅ **Performance Monitoring** - Latency, efficiency, scaling analysis
-✅ **Privacy Compliance** - PII detection, GDPR/CCPA compliance
-✅ **Agent Evaluation** - Tool usage, reasoning, task completion
-
-### **🚀 Ready for Mission-Critical Deployment**
-**Enterprise** | **Research** | **Educational** | **Government** | **Healthcare** | **Financial**
-
----
-
-### **🎊 Congratulations!**
-You now have the **most advanced AI evaluation platform** available anywhere!
-
-**🌟 63 SPECIALIZED TOOLS | 14 CATEGORIES | INFINITE POSSIBILITIES 🌟**
-
-```
-🚀 TRANSFORMATION COMPLETE 🚀
-29 tools → 63 tools (+34 new tools)
-Basic evaluation → Complete AI assessment platform
-Single-purpose → Multi-dimensional analysis
-Good → EXTRAORDINARY! 🏆
-```
-
-**Ready to revolutionize AI evaluation!** 🎉

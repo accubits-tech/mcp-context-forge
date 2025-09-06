@@ -1,19 +1,24 @@
 # -*- coding: utf-8 -*-
-"""
-Tests for external client on streamable http.
-
+"""Location: ./tests/unit/mcpgateway/plugins/framework/external/mcp/test_client_streamable_http.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
+
+Tests for external client on streamable http.
 """
+# Standard
 import os
 import subprocess
 import sys
 import time
 
+# Third-Party
 import pytest
 
+# First-Party
 from mcpgateway.models import Message, PromptResult, Role, TextContent
-from mcpgateway.plugins.framework import ConfigLoader, PluginLoader, PluginContext, PromptPrehookPayload, PromptPosthookPayload
+from mcpgateway.plugins.framework import ConfigLoader, PluginContext, PluginLoader, PromptPosthookPayload, PromptPrehookPayload
+
 
 @pytest.fixture(autouse=True)
 def server_proc():

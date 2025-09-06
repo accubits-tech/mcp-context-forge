@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Tests for observability module."""
+"""Location: ./tests/unit/mcpgateway/test_observability.py
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
+
+Tests for observability module.
+"""
 
 # Standard
 import os
@@ -31,7 +37,9 @@ class TestObservability:
     def teardown_method(self):
         """Clean up after each test."""
         # Reset global tracer
+        # First-Party
         import mcpgateway.observability
+
         # pylint: disable=protected-access
         mcpgateway.observability._TRACER = None
 
@@ -129,7 +137,9 @@ class TestObservability:
 
     def test_create_span_no_tracer(self):
         """Test create_span when tracer is not initialized."""
+        # First-Party
         import mcpgateway.observability
+
         # pylint: disable=protected-access
         mcpgateway.observability._TRACER = None
 
@@ -167,7 +177,9 @@ class TestObservability:
     @pytest.mark.asyncio
     async def test_trace_operation_decorator_no_tracer(self):
         """Test trace_operation decorator when tracer is not initialized."""
+        # First-Party
         import mcpgateway.observability
+
         # pylint: disable=protected-access
         mcpgateway.observability._TRACER = None
 
@@ -274,6 +286,7 @@ class TestObservability:
 
     def test_create_span_none_attributes_filtered(self):
         """Test that None values in attributes are filtered out."""
+        # First-Party
         import mcpgateway.observability
 
         # Setup mock tracer

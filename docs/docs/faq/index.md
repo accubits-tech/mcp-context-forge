@@ -16,7 +16,7 @@
     OCI image (Docker/Podman) - shares host network so localhost works:
 
     ```bash
-    podman run --network=host -p 4444:4444 ghcr.io/ibm/mcp-context-forge:0.5.0
+    podman run --network=host -p 4444:4444 ghcr.io/ibm/mcp-context-forge:0.6.0
     ```
 
 ???+ example "🗂️ What URLs are available for the admin interface and API docs?"
@@ -108,7 +108,7 @@
     Include a persistent volume with your container or Kubernetes deployment. Ex:
 
     ```bash
-    docker run -v $(pwd)/data:/app ghcr.io/ibm/mcp-context-forge:0.5.0
+    docker run -v $(pwd)/data:/app ghcr.io/ibm/mcp-context-forge:0.6.0
     ```
 
     For production use, we recommend PostgreSQL. A Docker Compose target with PostgreSQL and Redis is provided.
@@ -122,7 +122,7 @@
 
 ???+ example "🔑 How do I generate and use a JWT token?"
     ```bash
-    export MCPGATEWAY_BEARER_TOKEN=$(python3 -m mcpgateway.utils.create_jwt_token -u admin -exp 0 --secret my-test-key)
+    export MCPGATEWAY_BEARER_TOKEN=$(python3 -m mcpgateway.utils.create_jwt_token -u admin@example.com -exp 0 --secret my-test-key)
     curl -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" https://localhost:4444/tools
     ```
 
@@ -263,7 +263,7 @@
 ## 🤝 Contributing & Community
 
 ???+ tip "👩💻 How can I file issues or contribute?"
-    Use [GitHub Issues](https://github.com/IBM/mcp-context-forge/issues) and `CONTRIBUTING.md`.
+    Use [GitHub Issues](https://github.com/IBM/mcp-context-forge/issues) and [CONTRIBUTING.md](https://github.com/IBM/mcp-context-forge/blob/main/CONTRIBUTING.md).
 
 ???+ tip "🧑🎓 What code style and CI tools are used?"
     - Pre-commit: `ruff`, `black`, `mypy`, `isort`

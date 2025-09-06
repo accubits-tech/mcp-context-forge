@@ -26,7 +26,7 @@ ARG PYTHON_VERSION=3.11
 ###########################
 # Builder stage
 ###########################
-FROM registry.access.redhat.com/ubi9/ubi:9.6-1753978585 AS builder
+FROM registry.access.redhat.com/ubi9/ubi:9.6-1756915113 AS builder
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 ARG PYTHON_VERSION
@@ -68,7 +68,7 @@ COPY pyproject.toml /app/
 RUN set -euo pipefail \
     && python3 -m venv /app/.venv \
     && /app/.venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel pdm uv \
-    && /app/.venv/bin/uv pip install ".[redis,postgres,observability]" \
+    && /app/.venv/bin/uv pip install ".[redis,postgres,mysql,observability]" \
     && /app/.venv/bin/pip uninstall --yes uv pip setuptools wheel pdm \
     && rm -rf /root/.cache /var/cache/dnf \
     && find /app/.venv -name "*.dist-info" -type d \
@@ -217,7 +217,7 @@ LABEL maintainer="Mihai Criveti" \
       org.opencontainers.image.title="mcp/mcpgateway" \
       org.opencontainers.image.description="MCP Gateway: An enterprise-ready Model Context Protocol Gateway" \
       org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.version="0.5.0"
+      org.opencontainers.image.version="0.6.0"
 
 # ----------------------------------------------------------------------------
 # Copy the entire prepared root filesystem from the builder stage

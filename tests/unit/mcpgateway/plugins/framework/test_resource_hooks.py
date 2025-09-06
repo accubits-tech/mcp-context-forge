@@ -1,13 +1,24 @@
 # -*- coding: utf-8 -*-
-"""Tests for resource hook functionality in the plugin framework."""
+"""Location: ./tests/unit/mcpgateway/plugins/framework/test_resource_hooks.py
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
 
+Tests for resource hook functionality in the plugin framework.
+"""
+
+# Standard
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+
+# Third-Party
 import pytest
 
+# First-Party
 from mcpgateway.models import ResourceContent
 from mcpgateway.plugins.framework.base import Plugin, PluginRef
 from mcpgateway.plugins.framework.manager import PluginManager
+
 # Registry is imported for mocking
 from mcpgateway.plugins.framework.models import (
     GlobalContext,
@@ -212,6 +223,7 @@ class TestResourceHookIntegration:
     def clear_plugin_manager_state(self):
         """Clear the PluginManager shared state before and after each test."""
         # Clear before test
+        # First-Party
         from mcpgateway.plugins.framework.manager import PluginManager
         PluginManager._PluginManager__shared_state.clear()
         yield

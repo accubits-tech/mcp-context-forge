@@ -1,13 +1,24 @@
 # -*- coding: utf-8 -*-
-"""Integration tests for resource plugin functionality."""
+"""Location: ./tests/integration/test_resource_plugin_integration.py
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
 
+Integration tests for resource plugin functionality.
+"""
+
+# Standard
 import os
 from unittest.mock import MagicMock, patch
+
+# Third-Party
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from mcpgateway.db import Base, Resource as DbResource
+# First-Party
+from mcpgateway.db import Base
+from mcpgateway.db import Resource as DbResource
 from mcpgateway.models import ResourceContent
 from mcpgateway.schemas import ResourceCreate
 from mcpgateway.services.resource_service import ResourceService
@@ -31,6 +42,7 @@ class TestResourcePluginIntegration:
         """Create ResourceService with mocked plugin manager."""
         with patch.dict(os.environ, {"PLUGINS_ENABLED": "true", "PLUGIN_CONFIG_FILE": "test.yaml"}):
             with patch("mcpgateway.services.resource_service.PluginManager") as MockPluginManager:
+                # Standard
                 from unittest.mock import AsyncMock
                 mock_manager = MagicMock()
                 mock_manager._initialized = True
@@ -46,6 +58,7 @@ class TestResourcePluginIntegration:
         service, mock_manager = resource_service_with_mock_plugins
 
         # Configure mock plugin manager for all operations
+        # Standard
         from unittest.mock import AsyncMock
         pre_result = MagicMock()
         pre_result.continue_processing = True
@@ -94,6 +107,7 @@ class TestResourcePluginIntegration:
         assert resources[0].uri == "test://integration"
 
         # 4. Update the resource
+        # First-Party
         from mcpgateway.schemas import ResourceUpdate
 
         update_data = ResourceUpdate(
@@ -120,6 +134,7 @@ class TestResourcePluginIntegration:
         ):
             # Use real plugin manager but mock its initialization
             with patch("mcpgateway.services.resource_service.PluginManager") as MockPluginManager:
+                # First-Party
                 from mcpgateway.plugins.framework.manager import PluginManager
                 from mcpgateway.plugins.framework.models import (
                     ResourcePostFetchPayload,
@@ -150,6 +165,7 @@ class TestResourcePluginIntegration:
                                 {"validated": True},
                             )
                         else:
+                            # First-Party
                             from mcpgateway.plugins.framework.models import PluginViolation
 
                             return (
@@ -213,6 +229,7 @@ class TestResourcePluginIntegration:
                 assert "port: 8080" in content.text
 
                 # Try to read a blocked protocol
+                # First-Party
                 from mcpgateway.services.resource_service import ResourceError
 
                 blocked_resource = ResourceCreate(
@@ -283,7 +300,9 @@ class TestResourcePluginIntegration:
         service, mock_manager = resource_service_with_mock_plugins
 
         # Configure plugin manager
+        # Standard
         from unittest.mock import AsyncMock
+
         # Create proper mock results
         pre_result = MagicMock()
         pre_result.continue_processing = True
@@ -322,6 +341,7 @@ class TestResourcePluginIntegration:
         service, mock_manager = resource_service_with_mock_plugins
 
         # Configure mock plugin manager
+        # Standard
         from unittest.mock import AsyncMock
         pre_result = MagicMock()
         pre_result.continue_processing = True
@@ -345,6 +365,7 @@ class TestResourcePluginIntegration:
         await service.toggle_resource_status(test_db, created.id, activate=False)
 
         # Try to read inactive resource
+        # First-Party
         from mcpgateway.services.resource_service import ResourceNotFoundError
 
         with pytest.raises(ResourceNotFoundError) as exc_info:

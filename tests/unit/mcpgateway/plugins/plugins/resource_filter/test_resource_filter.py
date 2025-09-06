@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Tests for the ResourceFilterPlugin."""
+"""Location: ./tests/unit/mcpgateway/plugins/plugins/resource_filter/test_resource_filter.py
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
 
+Tests for the ResourceFilterPlugin.
+"""
+
+# Third-Party
 import pytest
 
+# First-Party
 from mcpgateway.models import ResourceContent
 from mcpgateway.plugins.framework.models import (
     HookType,

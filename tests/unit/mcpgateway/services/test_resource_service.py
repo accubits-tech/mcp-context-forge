@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Comprehensive test suite for ResourceService.
-
+"""Location: ./tests/unit/mcpgateway/services/test_resource_service.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
 Authors: Assistant
 
+Comprehensive test suite for ResourceService.
 This suite provides complete test coverage for:
 - All ResourceService methods
 - Error conditions and edge cases
@@ -1304,6 +1304,7 @@ class TestResourceServiceMetricsExtended:
     @pytest.mark.asyncio
     async def test_list_resources_with_tags(self, resource_service, mock_db, mock_resource):
         """Test listing resources with tag filtering."""
+        # Third-Party
         from sqlalchemy import func
 
         # Mock query chain

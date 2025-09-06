@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
-"""
-
+"""Location: ./tests/unit/mcpgateway/plugins/framework/loader/test_plugin_loader.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
 Authors: Teryl Taylor
 
 Unit tests for config and plugin loaders.
 """
+
+# Standard
+from unittest.mock import MagicMock, patch
 
 # Third-Party
 import pytest
@@ -17,7 +19,6 @@ from mcpgateway.plugins.framework.loader.config import ConfigLoader
 from mcpgateway.plugins.framework.loader.plugin import PluginLoader
 from mcpgateway.plugins.framework.models import PluginContext, PluginMode, PromptPosthookPayload, PromptPrehookPayload
 from plugins.regex_filter.search_replace import SearchReplaceConfig, SearchReplacePlugin
-from unittest.mock import patch, MagicMock
 
 
 def test_config_loader_load():
@@ -105,6 +106,7 @@ async def test_plugin_loader_duplicate_registration():
 @pytest.mark.asyncio
 async def test_plugin_loader_get_plugin_type_error():
     """Test error handling in __get_plugin_type method."""
+    # First-Party
     from mcpgateway.plugins.framework.models import PluginConfig
 
     loader = PluginLoader()
@@ -131,6 +133,7 @@ async def test_plugin_loader_get_plugin_type_error():
 @pytest.mark.asyncio
 async def test_plugin_loader_none_plugin_type():
     """Test handling when plugin type resolves to None."""
+    # First-Party
     from mcpgateway.plugins.framework.models import PluginConfig
 
     loader = PluginLoader()
@@ -192,6 +195,7 @@ async def test_plugin_loader_shutdown_with_existing_types():
 @pytest.mark.asyncio
 async def test_plugin_loader_registration_branch_coverage():
     """Test plugin registration path coverage."""
+    # First-Party
     from mcpgateway.plugins.framework.models import PluginConfig
 
     loader = PluginLoader()

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""
-MCP Reverse Proxy - Bridge local MCP servers to remote gateways.
-
+"""Location: ./mcpgateway/reverse_proxy.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
 
+MCP Reverse Proxy - Bridge local MCP servers to remote gateways.
 This module implements a reverse proxy that connects local MCP servers
 (running via stdio) to remote gateways, enabling servers behind firewalls
 or NATs to be accessible without inbound network access.
@@ -22,7 +22,7 @@ Environment variables:
 
 Example:
     $ export REVERSE_PROXY_GATEWAY=https://gateway.example.com
-    $ export REVERSE_PROXY_TOKEN=$(python3 -m mcpgateway.utils.create_jwt_token --username admin --exp 10080 --secret key)
+    $ export REVERSE_PROXY_TOKEN=$(python3 -m mcpgateway.utils.create_jwt_token --username admin@example.com --exp 10080 --secret key)
     $ python3 -m mcpgateway.reverse_proxy --local-stdio "uvx mcp-server-git"
 """
 

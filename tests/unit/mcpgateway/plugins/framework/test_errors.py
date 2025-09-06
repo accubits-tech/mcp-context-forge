@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
-"""
-Tests for errors module.
-
+"""Location: ./tests/unit/mcpgateway/plugins/framework/test_errors.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
+
+Tests for errors module.
 """
 
+# Third-Party
 import pytest
+
+# First-Party
 from mcpgateway.plugins.framework.errors import convert_exception_to_error, PluginError
 
 

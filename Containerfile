@@ -1,7 +1,7 @@
-FROM registry.access.redhat.com/ubi9-minimal:9.6-1754000177
+FROM registry.access.redhat.com/ubi9-minimal:9.6-1755695350
 LABEL maintainer="Mihai Criveti" \
       name="mcp/mcpgateway" \
-      version="0.5.0" \
+      version="0.6.0" \
       description="MCP Gateway: An enterprise-ready Model Context Protocol Gateway"
 
 ARG PYTHON_VERSION=3.11
@@ -24,7 +24,7 @@ COPY . /app
 # Including observability packages for OpenTelemetry support
 RUN python3 -m venv /app/.venv && \
     /app/.venv/bin/python3 -m pip install --upgrade pip setuptools pdm uv && \
-    /app/.venv/bin/python3 -m uv pip install ".[redis,postgres,alembic,observability]"
+    /app/.venv/bin/python3 -m uv pip install ".[redis,postgres,mysql,alembic,observability]"
 
 # update the user permissions
 RUN chown -R 1001:0 /app && \
