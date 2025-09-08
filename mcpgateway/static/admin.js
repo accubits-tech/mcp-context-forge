@@ -252,8 +252,12 @@ function isInactiveChecked(type) {
 }
 
 // Enhanced fetch with timeout and better error handling
-function fetchWithTimeout(url, options = {}, timeout = 30000) {
-    // Increased from 10000
+function fetchWithTimeout(
+    url,
+    options = {},
+    timeout = window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT || 60000,
+) {
+    // Use configurable timeout from window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
         console.warn(`Request to ${url} timed out after ${timeout}ms`);
@@ -663,7 +667,7 @@ async function loadMetricsInternal() {
         const result = await fetchWithTimeoutAndRetry(
             `${window.ROOT_PATH}/admin/metrics`,
             {}, // options
-            45000, // Increased timeout specifically for metrics (was 20000)
+            (window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT || 60000) * 1.5, // Use 1.5x configurable timeout for metrics
             MAX_METRICS_RETRIES,
         );
 
@@ -713,7 +717,7 @@ async function loadMetricsInternal() {
 async function fetchWithTimeoutAndRetry(
     url,
     options = {},
-    timeout = 20000,
+    timeout = window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT || 60000,
     maxRetries = 3,
 ) {
     let lastError;
@@ -4185,7 +4189,7 @@ function showTab(tabName) {
                         fetchWithTimeout(
                             `${window.ROOT_PATH}/version?partial=true`,
                             {},
-                            10000,
+                            window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT || 60000,
                         )
                             .then((resp) => {
                                 if (!resp.ok) {
@@ -4968,7 +4972,7 @@ const toolTestState = {
     activeRequests: new Map(), // toolId -> AbortController
     lastRequestTime: new Map(), // toolId -> timestamp
     debounceDelay: 1000, // Increased from 500ms
-    requestTimeout: 30000, // Increased from 10000ms
+    requestTimeout: window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT || 60000, // Use configurable timeout
 };
 
 let toolInputSchemaRegistry = null;
@@ -5543,7 +5547,7 @@ async function runToolTest() {
                 body: JSON.stringify(payload),
                 credentials: "include",
             },
-            20000, // Increased from 8000
+            window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT || 60000, // Use configurable timeout
         );
 
         const result = await response.json();
@@ -6385,7 +6389,7 @@ async function viewTool(toolId) {
         } else {
             authHTML = `
         <span class="font-medium text-gray-700 dark:text-gray-300">Authentication Type:</span>
-        <div class="mt-1 text-sm text-gray-600 dark:text-gray-400">None</div>
+        <div class="mt-1 text-sm">None</div>
       `;
         }
 
@@ -6461,7 +6465,7 @@ async function viewTool(toolId) {
         if (toolDetailsDiv) {
             // Create structure safely without double-escaping
             const safeHTML = `
-        <div class="dark:bg-gray-800 dark:text-gray-300">
+        <div class="bg-transparent dark:bg-transparent dark:text-gray-300">
           <!-- Two Column Layout for Main Info -->
           <div class="grid grid-cols-2 gap-6 mb-6">
             <!-- Left Column -->
@@ -6472,11 +6476,11 @@ async function viewTool(toolId) {
               </div>
               <div>
                 <span class="font-medium text-gray-700 dark:text-gray-300">Technical Name:</span>
-                <div class="mt-1 tool-name text-sm text-gray-600 dark:text-gray-400"></div>
+                <div class="mt-1 tool-name text-sm"></div>
               </div>
               <div>
                 <span class="font-medium text-gray-700 dark:text-gray-300">URL:</span>
-                <div class="mt-1 tool-url text-sm text-gray-600 dark:text-gray-400 break-all"></div>
+                <div class="mt-1 tool-url text-sm"></div>
               </div>
               <div>
                 <span class="font-medium text-gray-700 dark:text-gray-300">Type:</span>
@@ -6487,7 +6491,7 @@ async function viewTool(toolId) {
             <div class="space-y-3">
               <div>
                 <span class="font-medium text-gray-700 dark:text-gray-300">Description:</span>
-                <div class="mt-1 tool-description text-sm text-gray-600 dark:text-gray-400"></div>
+                <div class="mt-1 tool-description text-sm"></div>
               </div>
               <div>
                 <span class="font-medium text-gray-700 dark:text-gray-300">Tags:</span>
@@ -6903,13 +6907,10 @@ async function handleGatewayFormSubmit(e) {
             formData.append("oauth_config", JSON.stringify(oauthConfig));
         }
 
-        const response = await fetchWithTimeout(
-            `${window.ROOT_PATH}/admin/gateways`,
-            {
-                method: "POST",
-                body: formData,
-            },
-        );
+        const response = await fetch(`${window.ROOT_PATH}/admin/gateways`, {
+            method: "POST",
+            body: formData,
+        });
         const result = await response.json();
 
         if (!result || !result.success) {
@@ -6967,13 +6968,10 @@ async function handleResourceFormSubmit(e) {
         const isInactiveCheckedBool = isInactiveChecked("resources");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
 
-        const response = await fetchWithTimeout(
-            `${window.ROOT_PATH}/admin/resources`,
-            {
-                method: "POST",
-                body: formData,
-            },
-        );
+        const response = await fetch(`${window.ROOT_PATH}/admin/resources`, {
+            method: "POST",
+            body: formData,
+        });
         const result = await response.json();
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add Resource");
@@ -7025,13 +7023,10 @@ async function handlePromptFormSubmit(e) {
         const isInactiveCheckedBool = isInactiveChecked("prompts");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
 
-        const response = await fetchWithTimeout(
-            `${window.ROOT_PATH}/admin/prompts`,
-            {
-                method: "POST",
-                body: formData,
-            },
-        );
+        const response = await fetch(`${window.ROOT_PATH}/admin/prompts`, {
+            method: "POST",
+            body: formData,
+        });
         const result = await response.json();
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add prompt");
@@ -7131,14 +7126,10 @@ async function handleServerFormSubmit(e) {
         const isInactiveCheckedBool = isInactiveChecked("servers");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
 
-        const response = await fetchWithTimeout(
-            `${window.ROOT_PATH}/admin/servers`,
-            {
-                method: "POST",
-                body: formData,
-                redirect: "manual",
-            },
-        );
+        const response = await fetch(`${window.ROOT_PATH}/admin/servers`, {
+            method: "POST",
+            body: formData,
+        });
         const result = await response.json();
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add server.");
@@ -7214,13 +7205,10 @@ async function handleToolFormSubmit(event) {
         const isInactiveCheckedBool = isInactiveChecked("tools");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
 
-        const response = await fetchWithTimeout(
-            `${window.ROOT_PATH}/admin/tools`,
-            {
-                method: "POST",
-                body: formData,
-            },
-        );
+        const response = await fetch(`${window.ROOT_PATH}/admin/tools`, {
+            method: "POST",
+            body: formData,
+        });
         const result = await response.json();
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add tool");
@@ -10297,7 +10285,7 @@ async function testA2AAgent(agentId, agentName, endpointUrl) {
                 headers,
                 body: JSON.stringify(testPayload),
             },
-            10000, // 10 second timeout
+            window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT || 60000, // Use configurable timeout
         );
 
         if (!response.ok) {

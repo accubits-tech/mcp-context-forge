@@ -15,7 +15,6 @@ It also publishes event notifications for server changes.
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
-import uuid as uuid_module
 
 # Third-Party
 import httpx
@@ -349,9 +348,8 @@ class ServerService:
 
             # Set custom UUID if provided
             if server_in.id:
-                # Normalize UUID to hex format (no dashes) to match database storage
-                normalized_uuid = str(uuid_module.UUID(server_in.id)).replace("-", "")
-                db_server.id = normalized_uuid
+                logger.info(f"Setting custom UUID for server: {server_in.id}")
+                db_server.id = server_in.id
             db.add(db_server)
 
             # Associate tools, verifying each exists.
@@ -464,7 +462,7 @@ class ServerService:
             for tag in tags:
                 tag_conditions.append(func.json_contains(DbServer.tags, f'"{tag}"'))
             if tag_conditions:
-                query = query.where(func.or_(*tag_conditions))
+                query = query.where(*tag_conditions)
 
         servers = db.execute(query).scalars().all()
         return [self._convert_server_to_read(s) for s in servers]

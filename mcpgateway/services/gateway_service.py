@@ -560,6 +560,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 auth_type=auth_type,
                 auth_value=auth_value,
                 oauth_config=oauth_config,
+                passthrough_headers=gateway.passthrough_headers,
                 tools=tools,
                 resources=db_resources,
                 prompts=db_prompts,
@@ -889,6 +890,17 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     gateway.transport = gateway_update.transport
                 if gateway_update.tags is not None:
                     gateway.tags = gateway_update.tags
+                if gateway_update.passthrough_headers is not None:
+                    if isinstance(gateway_update.passthrough_headers, list):
+                        gateway.passthrough_headers = gateway_update.passthrough_headers
+                    else:
+                        if isinstance(gateway_update.passthrough_headers, str):
+                            parsed = [h.strip() for h in gateway_update.passthrough_headers.split(",") if h.strip()]
+                            gateway.passthrough_headers = parsed
+                        else:
+                            raise GatewayError("Invalid passthrough_headers format: must be list[str] or comma-separated string")
+
+                    logger.info("Updated passthrough_headers for gateway {gateway.id}: {gateway.passthrough_headers}")
 
                 if getattr(gateway, "auth_type", None) is not None:
                     gateway.auth_type = gateway_update.auth_type
@@ -1102,10 +1114,10 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 gateway.enabled = activate
                 gateway.reachable = reachable
                 gateway.updated_at = datetime.now(timezone.utc)
-
                 # Update tracking
                 if activate and reachable:
                     self._active_gateways.add(gateway.url)
+
                     # Try to initialize if activating
                     try:
                         capabilities, tools, resources, prompts = await self._initialize_gateway(gateway.url, gateway.auth_value, gateway.transport, gateway.auth_type, gateway.oauth_config)
@@ -1120,9 +1132,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                                 gateway.tools.append(
                                     DbTool(
                                         original_name=tool.name,
-                                        custom_name=tool.custom_name,
-                                        custom_name_slug=slugify(tool.custom_name),
-                                        display_name=generate_display_name(tool.custom_name),
+                                        display_name=generate_display_name(tool.name),
                                         url=gateway.url,
                                         description=tool.description,
                                         integration_type="MCP",  # Gateway-discovered tools are MCP type
@@ -1994,7 +2004,6 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     tools = [ToolCreate.model_validate(tool) for tool in tools]
                     if tools:
                         logger.info(f"Fetched {len(tools)} tools from gateway")
-
                     # Fetch resources if supported
                     resources = []
                     logger.debug(f"Checking for resources support: {capabilities.get('resources')}")

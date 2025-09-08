@@ -848,6 +848,8 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
 
     try:
         LOGGER.debug(f"User {get_user_email(user)} is adding a new server with name: {form['name']}")
+        server_id = form.get("id")
+        LOGGER.info(f" user input id::{server_id}")
         server = ServerCreate(
             id=form.get("id") or None,
             name=form.get("name"),
@@ -861,7 +863,6 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
     except KeyError as e:
         # Convert KeyError to ValidationError-like response
         return JSONResponse(content={"message": f"Missing required field: {e}", "success": False}, status_code=422)
-
     try:
         user_email = get_user_email(user)
         # Determine personal team for default assignment
@@ -1878,6 +1879,7 @@ async def admin_ui(
             "email_auth_enabled": getattr(settings, "email_auth_enabled", False),
             "is_admin": bool(user.get("is_admin") if isinstance(user, dict) else False),
             "user_teams": user_teams,
+            "mcpgateway_ui_tool_test_timeout": settings.mcpgateway_ui_tool_test_timeout,
         },
     )
 
