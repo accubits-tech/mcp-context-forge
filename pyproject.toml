@@ -81,6 +81,10 @@ dependencies = [
     "crewai>=0.80.0",
     "openapi-spec-validator>=0.7.0",
     "pyyaml>=6.0.2",
+    # API Documentation parsing support
+    "PyPDF2>=3.0.1",
+    "beautifulsoup4>=4.12.3",
+    "markdown>=3.7",
 ]
 
 # ----------------------------------------------------------------

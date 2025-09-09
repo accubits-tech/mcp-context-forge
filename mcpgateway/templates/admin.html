@@ -1753,6 +1753,259 @@
           </div>
         </div>
 
+        <!-- Generate Tools from API Documentation -->
+        <div class="bg-white shadow rounded-lg p-6 mb-4 dark:bg-gray-800">
+          <div class="flex justify-between items-center mb-4">
+            <div>
+              <h3 class="text-lg font-medium text-gray-900 dark:text-gray-100">Generate Tools from API Documentation</h3>
+              <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                Upload API documentation (PDF, HTML, Markdown, text) or provide a URL to automatically generate tools.
+                Supports both OpenAPI specifications and general API documentation.
+              </p>
+            </div>
+            <button
+              id="toggle-api-docs-section"
+              class="px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700"
+              onclick="toggleSection('api-docs-generator')"
+            >
+              Show Generator
+            </button>
+          </div>
+
+          <div id="api-docs-generator" class="hidden mt-4">
+            <!-- Tabs for Upload vs URL -->
+            <div class="border-b border-gray-200 dark:border-gray-700 mb-4">
+              <nav class="-mb-px flex space-x-8">
+                <button
+                  id="api-docs-upload-tab"
+                  class="api-docs-tab border-indigo-500 text-indigo-600 border-b-2 py-2 px-1 text-sm font-medium"
+                  onclick="switchApiDocsTab('upload')"
+                >
+                  📁 Upload File
+                </button>
+                <button
+                  id="api-docs-url-tab"
+                  class="api-docs-tab border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 border-b-2 py-2 px-1 text-sm font-medium"
+                  onclick="switchApiDocsTab('url')"
+                >
+                  🌐 From URL
+                </button>
+              </nav>
+            </div>
+
+            <!-- Upload API Documentation Form -->
+            <div id="api-docs-upload-form" class="api-docs-form">
+              <form id="api-docs-upload-form-element" enctype="multipart/form-data" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      API Documentation File
+                    </label>
+                    <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center hover:border-indigo-400">
+                      <input
+                        type="file"
+                        id="api-docs-file"
+                        name="file"
+                        accept=".pdf,.html,.htm,.md,.markdown,.txt"
+                        class="hidden"
+                        onchange="handleApiDocsFileSelect(this)"
+                      />
+                      <label for="api-docs-file" class="cursor-pointer">
+                        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                        <div class="mt-2">
+                          <span class="text-sm font-medium text-indigo-600 dark:text-indigo-400">Click to upload</span>
+                          <span class="text-sm text-gray-600 dark:text-gray-400"> or drag and drop</span>
+                        </div>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          PDF, HTML, Markdown, or text files
+                        </p>
+                      </label>
+                    </div>
+                    <div id="api-docs-file-info" class="mt-2 text-sm text-gray-600 dark:text-gray-400 hidden"></div>
+                  </div>
+
+                  <div class="space-y-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Format Hint
+                      </label>
+                      <select id="api-docs-format-hint" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300">
+                        <option value="auto">Auto-detect</option>
+                        <option value="pdf">PDF</option>
+                        <option value="html">HTML</option>
+                        <option value="markdown">Markdown</option>
+                        <option value="text">Plain Text</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        API Base URL
+                      </label>
+                      <input
+                        type="url"
+                        id="api-docs-base-url"
+                        placeholder="https://api.example.com"
+                        class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
+                      />
+                      <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Base URL for the API endpoints (required)
+                      </p>
+                    </div>
+
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Tags
+                      </label>
+                      <input
+                        type="text"
+                        id="api-docs-tags"
+                        placeholder="api, external, documentation"
+                        class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
+                      />
+                      <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Comma-separated tags for generated tools
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="flex items-center space-x-4">
+                  <label class="flex items-center">
+                    <input type="checkbox" id="api-docs-preview-only" class="mr-2" />
+                    <span class="text-sm text-gray-700 dark:text-gray-300">Preview only (don't create tools)</span>
+                  </label>
+                  <label class="flex items-center">
+                    <input type="checkbox" id="api-docs-enhance-with-ai" checked class="mr-2" />
+                    <span class="text-sm text-gray-700 dark:text-gray-300">Enhance with AI</span>
+                  </label>
+                </div>
+
+                <div class="flex space-x-3">
+                  <button
+                    type="button"
+                    onclick="processApiDocsUpload()"
+                    class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    id="api-docs-upload-btn"
+                  >
+                    Generate Tools
+                  </button>
+                  <button
+                    type="button"
+                    onclick="clearApiDocsUploadForm()"
+                    class="px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-400 dark:hover:bg-gray-500"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <!-- URL API Documentation Form -->
+            <div id="api-docs-url-form" class="api-docs-form hidden">
+              <form id="api-docs-url-form-element" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Documentation URL
+                    </label>
+                    <input
+                      type="url"
+                      id="api-docs-url"
+                      placeholder="https://docs.example.com/api"
+                      class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
+                      required
+                    />
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      URL to API documentation page
+                    </p>
+                  </div>
+
+                  <div class="space-y-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Format Hint
+                      </label>
+                      <select id="api-docs-url-format-hint" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300">
+                        <option value="auto">Auto-detect</option>
+                        <option value="html">HTML</option>
+                        <option value="markdown">Markdown</option>
+                        <option value="text">Plain Text</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        API Base URL
+                      </label>
+                      <input
+                        type="url"
+                        id="api-docs-url-base-url"
+                        placeholder="https://api.example.com"
+                        class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
+                      />
+                      <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Base URL for API endpoints (leave blank to infer)
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Tags
+                    </label>
+                    <input
+                      type="text"
+                      id="api-docs-url-tags"
+                      placeholder="api, external, documentation"
+                      class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
+                    />
+                  </div>
+
+                  <div class="flex items-center space-x-4">
+                    <label class="flex items-center">
+                      <input type="checkbox" id="api-docs-url-preview-only" class="mr-2" />
+                      <span class="text-sm text-gray-700 dark:text-gray-300">Preview only</span>
+                    </label>
+                    <label class="flex items-center">
+                      <input type="checkbox" id="api-docs-url-enhance-with-ai" checked class="mr-2" />
+                      <span class="text-sm text-gray-700 dark:text-gray-300">Enhance with AI</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="flex space-x-3">
+                  <button
+                    type="button"
+                    onclick="processApiDocsUrl()"
+                    class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    id="api-docs-url-btn"
+                  >
+                    Generate Tools
+                  </button>
+                  <button
+                    type="button"
+                    onclick="clearApiDocsUrlForm()"
+                    class="px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-400 dark:hover:bg-gray-500"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <!-- Results Section -->
+            <div id="api-docs-results" class="hidden mt-6 p-4 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-900">
+              <h4 class="font-medium text-gray-900 dark:text-gray-100 mb-3">Processing Results</h4>
+              <div id="api-docs-results-content"></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Tag Filtering for Tools -->
         <div class="bg-white shadow rounded-lg p-4 mb-4 dark:bg-gray-800">
           <div class="flex items-center space-x-4">

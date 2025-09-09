@@ -11798,3 +11798,392 @@ window.selectAllItems = selectAllItems;
 window.selectNoneItems = selectNoneItems;
 window.selectOnlyCustom = selectOnlyCustom;
 window.resetImportSelection = resetImportSelection;
+
+// ===================================================================
+// API DOCUMENTATION TOOL GENERATION
+// ===================================================================
+
+/**
+ * Toggle the visibility of the API documentation generator section
+ */
+function toggleSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    const button = document.getElementById("toggle-api-docs-section");
+    
+    if (section && button) {
+        if (section.classList.contains("hidden")) {
+            section.classList.remove("hidden");
+            button.textContent = "Hide Generator";
+        } else {
+            section.classList.add("hidden");
+            button.textContent = "Show Generator";
+        }
+    }
+}
+
+/**
+ * Switch between API documentation tabs
+ */
+function switchApiDocsTab(tabName) {
+    // Update tab buttons
+    const tabs = document.querySelectorAll(".api-docs-tab");
+    tabs.forEach(tab => {
+        tab.classList.remove("border-indigo-500", "text-indigo-600");
+        tab.classList.add("border-transparent", "text-gray-500");
+    });
+    
+    const activeTab = document.getElementById(`api-docs-${tabName}-tab`);
+    if (activeTab) {
+        activeTab.classList.remove("border-transparent", "text-gray-500");
+        activeTab.classList.add("border-indigo-500", "text-indigo-600");
+    }
+    
+    // Update form visibility
+    const forms = document.querySelectorAll(".api-docs-form");
+    forms.forEach(form => form.classList.add("hidden"));
+    
+    const activeForm = document.getElementById(`api-docs-${tabName}-form`);
+    if (activeForm) {
+        activeForm.classList.remove("hidden");
+    }
+}
+
+/**
+ * Handle file selection for API documentation upload
+ */
+function handleApiDocsFileSelect(input) {
+    const fileInfo = document.getElementById("api-docs-file-info");
+    
+    if (input.files && input.files[0]) {
+        const file = input.files[0];
+        const sizeInMB = (file.size / 1024 / 1024).toFixed(2);
+        
+        fileInfo.innerHTML = `
+            <div class="flex items-center space-x-2">
+                <svg class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span>Selected: ${file.name} (${sizeInMB} MB)</span>
+            </div>
+        `;
+        fileInfo.classList.remove("hidden");
+    } else {
+        fileInfo.classList.add("hidden");
+    }
+}
+
+/**
+ * Process API documentation upload
+ */
+async function processApiDocsUpload() {
+    const fileInput = document.getElementById("api-docs-file");
+    const baseUrlInput = document.getElementById("api-docs-base-url");
+    const formatHintSelect = document.getElementById("api-docs-format-hint");
+    const tagsInput = document.getElementById("api-docs-tags");
+    const previewOnlyCheckbox = document.getElementById("api-docs-preview-only");
+    const enhanceWithAiCheckbox = document.getElementById("api-docs-enhance-with-ai");
+    const uploadBtn = document.getElementById("api-docs-upload-btn");
+    
+    // Validate inputs
+    if (!fileInput.files || !fileInput.files[0]) {
+        showApiDocsError("Please select a file to upload.");
+        return;
+    }
+    
+    if (!baseUrlInput.value.trim()) {
+        showApiDocsError("Please provide a base URL for the API.");
+        return;
+    }
+    
+    // Disable button and show loading
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = "Processing...";
+    
+    try {
+        const formData = new FormData();
+        formData.append("file", fileInput.files[0]);
+        formData.append("format_hint", formatHintSelect.value);
+        formData.append("base_url", baseUrlInput.value.trim());
+        formData.append("tags", tagsInput.value.trim());
+        formData.append("preview_only", previewOnlyCheckbox.checked);
+        formData.append("enhance_with_ai", enhanceWithAiCheckbox.checked);
+        
+        const response = await fetch(`${window.ROOT_PATH || ""}/tools/api-docs/upload`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Authorization": `Bearer ${getCookie("jwt_token") || ""}`,
+            },
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            showApiDocsResults(result, previewOnlyCheckbox.checked ? "preview" : "upload");
+            if (!previewOnlyCheckbox.checked && result.success) {
+                // Refresh the tools table
+                setTimeout(() => window.location.reload(), 2000);
+            }
+        } else {
+            showApiDocsError(result.detail || "Failed to process API documentation");
+        }
+        
+    } catch (error) {
+        console.error("API documentation upload error:", error);
+        showApiDocsError("An error occurred while processing the documentation: " + error.message);
+    } finally {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = "Generate Tools";
+    }
+}
+
+/**
+ * Process API documentation from URL
+ */
+async function processApiDocsUrl() {
+    const urlInput = document.getElementById("api-docs-url");
+    const baseUrlInput = document.getElementById("api-docs-url-base-url");
+    const formatHintSelect = document.getElementById("api-docs-url-format-hint");
+    const tagsInput = document.getElementById("api-docs-url-tags");
+    const previewOnlyCheckbox = document.getElementById("api-docs-url-preview-only");
+    const enhanceWithAiCheckbox = document.getElementById("api-docs-url-enhance-with-ai");
+    const urlBtn = document.getElementById("api-docs-url-btn");
+    
+    // Validate inputs
+    if (!urlInput.value.trim()) {
+        showApiDocsError("Please provide a URL to the API documentation.");
+        return;
+    }
+    
+    // Disable button and show loading
+    urlBtn.disabled = true;
+    urlBtn.textContent = "Processing...";
+    
+    try {
+        const payload = {
+            url: urlInput.value.trim(),
+            format_hint: formatHintSelect.value,
+            base_url: baseUrlInput.value.trim() || null,
+            tags: tagsInput.value.trim(),
+            preview_only: previewOnlyCheckbox.checked,
+            enhance_with_ai: enhanceWithAiCheckbox.checked
+        };
+        
+        const response = await fetch(`${window.ROOT_PATH || ""}/tools/api-docs/url`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${getCookie("jwt_token") || ""}`,
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            showApiDocsResults(result, previewOnlyCheckbox.checked ? "preview" : "url");
+            if (!previewOnlyCheckbox.checked && result.success) {
+                // Refresh the tools table
+                setTimeout(() => window.location.reload(), 2000);
+            }
+        } else {
+            showApiDocsError(result.detail || "Failed to process API documentation");
+        }
+        
+    } catch (error) {
+        console.error("API documentation URL error:", error);
+        showApiDocsError("An error occurred while processing the documentation: " + error.message);
+    } finally {
+        urlBtn.disabled = false;
+        urlBtn.textContent = "Generate Tools";
+    }
+}
+
+/**
+ * Show API documentation processing results
+ */
+function showApiDocsResults(result, mode) {
+    const resultsDiv = document.getElementById("api-docs-results");
+    const resultsContent = document.getElementById("api-docs-results-content");
+    
+    if (!resultsDiv || !resultsContent) return;
+    
+    let html = "";
+    
+    if (result.success) {
+        const modeText = mode === "preview" ? "Preview Results" : "Processing Results";
+        const actionText = mode === "preview" ? "would create" : "created";
+        
+        html += `
+            <div class="flex items-center space-x-2 mb-4">
+                <svg class="h-5 w-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="font-medium text-green-700 dark:text-green-400">${modeText}</span>
+            </div>
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Successfully ${actionText} ${result.tool_count} tools from API documentation.
+            </p>
+        `;
+        
+        // Show tools if in preview mode or if tools are returned
+        if (result.tools && result.tools.length > 0) {
+            html += `
+                <div class="mt-4">
+                    <h5 class="font-medium text-gray-900 dark:text-gray-100 mb-2">Generated Tools:</h5>
+                    <div class="space-y-2 max-h-60 overflow-y-auto">
+            `;
+            
+            result.tools.forEach(tool => {
+                const confidenceBadge = tool.confidence ? 
+                    `<span class="ml-2 px-2 py-0.5 rounded text-xs ${tool.confidence >= 8 ? "bg-green-100 text-green-800" : tool.confidence >= 6 ? "bg-yellow-100 text-yellow-800" : "bg-red-100 text-red-800"}">
+                        Confidence: ${tool.confidence}/10
+                    </span>` : "";
+                
+                html += `
+                    <div class="flex items-start justify-between p-3 border border-gray-200 dark:border-gray-600 rounded">
+                        <div class="flex-1">
+                            <div class="flex items-center">
+                                <span class="font-medium text-sm text-gray-900 dark:text-gray-100">${escapeHtml(tool.name)}</span>
+                                <span class="ml-2 px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">${tool.method}</span>
+                                ${confidenceBadge}
+                                ${tool.requires_auth ? "<span class=\"ml-2 px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800\">🔒 Auth</span>" : ""}
+                            </div>
+                            <p class="text-xs text-gray-600 dark:text-gray-400 mt-1">${escapeHtml(tool.description)}</p>
+                            <p class="text-xs text-gray-500 dark:text-gray-500 mt-1">URL: ${escapeHtml(tool.url)}</p>
+                            ${tool.tags && tool.tags.length > 0 ? 
+                                `<div class="mt-1">${tool.tags.map(tag => `<span class="inline-block px-1 py-0.5 rounded text-xs bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 mr-1">${escapeHtml(tag)}</span>`).join("")}</div>` 
+                                : ""
+                            }
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += "</div></div>";
+        }
+        
+        // Show created tools if not in preview mode
+        if (result.created_tools && result.created_tools.length > 0) {
+            html += `
+                <div class="mt-4">
+                    <h5 class="font-medium text-gray-900 dark:text-gray-100 mb-2">Created Tools:</h5>
+                    <div class="space-y-1">
+            `;
+            
+            result.created_tools.forEach(tool => {
+                html += `
+                    <div class="text-sm">
+                        <span class="font-medium text-indigo-600 dark:text-indigo-400">${escapeHtml(tool.name)}</span>
+                        <span class="text-gray-500 dark:text-gray-400"> (ID: ${tool.id})</span>
+                    </div>
+                `;
+            });
+            
+            html += "</div></div>";
+        }
+        
+        // Show errors if any
+        if (result.errors && result.errors.length > 0) {
+            html += `
+                <div class="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
+                    <h5 class="font-medium text-yellow-800 dark:text-yellow-400 mb-2">Warnings:</h5>
+                    <ul class="text-sm text-yellow-700 dark:text-yellow-300 space-y-1">
+            `;
+            
+            result.errors.forEach(error => {
+                html += `<li>• ${escapeHtml(error)}</li>`;
+            });
+            
+            html += "</ul></div>";
+        }
+        
+    } else {
+        html += `
+            <div class="flex items-center space-x-2 mb-4">
+                <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="font-medium text-red-700 dark:text-red-400">Processing Failed</span>
+            </div>
+            <p class="text-sm text-red-600 dark:text-red-400">
+                ${escapeHtml(result.message || "An error occurred while processing the API documentation.")}
+            </p>
+        `;
+    }
+    
+    resultsContent.innerHTML = html;
+    resultsDiv.classList.remove("hidden");
+}
+
+/**
+ * Show API documentation error message
+ */
+function showApiDocsError(message) {
+    const resultsDiv = document.getElementById("api-docs-results");
+    const resultsContent = document.getElementById("api-docs-results-content");
+    
+    if (!resultsDiv || !resultsContent) return;
+    
+    resultsContent.innerHTML = `
+        <div class="flex items-center space-x-2 mb-4">
+            <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <span class="font-medium text-red-700 dark:text-red-400">Error</span>
+        </div>
+        <p class="text-sm text-red-600 dark:text-red-400">${escapeHtml(message)}</p>
+    `;
+    
+    resultsDiv.classList.remove("hidden");
+}
+
+/**
+ * Clear API documentation upload form
+ */
+function clearApiDocsUploadForm() {
+    document.getElementById("api-docs-file").value = "";
+    document.getElementById("api-docs-base-url").value = "";
+    document.getElementById("api-docs-format-hint").value = "auto";
+    document.getElementById("api-docs-tags").value = "";
+    document.getElementById("api-docs-preview-only").checked = false;
+    document.getElementById("api-docs-enhance-with-ai").checked = true;
+    
+    const fileInfo = document.getElementById("api-docs-file-info");
+    if (fileInfo) {
+        fileInfo.classList.add("hidden");
+    }
+    
+    const results = document.getElementById("api-docs-results");
+    if (results) {
+        results.classList.add("hidden");
+    }
+}
+
+/**
+ * Clear API documentation URL form
+ */
+function clearApiDocsUrlForm() {
+    document.getElementById("api-docs-url").value = "";
+    document.getElementById("api-docs-url-base-url").value = "";
+    document.getElementById("api-docs-url-format-hint").value = "auto";
+    document.getElementById("api-docs-url-tags").value = "";
+    document.getElementById("api-docs-url-preview-only").checked = false;
+    document.getElementById("api-docs-url-enhance-with-ai").checked = true;
+    
+    const results = document.getElementById("api-docs-results");
+    if (results) {
+        results.classList.add("hidden");
+    }
+}
+
+// Expose API documentation functions to global scope
+window.toggleSection = toggleSection;
+window.switchApiDocsTab = switchApiDocsTab;
+window.handleApiDocsFileSelect = handleApiDocsFileSelect;
+window.processApiDocsUpload = processApiDocsUpload;
+window.processApiDocsUrl = processApiDocsUrl;
+window.clearApiDocsUploadForm = clearApiDocsUploadForm;
+window.clearApiDocsUrlForm = clearApiDocsUrlForm;

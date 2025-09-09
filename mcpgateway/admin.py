@@ -7069,23 +7069,6 @@ async def admin_login(credentials: LoginRequest) -> LoginResponse:
         )
 
 
-@admin_router.post("/logout")
-async def admin_logout(user: str = Depends(require_auth)) -> Dict[str, str]:
-    """
-    Logout the current admin user.
-
-    This endpoint provides a logout mechanism for authenticated users.
-    The actual token invalidation should be handled client-side by
-    discarding the JWT token.
-
-    Args:
-        user: Authenticated user from require_auth dependency
-
-    Returns:
-        Dict with success message
-    """
-    logger.info(f"User logged out: {user}")
-    return {"message": "Logged out successfully"}
 
 
 ####################

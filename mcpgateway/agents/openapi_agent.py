@@ -26,7 +26,7 @@ logger = logging_service.get_logger(__name__)
 
 
 class OpenAPIAgent:
-    """CrewAI agent for OpenAPI specification analysis and tool generation."""
+    """CrewAI agent for OpenAPI specification and API documentation analysis with tool generation."""
 
     def __init__(self, llm_endpoint: str = "http://20.66.97.208/v1/chat/completions"):
         """Initialize the OpenAPI agent.
@@ -50,12 +50,14 @@ class OpenAPIAgent:
         # Create the agent only if LLM is available
         if self.llm:
             self.agent = Agent(
-                role="OpenAPI Specification Analyst",
-                goal="Analyze OpenAPI specifications and generate comprehensive, accurate tool descriptions and metadata for API endpoints",
-                backstory="""You are an expert API analyst with deep knowledge of OpenAPI/Swagger specifications.
-                You excel at understanding API endpoints, parameters, authentication methods, and generating
-                clear, accurate descriptions for tools. You pay special attention to security considerations,
-                parameter validation, and proper HTTP method usage.""",
+                role="API Documentation Analyst",
+                goal="Analyze OpenAPI specifications and various API documentation formats to generate comprehensive, accurate tool descriptions and metadata for API endpoints",
+                backstory="""You are an expert API analyst with deep knowledge of OpenAPI/Swagger specifications,
+                API documentation formats (PDF, HTML, Markdown, plain text), and REST API design patterns.
+                You excel at understanding API endpoints from various documentation sources, parameters, authentication methods, 
+                and generating clear, accurate descriptions for tools. You pay special attention to security considerations,
+                parameter validation, proper HTTP method usage, and can intelligently extract API information from 
+                incomplete or unstructured documentation.""",
                 verbose=True,
                 allow_delegation=False,
                 llm=self.llm
@@ -503,3 +505,406 @@ Return as a structured JSON object.
                 "security_analysis": {},
                 "metadata": {}
             }
+
+    async def analyze_api_documentation(
+        self, 
+        doc_structure: Dict[str, Any], 
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Analyze API documentation structure and provide insights for tool generation.
+
+        Args:
+            doc_structure: Parsed API documentation structure from parser service
+            context: Additional context for analysis
+
+        Returns:
+            Analysis results with recommendations
+        """
+        # Check if agent is available
+        if not self.agent:
+            logger.warning("CrewAI agent not available, returning basic analysis")
+            return self._generate_basic_doc_analysis(doc_structure, context)
+            
+        try:
+            # Create analysis task
+            task = Task(
+                description=f"""Analyze the following API documentation structure and provide detailed insights for tool generation:
+
+API Documentation:
+{json.dumps(doc_structure, indent=2)}
+
+Context: {json.dumps(context or {}, indent=2)}
+
+This documentation was parsed from {doc_structure.get('source_format', 'unknown')} format.
+It contains {len(doc_structure.get('potential_endpoints', []))} potential API endpoints.
+
+Please provide a comprehensive analysis including:
+
+1. **API Overview**: 
+   - What does this API appear to do based on the documentation?
+   - What is the likely purpose and domain of this API?
+   - Quality assessment of the documentation
+
+2. **Endpoint Analysis**: For each detected endpoint:
+   - Validate if it's a real API endpoint
+   - Determine the most likely HTTP method if not specified
+   - Infer the purpose and functionality
+   - Identify required vs optional parameters
+   - Suggest appropriate parameter types and validation
+   - Assess potential security implications
+
+3. **Authentication Analysis**: 
+   - What authentication methods are mentioned or implied?
+   - Security considerations for the detected endpoints
+   - Recommended authentication setup
+
+4. **Parameter Extraction**:
+   - Extract and validate parameters from documentation context
+   - Suggest parameter types, descriptions, and constraints
+   - Identify path parameters, query parameters, and request body structure
+
+5. **Tool Generation Recommendations**:
+   - Suggested tool names (user-friendly, descriptive)
+   - Enhanced tool descriptions
+   - Confidence ratings for each detected endpoint (1-10)
+   - Grouping and tagging recommendations
+   - Priority levels for implementation
+
+6. **Data Quality Assessment**:
+   - Reliability of extracted information
+   - Missing information that should be requested from user
+   - Confidence level for the overall analysis
+
+Format your response as a structured JSON object with the above sections.
+Include specific recommendations for improving the generated tools.
+""",
+                agent=self.agent,
+                expected_output="A structured JSON analysis of the API documentation with detailed recommendations for tool generation and confidence ratings"
+            )
+
+            # Create crew and execute
+            crew = Crew(
+                agents=[self.agent],
+                tasks=[task],
+                process=Process.sequential,
+                verbose=True
+            )
+
+            result = crew.kickoff()
+            
+            # Parse the result
+            try:
+                if hasattr(result, 'raw'):
+                    analysis = json.loads(result.raw)
+                else:
+                    analysis = json.loads(str(result))
+            except json.JSONDecodeError:
+                # If the result isn't valid JSON, create a basic structure
+                logger.warning("Agent response was not valid JSON, creating basic analysis")
+                analysis = {
+                    "api_overview": str(result),
+                    "endpoint_analysis": {},
+                    "authentication_analysis": {},
+                    "parameter_extraction": {},
+                    "tool_generation_recommendations": {},
+                    "data_quality_assessment": {"confidence": "low", "issues": ["JSON parsing failed"]}
+                }
+
+            logger.info(f"Completed API documentation analysis for {len(doc_structure.get('potential_endpoints', []))} endpoints")
+            return analysis
+
+        except Exception as e:
+            logger.error(f"Failed to analyze API documentation: {str(e)}")
+            # Return a basic analysis structure
+            return {
+                "api_overview": f"API documentation with {len(doc_structure.get('potential_endpoints', []))} potential endpoints",
+                "endpoint_analysis": {},
+                "authentication_analysis": {},
+                "parameter_extraction": {},
+                "tool_generation_recommendations": {},
+                "data_quality_assessment": {"confidence": "low", "issues": [str(e)]},
+                "error": str(e)
+            }
+
+    def _generate_basic_doc_analysis(self, doc_structure: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Generate basic analysis without LLM when agent is not available.
+
+        Args:
+            doc_structure: API documentation structure
+            context: Optional context
+
+        Returns:
+            Basic analysis structure
+        """
+        endpoints = doc_structure.get('potential_endpoints', [])
+        auth_info = doc_structure.get('authentication_info', {})
+        source_format = doc_structure.get('source_format', 'unknown')
+        
+        # Basic endpoint analysis
+        endpoint_analysis = {}
+        for endpoint in endpoints:
+            path = endpoint.get('path', '')
+            method = endpoint.get('method', 'GET')
+            
+            endpoint_analysis[f"{method} {path}"] = {
+                "method": method,
+                "path": path,
+                "confidence": 7 if method != 'GET' else 8,  # Slightly lower confidence for non-GET defaults
+                "inferred_purpose": self._infer_endpoint_purpose(method, path),
+                "context_available": bool(endpoint.get('context', '').strip())
+            }
+        
+        # Basic parameter extraction from detected parameters
+        parameter_analysis = {}
+        for param in doc_structure.get('parameters', []):
+            param_name = param.get('name', '')
+            if param_name:
+                parameter_analysis[param_name] = {
+                    "type": param.get('type', 'query'),
+                    "description": param.get('description', f'Parameter: {param_name}'),
+                    "confidence": 6
+                }
+        
+        return {
+            "api_overview": f"{doc_structure.get('title', 'API Documentation')} - {len(endpoints)} endpoints detected from {source_format} format",
+            "endpoint_analysis": endpoint_analysis,
+            "authentication_analysis": {
+                "detected_methods": auth_info.get('methods', []),
+                "confidence": 5 if auth_info.get('methods') else 3,
+                "recommendations": ["Manual authentication review required"]
+            },
+            "parameter_extraction": parameter_analysis,
+            "tool_generation_recommendations": {
+                "total_endpoints": len(endpoints),
+                "high_confidence_endpoints": len([e for e in endpoints if e.get('context')]),
+                "recommended_for_generation": len([e for e in endpoints if len(e.get('path', '')) > 1])
+            },
+            "data_quality_assessment": {
+                "confidence": "medium" if len(endpoints) > 0 else "low",
+                "source_format": source_format,
+                "content_length": doc_structure.get('content_length', 0),
+                "issues": self._assess_basic_quality_issues(doc_structure),
+                "ai_enhanced": False
+            },
+            "metadata": {
+                "generated_by": "basic_doc_analysis",
+                "ai_enhanced": False,
+                "source_format": source_format
+            }
+        }
+
+    def _infer_endpoint_purpose(self, method: str, path: str) -> str:
+        """Infer the purpose of an endpoint based on method and path.
+
+        Args:
+            method: HTTP method
+            path: API path
+
+        Returns:
+            Inferred purpose description
+        """
+        method_purposes = {
+            'GET': 'Retrieve',
+            'POST': 'Create or process',
+            'PUT': 'Update or replace',
+            'DELETE': 'Delete',
+            'PATCH': 'Partially update'
+        }
+        
+        action = method_purposes.get(method.upper(), 'Interact with')
+        
+        # Extract resource from path
+        path_parts = [part for part in path.split('/') if part and not part.startswith('{')]
+        if path_parts:
+            resource = path_parts[-1].replace('_', ' ').replace('-', ' ')
+            return f"{action} {resource}"
+        
+        return f"{action} resource"
+
+    def _assess_basic_quality_issues(self, doc_structure: Dict[str, Any]) -> List[str]:
+        """Assess basic quality issues with the documentation.
+
+        Args:
+            doc_structure: Parsed documentation structure
+
+        Returns:
+            List of quality issues
+        """
+        issues = []
+        
+        endpoints = doc_structure.get('potential_endpoints', [])
+        if not endpoints:
+            issues.append("No API endpoints detected")
+        
+        # Check for endpoints with minimal context
+        low_context_count = len([e for e in endpoints if len(e.get('context', '').strip()) < 50])
+        if low_context_count > len(endpoints) / 2:
+            issues.append("Many endpoints lack sufficient context for accurate analysis")
+        
+        # Check for authentication information
+        if not doc_structure.get('authentication_info', {}).get('methods'):
+            issues.append("No authentication information detected")
+        
+        # Check content length
+        content_length = doc_structure.get('content_length', 0)
+        if content_length < 1000:
+            issues.append("Documentation appears to be very short - may be incomplete")
+        
+        # Check for parameter information
+        if not doc_structure.get('parameters'):
+            issues.append("No parameter information detected")
+        
+        return issues
+
+    async def enhance_tools_from_documentation(
+        self,
+        tools: List[Dict[str, Any]],
+        analysis: Dict[str, Any],
+        doc_structure: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Enhance tool configurations using AI analysis of documentation.
+
+        Args:
+            tools: List of basic tool configurations
+            analysis: Analysis results from analyze_api_documentation
+            doc_structure: Original documentation structure
+
+        Returns:
+            Enhanced tool configurations
+        """
+        # Check if agent is available
+        if not self.agent:
+            logger.warning("CrewAI agent not available, returning tools with basic enhancement")
+            return self._enhance_tools_basic(tools, analysis, doc_structure)
+            
+        try:
+            # Create enhancement task
+            task = Task(
+                description=f"""Based on the API documentation analysis, enhance these tool configurations:
+
+Original Analysis:
+{json.dumps(analysis, indent=2)}
+
+Tools to Enhance:
+{json.dumps(tools, indent=2)}
+
+Original Documentation Context:
+{json.dumps({"title": doc_structure.get("title"), "source_format": doc_structure.get("source_format"), "auth_info": doc_structure.get("authentication_info")}, indent=2)}
+
+For each tool, improve:
+
+1. **Name Enhancement**: 
+   - Make names more descriptive and user-friendly
+   - Follow camelCase convention
+   - Avoid generic names like "getRootPath"
+
+2. **Description Enhancement**:
+   - Write clear, comprehensive descriptions
+   - Explain what the endpoint does and returns
+   - Include important usage notes or warnings
+
+3. **Parameter Enhancement**:
+   - Add detailed parameter descriptions
+   - Suggest appropriate types and constraints
+   - Indicate required vs optional parameters clearly
+
+4. **Tag Enhancement**:
+   - Add relevant, searchable tags
+   - Include functional tags (e.g., "user-management", "data-retrieval")
+   - Add security-related tags where appropriate
+
+5. **Authentication Setup**:
+   - Configure appropriate authentication based on analysis
+   - Set placeholder values that are clearly marked for replacement
+
+6. **Annotations Enhancement**:
+   - Add helpful metadata and hints
+   - Include confidence ratings from analysis
+   - Add warnings for destructive operations
+
+Return the enhanced tools as a JSON array maintaining the original structure.
+Focus on making tools more discoverable, understandable, and safe to use.
+""",
+                agent=self.agent,
+                expected_output="A JSON array of enhanced tool configurations with improved names, descriptions, parameters, and metadata"
+            )
+
+            # Create crew and execute
+            crew = Crew(
+                agents=[self.agent],
+                tasks=[task],
+                process=Process.sequential,
+                verbose=True
+            )
+
+            result = crew.kickoff()
+
+            # Parse the result
+            try:
+                if hasattr(result, 'raw'):
+                    enhanced_tools = json.loads(result.raw)
+                else:
+                    enhanced_tools = json.loads(str(result))
+
+                if isinstance(enhanced_tools, list):
+                    logger.info(f"Enhanced {len(enhanced_tools)} tool descriptions using API documentation analysis")
+                    return enhanced_tools
+                else:
+                    logger.warning("Agent did not return a list, returning basic enhanced tools")
+                    return self._enhance_tools_basic(tools, analysis, doc_structure)
+
+            except json.JSONDecodeError:
+                logger.warning("Agent response was not valid JSON, returning basic enhanced tools")
+                return self._enhance_tools_basic(tools, analysis, doc_structure)
+
+        except Exception as e:
+            logger.error(f"Failed to enhance tools from documentation: {str(e)}")
+            return self._enhance_tools_basic(tools, analysis, doc_structure)
+
+    def _enhance_tools_basic(
+        self,
+        tools: List[Dict[str, Any]],
+        analysis: Dict[str, Any],
+        doc_structure: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Basic tool enhancement without AI when agent is not available.
+
+        Args:
+            tools: Original tools
+            analysis: Analysis results
+            doc_structure: Documentation structure
+
+        Returns:
+            Basically enhanced tools
+        """
+        enhanced_tools = []
+        endpoint_analysis = analysis.get('endpoint_analysis', {})
+        
+        for tool in tools:
+            enhanced_tool = tool.copy()
+            
+            # Try to find matching endpoint analysis
+            method = tool.get('request_type', 'GET')
+            path = tool.get('annotations', {}).get('api_doc_path', '')
+            endpoint_key = f"{method} {path}"
+            
+            endpoint_info = endpoint_analysis.get(endpoint_key, {})
+            
+            # Enhance description if we have analysis
+            if endpoint_info.get('inferred_purpose'):
+                enhanced_tool['description'] = f"{endpoint_info['inferred_purpose']} - {enhanced_tool.get('description', '')}"
+            
+            # Add confidence annotation
+            confidence = endpoint_info.get('confidence', 5)
+            if 'annotations' not in enhanced_tool:
+                enhanced_tool['annotations'] = {}
+            enhanced_tool['annotations']['confidence_rating'] = confidence
+            enhanced_tool['annotations']['ai_enhanced'] = False
+            enhanced_tool['annotations']['enhancement_source'] = 'basic_analysis'
+            
+            # Add source format information
+            enhanced_tool['annotations']['documentation_format'] = doc_structure.get('source_format', 'unknown')
+            
+            enhanced_tools.append(enhanced_tool)
+        
+        return enhanced_tools
