@@ -197,7 +197,7 @@ services:
     restart: unless-stopped
     networks: [mcpnet]
     ports:
-      - "5540:5540"                 # Redis Insight UI (default 5540)
+      - "5541:5540"                 # Redis Insight UI (default 5540)
     depends_on:          # Default stack: Postgres + Redis
       redis:
         condition: service_started
