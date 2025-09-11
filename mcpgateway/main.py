@@ -2052,6 +2052,7 @@ async def toggle_tool_status(
 # OpenAPI Tools APIs   #
 ########################
 
+
 @tool_router.post("/openapi/upload", response_model=Dict[str, Any])
 async def upload_openapi_spec(
     file: UploadFile = File(...),
@@ -2089,7 +2090,7 @@ async def upload_openapi_spec(
 
         # Determine content type from file extension
         content_type = "json"
-        if file.filename and (file.filename.endswith('.yaml') or file.filename.endswith('.yml')):
+        if file.filename and (file.filename.endswith(".yaml") or file.filename.endswith(".yml")):
             content_type = "yaml"
 
         # Parse additional tags
@@ -2098,7 +2099,7 @@ async def upload_openapi_spec(
             additional_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
         # Parse OpenAPI specification
-        spec = await openapi_service.parse_openapi_spec(content.decode('utf-8'), content_type)
+        spec = await openapi_service.parse_openapi_spec(content.decode("utf-8"), content_type)
 
         if preview_only:
             # Return preview without creating tools
@@ -2106,22 +2107,13 @@ async def upload_openapi_spec(
             return {
                 "status": "preview",
                 "message": f"Preview generated from {file.filename}",
-                "api_info": {
-                    "title": spec.get("info", {}).get("title", "Unknown API"),
-                    "version": spec.get("info", {}).get("version", "unknown"),
-                    "openapi_version": spec.get("openapi", "unknown")
-                },
+                "api_info": {"title": spec.get("info", {}).get("title", "Unknown API"), "version": spec.get("info", {}).get("version", "unknown"), "openapi_version": spec.get("openapi", "unknown")},
                 "tool_count": len(previews),
-                "tools": previews
+                "tools": previews,
             }
 
         # Generate tools from specification
-        tools = await openapi_service.generate_tools_from_spec(
-            spec,
-            base_url=base_url,
-            gateway_id=gateway_id,
-            tags=additional_tags
-        )
+        tools = await openapi_service.generate_tools_from_spec(spec, base_url=base_url, gateway_id=gateway_id, tags=additional_tags)
 
         # Enhance tools with AI if requested
         if enhance_with_ai and tools:
@@ -2143,7 +2135,7 @@ async def upload_openapi_spec(
                         "annotations": tool.annotations,
                         "requires_auth": tool.auth is not None,
                         "auth_type": tool.auth.auth_type if tool.auth else None,
-                        "input_schema": tool.input_schema
+                        "input_schema": tool.input_schema,
                     }
                     for tool in tools
                 ]
@@ -2177,7 +2169,7 @@ async def upload_openapi_spec(
                 # Note: Using a mock request for metadata capture since file upload doesn't have standard request
                 class MockRequest:
                     headers = {}
-                    client = type('Client', (), {'host': 'unknown'})()
+                    client = type("Client", (), {"host": "unknown"})()
 
                 metadata = MetadataCapture.extract_creation_metadata(MockRequest(), user)
                 metadata["created_via"] = "openapi_upload"
@@ -2190,30 +2182,23 @@ async def upload_openapi_spec(
                     created_via=metadata["created_via"],
                     created_user_agent=metadata["created_user_agent"],
                     import_batch_id=metadata.get("import_batch_id"),
-                    federation_source=metadata.get("federation_source")
+                    federation_source=metadata.get("federation_source"),
                 )
                 created_tools.append(created_tool.model_dump(by_alias=True))
 
             except Exception as tool_error:
                 logger.error(f"Failed to create tool {tool.name}: {str(tool_error)}")
-                failed_tools.append({
-                    "name": tool.name,
-                    "error": str(tool_error)
-                })
+                failed_tools.append({"name": tool.name, "error": str(tool_error)})
 
         return {
             "status": "success",
             "message": f"Processed OpenAPI specification from {file.filename}",
-            "api_info": {
-                "title": spec.get("info", {}).get("title", "Unknown API"),
-                "version": spec.get("info", {}).get("version", "unknown"),
-                "openapi_version": spec.get("openapi", "unknown")
-            },
+            "api_info": {"title": spec.get("info", {}).get("title", "Unknown API"), "version": spec.get("info", {}).get("version", "unknown"), "openapi_version": spec.get("openapi", "unknown")},
             "tools_created": len(created_tools),
             "tools_failed": len(failed_tools),
             "created_tools": created_tools,
             "failed_tools": failed_tools,
-            "ai_enhanced": enhance_with_ai and len(tools) > 0
+            "ai_enhanced": enhance_with_ai and len(tools) > 0,
         }
 
     except OpenAPIValidationError as e:
@@ -2264,6 +2249,7 @@ async def process_openapi_url(
 
         # Fetch OpenAPI specification from URL
         import httpx
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url)
             response.raise_for_status()
@@ -2271,7 +2257,7 @@ async def process_openapi_url(
 
         # Determine content type from response headers or URL
         content_type = "json"
-        if "yaml" in response.headers.get("content-type", "").lower() or url.endswith(('.yaml', '.yml')):
+        if "yaml" in response.headers.get("content-type", "").lower() or url.endswith((".yaml", ".yml")):
             content_type = "yaml"
 
         # Parse additional tags
@@ -2289,22 +2275,13 @@ async def process_openapi_url(
                 "status": "preview",
                 "message": f"Preview generated from {url}",
                 "source_url": url,
-                "api_info": {
-                    "title": spec.get("info", {}).get("title", "Unknown API"),
-                    "version": spec.get("info", {}).get("version", "unknown"),
-                    "openapi_version": spec.get("openapi", "unknown")
-                },
+                "api_info": {"title": spec.get("info", {}).get("title", "Unknown API"), "version": spec.get("info", {}).get("version", "unknown"), "openapi_version": spec.get("openapi", "unknown")},
                 "tool_count": len(previews),
-                "tools": previews
+                "tools": previews,
             }
 
         # Generate tools from specification
-        tools = await openapi_service.generate_tools_from_spec(
-            spec,
-            base_url=base_url,
-            gateway_id=gateway_id,
-            tags=additional_tags
-        )
+        tools = await openapi_service.generate_tools_from_spec(spec, base_url=base_url, gateway_id=gateway_id, tags=additional_tags)
 
         # Enhance tools with AI if requested
         if enhance_with_ai and tools:
@@ -2326,7 +2303,7 @@ async def process_openapi_url(
                         "annotations": tool.annotations,
                         "requires_auth": tool.auth is not None,
                         "auth_type": tool.auth.auth_type if tool.auth else None,
-                        "input_schema": tool.input_schema
+                        "input_schema": tool.input_schema,
                     }
                     for tool in tools
                 ]
@@ -2360,7 +2337,7 @@ async def process_openapi_url(
                 # Note: Using a mock request for metadata capture
                 class MockRequest:
                     headers = {}
-                    client = type('Client', (), {'host': 'unknown'})()
+                    client = type("Client", (), {"host": "unknown"})()
 
                 metadata = MetadataCapture.extract_creation_metadata(MockRequest(), user)
                 metadata["created_via"] = "openapi_url"
@@ -2373,31 +2350,24 @@ async def process_openapi_url(
                     created_via=metadata["created_via"],
                     created_user_agent=metadata["created_user_agent"],
                     import_batch_id=metadata.get("import_batch_id"),
-                    federation_source=metadata.get("federation_source")
+                    federation_source=metadata.get("federation_source"),
                 )
                 created_tools.append(created_tool.model_dump(by_alias=True))
 
             except Exception as tool_error:
                 logger.error(f"Failed to create tool {tool.name}: {str(tool_error)}")
-                failed_tools.append({
-                    "name": tool.name,
-                    "error": str(tool_error)
-                })
+                failed_tools.append({"name": tool.name, "error": str(tool_error)})
 
         return {
             "status": "success",
             "message": f"Processed OpenAPI specification from {url}",
             "source_url": url,
-            "api_info": {
-                "title": spec.get("info", {}).get("title", "Unknown API"),
-                "version": spec.get("info", {}).get("version", "unknown"),
-                "openapi_version": spec.get("openapi", "unknown")
-            },
+            "api_info": {"title": spec.get("info", {}).get("title", "Unknown API"), "version": spec.get("info", {}).get("version", "unknown"), "openapi_version": spec.get("openapi", "unknown")},
             "tools_created": len(created_tools),
             "tools_failed": len(failed_tools),
             "created_tools": created_tools,
             "failed_tools": failed_tools,
-            "ai_enhanced": enhance_with_ai and len(tools) > 0
+            "ai_enhanced": enhance_with_ai and len(tools) > 0,
         }
 
     except httpx.HTTPError as e:
@@ -2420,6 +2390,7 @@ async def process_openapi_url(
 ################################
 # API Documentation Tools APIs #
 ################################
+
 
 @tool_router.post("/api-docs/upload", response_model=Dict[str, Any])
 async def upload_api_documentation(
@@ -2469,23 +2440,13 @@ async def upload_api_documentation(
             additional_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
         # Parse API documentation
-        doc_structure = await api_doc_parser_service.parse_documentation_file(
-            content, 
-            file.filename or "unknown",
-            format_hint,
-            base_url
-        )
+        doc_structure = await api_doc_parser_service.parse_documentation_file(content, file.filename or "unknown", format_hint, base_url)
 
         logger.info(f"Parsed {len(doc_structure.get('potential_endpoints', []))} potential endpoints from documentation")
 
         # If no endpoints found, return early
-        if not doc_structure.get('potential_endpoints'):
-            return {
-                "success": False,
-                "message": "No API endpoints detected in the documentation",
-                "analysis": doc_structure,
-                "tool_count": 0
-            }
+        if not doc_structure.get("potential_endpoints"):
+            return {"success": False, "message": "No API endpoints detected in the documentation", "analysis": doc_structure, "tool_count": 0}
 
         # Generate tools from documentation
         if not base_url:
@@ -2493,12 +2454,7 @@ async def upload_api_documentation(
             logger.warning("No base URL provided - tools may need manual URL configuration")
             base_url = "http://api.example.com"  # Placeholder
 
-        tools = await api_doc_parser_service.generate_tools_from_documentation(
-            doc_structure,
-            base_url,
-            gateway_id=gateway_id,
-            tags=additional_tags
-        )
+        tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
 
         # Enhance tools with AI if requested
         if enhance_with_ai:
@@ -2517,15 +2473,13 @@ async def upload_api_documentation(
                         "input_schema": tool.input_schema,
                         "annotations": tool.annotations,
                         "tags": tool.tags,
-                        "auth": tool.auth.model_dump() if tool.auth else None
+                        "auth": tool.auth.model_dump() if tool.auth else None,
                     }
                     for tool in tools
                 ]
 
                 # Enhance with AI
-                enhanced_tools_dict = await openapi_agent.enhance_tools_from_documentation(
-                    tools_dict, analysis, doc_structure
-                )
+                enhanced_tools_dict = await openapi_agent.enhance_tools_from_documentation(tools_dict, analysis, doc_structure)
 
                 # Update original tools with enhanced information
                 for i, enhanced in enumerate(enhanced_tools_dict):
@@ -2556,11 +2510,11 @@ async def upload_api_documentation(
                         "method": tool.request_type,
                         "tags": tool.tags,
                         "requires_auth": tool.auth is not None,
-                        "confidence": tool.annotations.get("confidence_rating", 5)
+                        "confidence": tool.annotations.get("confidence_rating", 5),
                     }
                     for tool in tools
                 ],
-                "analysis": doc_structure if not enhance_with_ai else analysis
+                "analysis": doc_structure if not enhance_with_ai else analysis,
             }
 
         # Create tools in database
@@ -2570,23 +2524,14 @@ async def upload_api_documentation(
         for tool in tools:
             try:
                 # Add metadata about creation source
-                metadata = {
-                    "created_via": "api_doc_upload",
-                    "filename": file.filename,
-                    "source_format": doc_structure.get('source_format', 'unknown'),
-                    "ai_enhanced": enhance_with_ai
-                }
+                metadata = {"created_via": "api_doc_upload", "filename": file.filename, "source_format": doc_structure.get("source_format", "unknown"), "ai_enhanced": enhance_with_ai}
                 tool.metadata = metadata
 
                 # Create the tool
                 db_tool = await tool_service.create_tool(tool, db)
-                created_tools.append({
-                    "id": db_tool.id,
-                    "name": db_tool.name,
-                    "url": db_tool.url,
-                    "description": db_tool.description,
-                    "tags": [tag.name for tag in db_tool.tags] if db_tool.tags else []
-                })
+                created_tools.append(
+                    {"id": db_tool.id, "name": db_tool.name, "url": db_tool.url, "description": db_tool.description, "tags": [tag.name for tag in db_tool.tags] if db_tool.tags else []}
+                )
                 logger.info(f"Created tool: {db_tool.name}")
 
             except Exception as e:
@@ -2598,7 +2543,7 @@ async def upload_api_documentation(
             "message": f"Created {len(created_tools)} tools from API documentation",
             "tool_count": len(created_tools),
             "created_tools": created_tools,
-            "analysis": doc_structure if not enhance_with_ai else analysis
+            "analysis": doc_structure if not enhance_with_ai else analysis,
         }
 
         if errors:
@@ -2660,37 +2605,24 @@ async def process_api_documentation_url(
             additional_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
         # Parse API documentation from URL
-        doc_structure = await api_doc_parser_service.parse_documentation_url(
-            url,
-            format_hint,
-            base_url
-        )
+        doc_structure = await api_doc_parser_service.parse_documentation_url(url, format_hint, base_url)
 
         logger.info(f"Parsed {len(doc_structure.get('potential_endpoints', []))} potential endpoints from URL")
 
         # If no endpoints found, return early
-        if not doc_structure.get('potential_endpoints'):
-            return {
-                "success": False,
-                "message": "No API endpoints detected in the documentation",
-                "analysis": doc_structure,
-                "tool_count": 0
-            }
+        if not doc_structure.get("potential_endpoints"):
+            return {"success": False, "message": "No API endpoints detected in the documentation", "analysis": doc_structure, "tool_count": 0}
 
         # Generate tools from documentation
         if not base_url:
             # Try to infer base URL from documentation URL
             from urllib.parse import urlparse
+
             parsed_url = urlparse(url)
             base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
             logger.info(f"Inferred base URL from documentation URL: {base_url}")
 
-        tools = await api_doc_parser_service.generate_tools_from_documentation(
-            doc_structure,
-            base_url,
-            gateway_id=gateway_id,
-            tags=additional_tags
-        )
+        tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
 
         # Enhance tools with AI if requested
         analysis = None
@@ -2710,15 +2642,13 @@ async def process_api_documentation_url(
                         "input_schema": tool.input_schema,
                         "annotations": tool.annotations,
                         "tags": tool.tags,
-                        "auth": tool.auth.model_dump() if tool.auth else None
+                        "auth": tool.auth.model_dump() if tool.auth else None,
                     }
                     for tool in tools
                 ]
 
                 # Enhance with AI
-                enhanced_tools_dict = await openapi_agent.enhance_tools_from_documentation(
-                    tools_dict, analysis, doc_structure
-                )
+                enhanced_tools_dict = await openapi_agent.enhance_tools_from_documentation(tools_dict, analysis, doc_structure)
 
                 # Update original tools with enhanced information
                 for i, enhanced in enumerate(enhanced_tools_dict):
@@ -2749,11 +2679,11 @@ async def process_api_documentation_url(
                         "method": tool.request_type,
                         "tags": tool.tags,
                         "requires_auth": tool.auth is not None,
-                        "confidence": tool.annotations.get("confidence_rating", 5)
+                        "confidence": tool.annotations.get("confidence_rating", 5),
                     }
                     for tool in tools
                 ],
-                "analysis": analysis or doc_structure
+                "analysis": analysis or doc_structure,
             }
 
         # Create tools in database
@@ -2763,23 +2693,14 @@ async def process_api_documentation_url(
         for tool in tools:
             try:
                 # Add metadata about creation source
-                metadata = {
-                    "created_via": "api_doc_url",
-                    "source_url": url,
-                    "source_format": doc_structure.get('source_format', 'unknown'),
-                    "ai_enhanced": enhance_with_ai
-                }
+                metadata = {"created_via": "api_doc_url", "source_url": url, "source_format": doc_structure.get("source_format", "unknown"), "ai_enhanced": enhance_with_ai}
                 tool.metadata = metadata
 
                 # Create the tool
                 db_tool = await tool_service.create_tool(tool, db)
-                created_tools.append({
-                    "id": db_tool.id,
-                    "name": db_tool.name,
-                    "url": db_tool.url,
-                    "description": db_tool.description,
-                    "tags": [tag.name for tag in db_tool.tags] if db_tool.tags else []
-                })
+                created_tools.append(
+                    {"id": db_tool.id, "name": db_tool.name, "url": db_tool.url, "description": db_tool.description, "tags": [tag.name for tag in db_tool.tags] if db_tool.tags else []}
+                )
                 logger.info(f"Created tool: {db_tool.name}")
 
             except Exception as e:
@@ -2791,7 +2712,7 @@ async def process_api_documentation_url(
             "message": f"Created {len(created_tools)} tools from API documentation",
             "tool_count": len(created_tools),
             "created_tools": created_tools,
-            "analysis": analysis or doc_structure
+            "analysis": analysis or doc_structure,
         }
 
         if errors:
@@ -3823,7 +3744,7 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
     try:
         # Extract user identifier from either RBAC user object or JWT payload
         if hasattr(user, "email"):
-            user_id = user.email  # RBAC user object
+            user_id = getattr(user, "email", None)  # RBAC user object
         elif isinstance(user, dict):
             user_id = user.get("sub") or user.get("email") or user.get("username", "unknown")  # JWT payload
         else:
@@ -3932,6 +3853,8 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
                 result = await tool_service.invoke_tool(db=db, name=method, arguments=params, request_headers=headers)
                 if hasattr(result, "model_dump"):
                     result = result.model_dump(by_alias=True, exclude_none=True)
+            except PluginViolationError:
+                return JSONResponse(status_code=403, content={"detail": "policy_deny"})
             except (ValueError, Exception):
                 # If not a tool, try forwarding to gateway
                 try:
@@ -4395,7 +4318,7 @@ async def export_configuration(
     """
     try:
         logger.info(f"User {user} requested configuration export")
-
+        username: Optional[str] = None
         # Parse parameters
         include_types = None
         if types:
@@ -4410,7 +4333,12 @@ async def export_configuration(
             tags_list = [t.strip() for t in tags.split(",") if t.strip()]
 
         # Extract username from user (which is now an EmailUser object)
-        username = user.email
+        if hasattr(user, "email"):
+            username = getattr(user, "email", None)
+        elif isinstance(user, dict):
+            username = user.get("email", None)
+        else:
+            username = None
 
         # Get root path for URL construction
         root_path = request.scope.get("root_path", "") if request else ""
@@ -4467,8 +4395,12 @@ async def export_selective_configuration(
     try:
         logger.info(f"User {user} requested selective configuration export")
 
+        username: Optional[str] = None
         # Extract username from user (which is now an EmailUser object)
-        username = user.email
+        if hasattr(user, "email"):
+            username = getattr(user, "email", None)
+        elif isinstance(user, dict):
+            username = user.get("email")
 
         export_data = await export_service.export_selective(db=db, entity_selections=entity_selections, include_dependencies=include_dependencies, exported_by=username)
 
@@ -4521,7 +4453,12 @@ async def import_configuration(
             raise HTTPException(status_code=400, detail=f"Invalid conflict strategy. Must be one of: {[s.value for s in ConflictStrategy]}")
 
         # Extract username from user (which is now an EmailUser object)
-        username = user.email
+        if hasattr(user, "email"):
+            username = getattr(user, "email", None)
+        elif isinstance(user, dict):
+            username = user.get("email", None)
+        else:
+            username = None
 
         # Perform import
         import_status = await import_service.import_configuration(

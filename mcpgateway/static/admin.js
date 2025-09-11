@@ -1989,6 +1989,34 @@ async function editTool(toolId) {
             tagsField.value = tool.tags ? tool.tags.join(", ") : "";
         }
 
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        if (teamId) {
+            const hiddenInput = document.createElement("input");
+            hiddenInput.type = "hidden";
+            hiddenInput.name = "team_id";
+            hiddenInput.value = teamId;
+            editForm.appendChild(hiddenInput);
+        }
+
+        const visibility = tool.visibility; // Ensure visibility is either 'public', 'team', or 'private'
+        const publicRadio = safeGetElement("edit-tool-visibility-public");
+        const teamRadio = safeGetElement("edit-tool-visibility-team");
+        const privateRadio = safeGetElement("edit-tool-visibility-private");
+
+        if (visibility) {
+            // Check visibility and set the corresponding radio button
+            if (visibility === "public" && publicRadio) {
+                publicRadio.checked = true;
+            } else if (visibility === "team" && teamRadio) {
+                teamRadio.checked = true;
+            } else if (visibility === "private" && privateRadio) {
+                privateRadio.checked = true;
+            }
+        }
+
         // Handle JSON fields safely with validation
         const headersValidation = validateJson(
             JSON.stringify(tool.headers || {}),
@@ -3189,6 +3217,34 @@ async function editGateway(gatewayId) {
             tagsField.value = gateway.tags ? gateway.tags.join(", ") : "";
         }
 
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        if (teamId) {
+            const hiddenInput = document.createElement("input");
+            hiddenInput.type = "hidden";
+            hiddenInput.name = "team_id";
+            hiddenInput.value = teamId;
+            editForm.appendChild(hiddenInput);
+        }
+
+        const visibility = gateway.visibility; // Ensure visibility is either 'public', 'team', or 'private'
+        const publicRadio = safeGetElement("edit-gateway-visibility-public");
+        const teamRadio = safeGetElement("edit-gateway-visibility-team");
+        const privateRadio = safeGetElement("edit-gateway-visibility-private");
+
+        if (visibility) {
+            // Check visibility and set the corresponding radio button
+            if (visibility === "public" && publicRadio) {
+                publicRadio.checked = true;
+            } else if (visibility === "team" && teamRadio) {
+                teamRadio.checked = true;
+            } else if (visibility === "private" && privateRadio) {
+                privateRadio.checked = true;
+            }
+        }
+
         if (transportField) {
             transportField.value = gateway.transport || "SSE"; // falls back to SSE(default)
         }
@@ -3433,7 +3489,7 @@ async function viewServer(serverId) {
 
             const fields = [
                 { label: "Server ID", value: server.id },
-                { label: "URL", value: server.url || "N/A" },
+                { label: "URL", value: getCatalogUrl(server) || "N/A" },
                 { label: "Type", value: "Virtual Server" },
             ];
 
@@ -3808,20 +3864,49 @@ async function editServer(serverId) {
 
         const isInactiveCheckedBool = isInactiveChecked("servers");
         let hiddenField = safeGetElement("edit-server-show-inactive");
+        const editForm = safeGetElement("edit-server-form");
         if (!hiddenField) {
             hiddenField = document.createElement("input");
             hiddenField.type = "hidden";
             hiddenField.name = "is_inactive_checked";
             hiddenField.id = "edit-server-show-inactive";
-            const editForm = safeGetElement("edit-server-form");
+
             if (editForm) {
                 editForm.appendChild(hiddenField);
             }
         }
         hiddenField.value = isInactiveCheckedBool;
 
+        const visibility = server.visibility; // Ensure visibility is either 'public', 'team', or 'private'
+        const publicRadio = safeGetElement("edit-visibility-public");
+        const teamRadio = safeGetElement("edit-visibility-team");
+        const privateRadio = safeGetElement("edit-visibility-private");
+
+        // Prepopulate visibility radio buttons based on the server data
+        if (visibility) {
+            // Check visibility and set the corresponding radio button
+            if (visibility === "public" && publicRadio) {
+                publicRadio.checked = true;
+            } else if (visibility === "team" && teamRadio) {
+                teamRadio.checked = true;
+            } else if (visibility === "private" && privateRadio) {
+                privateRadio.checked = true;
+            }
+        }
+
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        if (teamId) {
+            const hiddenInput = document.createElement("input");
+            hiddenInput.type = "hidden";
+            hiddenInput.name = "team_id";
+            hiddenInput.value = teamId;
+            editForm.appendChild(hiddenInput);
+        }
+
         // Set form action and populate fields with validation
-        const editForm = safeGetElement("edit-server-form");
         if (editForm) {
             editForm.action = `${window.ROOT_PATH}/admin/servers/${serverId}/edit`;
         }
@@ -6926,6 +7011,13 @@ async function handleGatewayFormSubmit(e) {
             formData.append("oauth_config", JSON.stringify(oauthConfig));
         }
 
+        formData.append("visibility", formData.get("visibility"));
+
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+        teamId && formData.append("team_id", teamId);
+
         const response = await fetch(`${window.ROOT_PATH}/admin/gateways`, {
             method: "POST",
             body: formData,
@@ -6935,9 +7027,20 @@ async function handleGatewayFormSubmit(e) {
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add gateway");
         } else {
-            const redirectUrl = isInactiveCheckedBool
-                ? `${window.ROOT_PATH}/admin?include_inactive=true#gateways`
-                : `${window.ROOT_PATH}/admin#gateways`;
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+            const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
+            if (teamId) {
+                searchParams.set("team_id", teamId);
+            }
+
+            const queryString = searchParams.toString();
+            const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#gateways`;
+
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -6995,9 +7098,19 @@ async function handleResourceFormSubmit(e) {
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add Resource");
         } else {
-            const redirectUrl = isInactiveCheckedBool
-                ? `${window.ROOT_PATH}/admin?include_inactive=true#resources`
-                : `${window.ROOT_PATH}/admin#resources`;
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+
+            const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
+            if (teamId) {
+                searchParams.set("team_id", teamId);
+            }
+            const queryString = searchParams.toString();
+            const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#resources`;
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -7051,9 +7164,19 @@ async function handlePromptFormSubmit(e) {
             throw new Error(result?.message || "Failed to add prompt");
         }
         // Only redirect on success
-        const redirectUrl = isInactiveCheckedBool
-            ? `${window.ROOT_PATH}/admin?include_inactive=true#prompts`
-            : `${window.ROOT_PATH}/admin#prompts`;
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        const searchParams = new URLSearchParams();
+        if (isInactiveCheckedBool) {
+            searchParams.set("include_inactive", "true");
+        }
+        if (teamId) {
+            searchParams.set("team_id", teamId);
+        }
+        const queryString = searchParams.toString();
+        const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#prompts`;
         window.location.href = redirectUrl;
     } catch (error) {
         console.error("Error:", error);
@@ -7106,9 +7229,19 @@ async function handleEditPromptFormSubmit(e) {
             throw new Error(result?.message || "Failed to edit Prompt");
         }
         // Only redirect on success
-        const redirectUrl = isInactiveCheckedBool
-            ? `${window.ROOT_PATH}/admin?include_inactive=true#prompts`
-            : `${window.ROOT_PATH}/admin#prompts`;
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        const searchParams = new URLSearchParams();
+        if (isInactiveCheckedBool) {
+            searchParams.set("include_inactive", "true");
+        }
+        if (teamId) {
+            searchParams.set("team_id", teamId);
+        }
+        const queryString = searchParams.toString();
+        const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#prompts`;
         window.location.href = redirectUrl;
     } catch (error) {
         console.error("Error:", error);
@@ -7145,6 +7278,12 @@ async function handleServerFormSubmit(e) {
         const isInactiveCheckedBool = isInactiveChecked("servers");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
 
+        formData.append("visibility", formData.get("visibility"));
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+        teamId && formData.append("team_id", teamId);
+
         const response = await fetch(`${window.ROOT_PATH}/admin/servers`, {
             method: "POST",
             body: formData,
@@ -7154,9 +7293,20 @@ async function handleServerFormSubmit(e) {
             throw new Error(result?.message || "Failed to add server.");
         } else {
             // Success redirect
-            const redirectUrl = isInactiveCheckedBool
-                ? `${window.ROOT_PATH}/admin?include_inactive=true#catalog`
-                : `${window.ROOT_PATH}/admin#catalog`;
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+
+            const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
+            if (teamId) {
+                searchParams.set("team_id", teamId);
+            }
+
+            const queryString = searchParams.toString();
+            const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#catalog`;
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -7224,6 +7374,12 @@ async function handleToolFormSubmit(event) {
         const isInactiveCheckedBool = isInactiveChecked("tools");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
 
+        formData.append("visibility", formData.get("visibility"));
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+        teamId && formData.append("team_id", teamId);
+
         const response = await fetch(`${window.ROOT_PATH}/admin/tools`, {
             method: "POST",
             body: formData,
@@ -7232,9 +7388,19 @@ async function handleToolFormSubmit(event) {
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add tool");
         } else {
-            const redirectUrl = isInactiveCheckedBool
-                ? `${window.ROOT_PATH}/admin?include_inactive=true#tools`
-                : `${window.ROOT_PATH}/admin#tools`;
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+
+            const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
+            if (teamId) {
+                searchParams.set("team_id", teamId);
+            }
+            const queryString = searchParams.toString();
+            const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#tools`;
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -7286,9 +7452,19 @@ async function handleEditToolFormSubmit(event) {
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to edit tool");
         } else {
-            const redirectUrl = isInactiveCheckedBool
-                ? `${window.ROOT_PATH}/admin?include_inactive=true#tools`
-                : `${window.ROOT_PATH}/admin#tools`;
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+
+            const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
+            if (teamId) {
+                searchParams.set("team_id", teamId);
+            }
+            const queryString = searchParams.toString();
+            const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#tools`;
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -7387,9 +7563,19 @@ async function handleEditGatewayFormSubmit(e) {
             throw new Error(result?.message || "Failed to edit gateway");
         }
         // Only redirect on success
-        const redirectUrl = isInactiveCheckedBool
-            ? `${window.ROOT_PATH}/admin?include_inactive=true#gateways`
-            : `${window.ROOT_PATH}/admin#gateways`;
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        const searchParams = new URLSearchParams();
+        if (isInactiveCheckedBool) {
+            searchParams.set("include_inactive", "true");
+        }
+        if (teamId) {
+            searchParams.set("team_id", teamId);
+        }
+        const queryString = searchParams.toString();
+        const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#gateways`;
         window.location.href = redirectUrl;
     } catch (error) {
         console.error("Error:", error);
@@ -7433,9 +7619,19 @@ async function handleEditServerFormSubmit(e) {
         // Only redirect on success
         else {
             // Redirect to the appropriate page based on inactivity checkbox
-            const redirectUrl = isInactiveCheckedBool
-                ? `${window.ROOT_PATH}/admin?include_inactive=true#catalog`
-                : `${window.ROOT_PATH}/admin#catalog`;
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+
+            const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
+            if (teamId) {
+                searchParams.set("team_id", teamId);
+            }
+            const queryString = searchParams.toString();
+            const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#catalog`;
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -7489,9 +7685,19 @@ async function handleEditResFormSubmit(e) {
         // Only redirect on success
         else {
             // Redirect to the appropriate page based on inactivity checkbox
-            const redirectUrl = isInactiveCheckedBool
-                ? `${window.ROOT_PATH}/admin?include_inactive=true#resources`
-                : `${window.ROOT_PATH}/admin#resources`;
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+
+            const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
+            if (teamId) {
+                searchParams.set("team_id", teamId);
+            }
+            const queryString = searchParams.toString();
+            const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#resources`;
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -8584,6 +8790,24 @@ function showConfigSelectionModal(serverId, serverName) {
     }
 
     openModal("config-selection-modal");
+}
+/**
+ * Build MCP_SERVER_CATALOG_URL for a given server
+ * @param {Object} server
+ * @returns {string}
+ */
+function getCatalogUrl(server) {
+    const currentHost = window.location.hostname;
+    const currentPort =
+        window.location.port ||
+        (window.location.protocol === "https:" ? "443" : "80");
+    const protocol = window.location.protocol;
+
+    const baseUrl = `${protocol}//${currentHost}${
+        currentPort !== "80" && currentPort !== "443" ? ":" + currentPort : ""
+    }`;
+
+    return `${baseUrl}/servers/${server.id}`;
 }
 
 /**
@@ -11897,6 +12121,344 @@ function resetImportSelection() {
     window.currentImportPreview = null;
 }
 
+/* ---------------------------------------------------------------------------
+  Robust reloadAllResourceSections
+  - Replaces each section's full innerHTML with a server-rendered partial
+  - Restores saved initial markup on failure
+  - Re-runs initializers (Alpine, CodeMirror, select/pills, event handlers)
+--------------------------------------------------------------------------- */
+
+(function registerReloadAllResourceSections() {
+    // list of sections we manage
+    const SECTION_NAMES = [
+        "tools",
+        "resources",
+        "prompts",
+        "servers",
+        "gateways",
+        "catalog",
+    ];
+
+    // Save initial markup on first full load so we can restore exactly if needed
+    document.addEventListener("DOMContentLoaded", () => {
+        window.__initialSectionMarkup = window.__initialSectionMarkup || {};
+        SECTION_NAMES.forEach((s) => {
+            const el = document.getElementById(`${s}-section`);
+            if (el && !(s in window.__initialSectionMarkup)) {
+                // store the exact innerHTML produced by the server initially
+                window.__initialSectionMarkup[s] = el.innerHTML;
+            }
+        });
+    });
+
+    // Helper: try to re-run common initializers after a section's DOM is replaced
+    function reinitializeSection(sectionEl, sectionName) {
+        try {
+            if (!sectionEl) {
+                return;
+            }
+
+            // 1) Re-init Alpine for the new subtree (if Alpine is present)
+            try {
+                if (window.Alpine) {
+                    // For Alpine 3 use initTree if available
+                    if (typeof window.Alpine.initTree === "function") {
+                        window.Alpine.initTree(sectionEl);
+                    } else if (
+                        typeof window.Alpine.discoverAndRegisterComponents ===
+                        "function"
+                    ) {
+                        // fallback: attempt a component discovery if available
+                        window.Alpine.discoverAndRegisterComponents(sectionEl);
+                    }
+                }
+            } catch (err) {
+                console.warn(
+                    "Alpine re-init failed for section",
+                    sectionName,
+                    err,
+                );
+            }
+
+            // 2) Re-initialize tool/resource/pill helpers that expect DOM structure
+            try {
+                // these functions exist elsewhere in admin.js; call them if present
+                if (typeof initResourceSelect === "function") {
+                    // Many panels use specific ids — attempt to call generic initializers if they exist
+                    initResourceSelect(
+                        "associatedResources",
+                        "resource-pills",
+                        "resource-warn",
+                        10,
+                        null,
+                        null,
+                    );
+                }
+                if (typeof initToolSelect === "function") {
+                    initToolSelect(
+                        "associatedTools",
+                        "tool-pills",
+                        "tool-warn",
+                        10,
+                        null,
+                        null,
+                    );
+                }
+                // restore generic tool/resource selection areas if present
+                if (typeof initResourceSelect === "function") {
+                    // try specific common containers if present (safeGetElement suppresses warnings)
+                    const containers = [
+                        "edit-server-resources",
+                        "edit-server-tools",
+                    ];
+                    containers.forEach((cid) => {
+                        const c = document.getElementById(cid);
+                        if (c && typeof initResourceSelect === "function") {
+                            // caller may have different arg signature — best-effort call is OK
+                            // we don't want to throw here if arguments mismatch
+                            try {
+                                /* no args: assume function will find DOM by ids */ initResourceSelect();
+                            } catch (e) {
+                                /* ignore */
+                            }
+                        }
+                    });
+                }
+            } catch (err) {
+                console.warn("Select/pill reinit error", err);
+            }
+
+            // 3) Re-run integration & schema handlers which attach behaviour to new inputs
+            try {
+                if (typeof setupIntegrationTypeHandlers === "function") {
+                    setupIntegrationTypeHandlers();
+                }
+                if (typeof setupSchemaModeHandlers === "function") {
+                    setupSchemaModeHandlers();
+                }
+            } catch (err) {
+                console.warn("Integration/schema handler reinit failed", err);
+            }
+
+            // 4) Reinitialize CodeMirror editors within the replaced DOM (if CodeMirror used)
+            try {
+                if (window.CodeMirror) {
+                    // For any <textarea class="codemirror"> re-create or refresh editors
+                    const textareas = sectionEl.querySelectorAll("textarea");
+                    textareas.forEach((ta) => {
+                        // If the page previously attached a CodeMirror instance on same textarea,
+                        // the existing instance may have been stored on the element. If refresh available, refresh it.
+                        if (
+                            ta.CodeMirror &&
+                            typeof ta.CodeMirror.refresh === "function"
+                        ) {
+                            ta.CodeMirror.refresh();
+                        } else {
+                            // Create a new CodeMirror instance only when an explicit init function is present on page
+                            if (
+                                typeof window.createCodeMirrorForTextarea ===
+                                "function"
+                            ) {
+                                try {
+                                    window.createCodeMirrorForTextarea(ta);
+                                } catch (e) {
+                                    // ignore - not all textareas need CodeMirror
+                                }
+                            }
+                        }
+                    });
+                }
+            } catch (err) {
+                console.warn("CodeMirror reinit failed", err);
+            }
+
+            // 5) Re-attach generic event wiring that is expected by the UI (checkboxes, buttons)
+            try {
+                // checkbox-driven pill updates
+                const checkboxChangeEvent = new Event("change", {
+                    bubbles: true,
+                });
+                sectionEl
+                    .querySelectorAll('input[type="checkbox"]')
+                    .forEach((cb) => {
+                        // If there were checkbox-specific change functions on page, they will now re-run
+                        cb.dispatchEvent(checkboxChangeEvent);
+                    });
+
+                // Reconnect any HTMX triggers that expect a load event
+                if (window.htmx && typeof window.htmx.trigger === "function") {
+                    // find elements with data-htmx or that previously had an HTMX load
+                    const htmxTargets = sectionEl.querySelectorAll(
+                        "[hx-get], [hx-post], [data-hx-load]",
+                    );
+                    htmxTargets.forEach((el) => {
+                        try {
+                            window.htmx.trigger(el, "load");
+                        } catch (e) {
+                            /* ignore */
+                        }
+                    });
+                }
+            } catch (err) {
+                console.warn("Event wiring re-attach failed", err);
+            }
+
+            // 6) Accessibility / visual: force a small layout reflow, useful in some browsers
+            try {
+                // eslint-disable-next-line no-unused-expressions
+                sectionEl.offsetHeight; // read to force reflow
+            } catch (e) {
+                /* ignore */
+            }
+        } catch (err) {
+            console.error("Error reinitializing section", sectionName, err);
+        }
+    }
+
+    function updateSectionHeaders(teamId) {
+        const sections = [
+            "tools",
+            "resources",
+            "prompts",
+            "servers",
+            "gateways",
+        ];
+
+        sections.forEach((section) => {
+            const header = document.querySelector(
+                "#" + section + "-section h2",
+            );
+            if (header) {
+                // Remove existing team badge
+                const existingBadge = header.querySelector(".team-badge");
+                if (existingBadge) {
+                    existingBadge.remove();
+                }
+
+                // Add team badge if team is selected
+                if (teamId && teamId !== "") {
+                    const teamName = getTeamNameById(teamId);
+                    if (teamName) {
+                        const badge = document.createElement("span");
+                        badge.className =
+                            "team-badge inline-flex items-center px-2 py-1 ml-2 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded-full";
+                        badge.textContent = teamName;
+                        header.appendChild(badge);
+                    }
+                }
+            }
+        });
+    }
+
+    function getTeamNameById(teamId) {
+        // Get team name from Alpine.js data or fallback
+        const teamSelector = document.querySelector('[x-data*="selectedTeam"]');
+        if (
+            teamSelector &&
+            teamSelector._x_dataStack &&
+            teamSelector._x_dataStack[0].teams
+        ) {
+            const team = teamSelector._x_dataStack[0].teams.find(
+                (t) => t.id === teamId,
+            );
+            return team ? team.name : null;
+        }
+        return null;
+    }
+
+    // The exported function: reloadAllResourceSections
+    async function reloadAllResourceSections(teamId) {
+        const sections = [
+            "tools",
+            "resources",
+            "prompts",
+            "servers",
+            "gateways",
+        ];
+
+        // ensure there is a ROOT_PATH set
+        if (!window.ROOT_PATH) {
+            console.warn(
+                "ROOT_PATH not defined; aborting reloadAllResourceSections",
+            );
+            return;
+        }
+
+        // Iterate sections sequentially to avoid overloading the server and to ensure consistent order.
+        for (const section of sections) {
+            const sectionEl = document.getElementById(`${section}-section`);
+            if (!sectionEl) {
+                console.warn(`Section element not found: ${section}-section`);
+                continue;
+            }
+
+            // Build server partial URL (server should return the *full HTML fragment* for the section)
+            // Server endpoint pattern: /admin/sections/{section}?partial=true
+            let url = `${window.ROOT_PATH}/admin/sections/${section}?partial=true`;
+            if (teamId && teamId !== "") {
+                url += `&team_id=${encodeURIComponent(teamId)}`;
+            }
+
+            try {
+                const resp = await fetchWithTimeout(
+                    url,
+                    { credentials: "same-origin" },
+                    window.MCPGATEWAY_UI_TOOL_TEST_TIMEOUT || 60000,
+                );
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}`);
+                }
+                const html = await resp.text();
+
+                // Replace entire section's innerHTML with server-provided HTML to keep DOM identical.
+                // Use safeSetInnerHTML with isTrusted = true because this is server-rendered trusted content.
+                safeSetInnerHTML(sectionEl, html, true);
+
+                // After replacement, re-run local initializers so the new DOM behaves like initial load
+                reinitializeSection(sectionEl, section);
+            } catch (err) {
+                console.error(
+                    `Failed to load section ${section} from server:`,
+                    err,
+                );
+
+                // Restore the original markup exactly as it was on initial load (fallback)
+                if (
+                    window.__initialSectionMarkup &&
+                    window.__initialSectionMarkup[section]
+                ) {
+                    sectionEl.innerHTML =
+                        window.__initialSectionMarkup[section];
+                    // Re-run initializers on restored markup as well
+                    reinitializeSection(sectionEl, section);
+                    console.log(
+                        `Restored initial markup for section ${section}`,
+                    );
+                } else {
+                    // No fallback available: leave existing DOM intact and show error to console
+                    console.warn(
+                        `No saved initial markup for section ${section}; leaving DOM untouched`,
+                    );
+                }
+            }
+        }
+
+        // Update headers (team badges) after reload
+        try {
+            if (typeof updateSectionHeaders === "function") {
+                updateSectionHeaders(teamId);
+            }
+        } catch (err) {
+            console.warn("updateSectionHeaders failed after reload", err);
+        }
+
+        console.log("✓ reloadAllResourceSections completed");
+    }
+
+    // Export to global to keep old callers working
+    window.reloadAllResourceSections = reloadAllResourceSections;
+})();
+
 // Expose selective import functions to global scope
 window.previewImport = previewImport;
 window.handleSelectiveImport = handleSelectiveImport;
@@ -11918,7 +12480,7 @@ window.resetImportSelection = resetImportSelection;
 function toggleSection(sectionId) {
     const section = document.getElementById(sectionId);
     const button = document.getElementById("toggle-api-docs-section");
-    
+
     if (section && button) {
         if (section.classList.contains("hidden")) {
             section.classList.remove("hidden");
@@ -11940,17 +12502,17 @@ function switchApiDocsTab(tabName) {
         tab.classList.remove("border-indigo-500", "text-indigo-600");
         tab.classList.add("border-transparent", "text-gray-500");
     });
-    
+
     const activeTab = document.getElementById(`api-docs-${tabName}-tab`);
     if (activeTab) {
         activeTab.classList.remove("border-transparent", "text-gray-500");
         activeTab.classList.add("border-indigo-500", "text-indigo-600");
     }
-    
+
     // Update form visibility
     const forms = document.querySelectorAll(".api-docs-form");
     forms.forEach(form => form.classList.add("hidden"));
-    
+
     const activeForm = document.getElementById(`api-docs-${tabName}-form`);
     if (activeForm) {
         activeForm.classList.remove("hidden");
@@ -11962,11 +12524,11 @@ function switchApiDocsTab(tabName) {
  */
 function handleApiDocsFileSelect(input) {
     const fileInfo = document.getElementById("api-docs-file-info");
-    
+
     if (input.files && input.files[0]) {
         const file = input.files[0];
         const sizeInMB = (file.size / 1024 / 1024).toFixed(2);
-        
+
         fileInfo.innerHTML = `
             <div class="flex items-center space-x-2">
                 <svg class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -11992,22 +12554,22 @@ async function processApiDocsUpload() {
     const previewOnlyCheckbox = document.getElementById("api-docs-preview-only");
     const enhanceWithAiCheckbox = document.getElementById("api-docs-enhance-with-ai");
     const uploadBtn = document.getElementById("api-docs-upload-btn");
-    
+
     // Validate inputs
     if (!fileInput.files || !fileInput.files[0]) {
         showApiDocsError("Please select a file to upload.");
         return;
     }
-    
+
     if (!baseUrlInput.value.trim()) {
         showApiDocsError("Please provide a base URL for the API.");
         return;
     }
-    
+
     // Disable button and show loading
     uploadBtn.disabled = true;
     uploadBtn.textContent = "Processing...";
-    
+
     try {
         const formData = new FormData();
         formData.append("file", fileInput.files[0]);
@@ -12016,7 +12578,7 @@ async function processApiDocsUpload() {
         formData.append("tags", tagsInput.value.trim());
         formData.append("preview_only", previewOnlyCheckbox.checked);
         formData.append("enhance_with_ai", enhanceWithAiCheckbox.checked);
-        
+
         const response = await fetch(`${window.ROOT_PATH || ""}/tools/api-docs/upload`, {
             method: "POST",
             credentials: "same-origin",
@@ -12025,9 +12587,9 @@ async function processApiDocsUpload() {
             },
             body: formData
         });
-        
+
         const result = await response.json();
-        
+
         if (response.ok) {
             showApiDocsResults(result, previewOnlyCheckbox.checked ? "preview" : "upload");
             if (!previewOnlyCheckbox.checked && result.success) {
@@ -12037,7 +12599,7 @@ async function processApiDocsUpload() {
         } else {
             showApiDocsError(result.detail || "Failed to process API documentation");
         }
-        
+
     } catch (error) {
         console.error("API documentation upload error:", error);
         showApiDocsError("An error occurred while processing the documentation: " + error.message);
@@ -12058,17 +12620,17 @@ async function processApiDocsUrl() {
     const previewOnlyCheckbox = document.getElementById("api-docs-url-preview-only");
     const enhanceWithAiCheckbox = document.getElementById("api-docs-url-enhance-with-ai");
     const urlBtn = document.getElementById("api-docs-url-btn");
-    
+
     // Validate inputs
     if (!urlInput.value.trim()) {
         showApiDocsError("Please provide a URL to the API documentation.");
         return;
     }
-    
+
     // Disable button and show loading
     urlBtn.disabled = true;
     urlBtn.textContent = "Processing...";
-    
+
     try {
         const payload = {
             url: urlInput.value.trim(),
@@ -12078,7 +12640,7 @@ async function processApiDocsUrl() {
             preview_only: previewOnlyCheckbox.checked,
             enhance_with_ai: enhanceWithAiCheckbox.checked
         };
-        
+
         const response = await fetch(`${window.ROOT_PATH || ""}/tools/api-docs/url`, {
             method: "POST",
             credentials: "same-origin",
@@ -12088,9 +12650,9 @@ async function processApiDocsUrl() {
             },
             body: JSON.stringify(payload)
         });
-        
+
         const result = await response.json();
-        
+
         if (response.ok) {
             showApiDocsResults(result, previewOnlyCheckbox.checked ? "preview" : "url");
             if (!previewOnlyCheckbox.checked && result.success) {
@@ -12100,7 +12662,7 @@ async function processApiDocsUrl() {
         } else {
             showApiDocsError(result.detail || "Failed to process API documentation");
         }
-        
+
     } catch (error) {
         console.error("API documentation URL error:", error);
         showApiDocsError("An error occurred while processing the documentation: " + error.message);
@@ -12116,15 +12678,15 @@ async function processApiDocsUrl() {
 function showApiDocsResults(result, mode) {
     const resultsDiv = document.getElementById("api-docs-results");
     const resultsContent = document.getElementById("api-docs-results-content");
-    
+
     if (!resultsDiv || !resultsContent) return;
-    
+
     let html = "";
-    
+
     if (result.success) {
         const modeText = mode === "preview" ? "Preview Results" : "Processing Results";
         const actionText = mode === "preview" ? "would create" : "created";
-        
+
         html += `
             <div class="flex items-center space-x-2 mb-4">
                 <svg class="h-5 w-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -12136,7 +12698,7 @@ function showApiDocsResults(result, mode) {
                 Successfully ${actionText} ${result.tool_count} tools from API documentation.
             </p>
         `;
-        
+
         // Show tools if in preview mode or if tools are returned
         if (result.tools && result.tools.length > 0) {
             html += `
@@ -12144,13 +12706,13 @@ function showApiDocsResults(result, mode) {
                     <h5 class="font-medium text-gray-900 dark:text-gray-100 mb-2">Generated Tools:</h5>
                     <div class="space-y-2 max-h-60 overflow-y-auto">
             `;
-            
+
             result.tools.forEach(tool => {
-                const confidenceBadge = tool.confidence ? 
+                const confidenceBadge = tool.confidence ?
                     `<span class="ml-2 px-2 py-0.5 rounded text-xs ${tool.confidence >= 8 ? "bg-green-100 text-green-800" : tool.confidence >= 6 ? "bg-yellow-100 text-yellow-800" : "bg-red-100 text-red-800"}">
                         Confidence: ${tool.confidence}/10
                     </span>` : "";
-                
+
                 html += `
                     <div class="flex items-start justify-between p-3 border border-gray-200 dark:border-gray-600 rounded">
                         <div class="flex-1">
@@ -12162,18 +12724,18 @@ function showApiDocsResults(result, mode) {
                             </div>
                             <p class="text-xs text-gray-600 dark:text-gray-400 mt-1">${escapeHtml(tool.description)}</p>
                             <p class="text-xs text-gray-500 dark:text-gray-500 mt-1">URL: ${escapeHtml(tool.url)}</p>
-                            ${tool.tags && tool.tags.length > 0 ? 
-                                `<div class="mt-1">${tool.tags.map(tag => `<span class="inline-block px-1 py-0.5 rounded text-xs bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 mr-1">${escapeHtml(tag)}</span>`).join("")}</div>` 
+                            ${tool.tags && tool.tags.length > 0 ?
+                                `<div class="mt-1">${tool.tags.map(tag => `<span class="inline-block px-1 py-0.5 rounded text-xs bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 mr-1">${escapeHtml(tag)}</span>`).join("")}</div>`
                                 : ""
                             }
                         </div>
                     </div>
                 `;
             });
-            
+
             html += "</div></div>";
         }
-        
+
         // Show created tools if not in preview mode
         if (result.created_tools && result.created_tools.length > 0) {
             html += `
@@ -12181,7 +12743,7 @@ function showApiDocsResults(result, mode) {
                     <h5 class="font-medium text-gray-900 dark:text-gray-100 mb-2">Created Tools:</h5>
                     <div class="space-y-1">
             `;
-            
+
             result.created_tools.forEach(tool => {
                 html += `
                     <div class="text-sm">
@@ -12190,10 +12752,10 @@ function showApiDocsResults(result, mode) {
                     </div>
                 `;
             });
-            
+
             html += "</div></div>";
         }
-        
+
         // Show errors if any
         if (result.errors && result.errors.length > 0) {
             html += `
@@ -12201,14 +12763,14 @@ function showApiDocsResults(result, mode) {
                     <h5 class="font-medium text-yellow-800 dark:text-yellow-400 mb-2">Warnings:</h5>
                     <ul class="text-sm text-yellow-700 dark:text-yellow-300 space-y-1">
             `;
-            
+
             result.errors.forEach(error => {
                 html += `<li>• ${escapeHtml(error)}</li>`;
             });
-            
+
             html += "</ul></div>";
         }
-        
+
     } else {
         html += `
             <div class="flex items-center space-x-2 mb-4">
@@ -12222,7 +12784,7 @@ function showApiDocsResults(result, mode) {
             </p>
         `;
     }
-    
+
     resultsContent.innerHTML = html;
     resultsDiv.classList.remove("hidden");
 }
@@ -12233,9 +12795,9 @@ function showApiDocsResults(result, mode) {
 function showApiDocsError(message) {
     const resultsDiv = document.getElementById("api-docs-results");
     const resultsContent = document.getElementById("api-docs-results-content");
-    
+
     if (!resultsDiv || !resultsContent) return;
-    
+
     resultsContent.innerHTML = `
         <div class="flex items-center space-x-2 mb-4">
             <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -12245,7 +12807,7 @@ function showApiDocsError(message) {
         </div>
         <p class="text-sm text-red-600 dark:text-red-400">${escapeHtml(message)}</p>
     `;
-    
+
     resultsDiv.classList.remove("hidden");
 }
 
@@ -12259,12 +12821,12 @@ function clearApiDocsUploadForm() {
     document.getElementById("api-docs-tags").value = "";
     document.getElementById("api-docs-preview-only").checked = false;
     document.getElementById("api-docs-enhance-with-ai").checked = true;
-    
+
     const fileInfo = document.getElementById("api-docs-file-info");
     if (fileInfo) {
         fileInfo.classList.add("hidden");
     }
-    
+
     const results = document.getElementById("api-docs-results");
     if (results) {
         results.classList.add("hidden");
@@ -12281,7 +12843,7 @@ function clearApiDocsUrlForm() {
     document.getElementById("api-docs-url-tags").value = "";
     document.getElementById("api-docs-url-preview-only").checked = false;
     document.getElementById("api-docs-url-enhance-with-ai").checked = true;
-    
+
     const results = document.getElementById("api-docs-results");
     if (results) {
         results.classList.add("hidden");
