@@ -163,10 +163,13 @@ class Settings(BaseSettings):
     # Authentication
     basic_auth_user: str = "admin"
     basic_auth_password: str = "changeme"
-    jwt_secret_key: str = "my-test-key"
     jwt_algorithm: str = "HS256"
+    jwt_secret_key: str = "my-test-key"
+    jwt_public_key_path: str = ""
+    jwt_private_key_path: str = ""
     jwt_audience: str = "mcpgateway-api"
     jwt_issuer: str = "mcpgateway"
+    jwt_audience_verification: bool = True
     auth_required: bool = True
     token_expiry: int = 10080  # minutes
 
@@ -833,7 +836,7 @@ Disallow: /
 
     # MCP-compliant size limits (configurable via env)
     validation_max_name_length: int = 255
-    validation_max_description_length: int = 4096
+    validation_max_description_length: int = 8192  # 8KB
     validation_max_template_length: int = 65536  # 64KB
     validation_max_content_length: int = 1048576  # 1MB
     validation_max_json_depth: int = 10
