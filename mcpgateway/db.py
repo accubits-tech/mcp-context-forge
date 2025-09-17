@@ -24,7 +24,7 @@ Examples:
 # Standard
 from datetime import datetime, timedelta, timezone
 import logging
-from typing import Any, Dict, Generator, List, Optional, TYPE_CHECKING
+from typing import Any, cast, Dict, Generator, List, Optional, TYPE_CHECKING
 import uuid
 
 # Third-Party
@@ -153,7 +153,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def refresh_slugs_on_startup():
     """Refresh slugs for all gateways and names of tools on startup."""
 
-    with SessionLocal() as session:
+    with cast(Any, SessionLocal)() as session:
         gateways = session.query(Gateway).all()
         updated = False
         for gateway in gateways:
@@ -693,7 +693,14 @@ class EmailAuthEvent(Base):
         return f"<EmailAuthEvent(user_email='{self.user_email}', event_type='{self.event_type}', success={self.success})>"
 
     @classmethod
-    def create_login_attempt(cls, user_email: str, success: bool, ip_address: str = None, user_agent: str = None, failure_reason: str = None) -> "EmailAuthEvent":
+    def create_login_attempt(
+        cls,
+        user_email: str,
+        success: bool,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        failure_reason: Optional[str] = None,
+    ) -> "EmailAuthEvent":
         """Create a login attempt event.
 
         Args:
@@ -720,7 +727,14 @@ class EmailAuthEvent(Base):
         return cls(user_email=user_email, event_type="login", success=success, ip_address=ip_address, user_agent=user_agent, failure_reason=failure_reason)
 
     @classmethod
-    def create_registration_event(cls, user_email: str, success: bool, ip_address: str = None, user_agent: str = None, failure_reason: str = None) -> "EmailAuthEvent":
+    def create_registration_event(
+        cls,
+        user_email: str,
+        success: bool,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        failure_reason: Optional[str] = None,
+    ) -> "EmailAuthEvent":
         """Create a registration event.
 
         Args:
@@ -736,7 +750,13 @@ class EmailAuthEvent(Base):
         return cls(user_email=user_email, event_type="registration", success=success, ip_address=ip_address, user_agent=user_agent, failure_reason=failure_reason)
 
     @classmethod
-    def create_password_change_event(cls, user_email: str, success: bool, ip_address: str = None, user_agent: str = None) -> "EmailAuthEvent":
+    def create_password_change_event(
+        cls,
+        user_email: str,
+        success: bool,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> "EmailAuthEvent":
         """Create a password change event.
 
         Args:
@@ -898,7 +918,7 @@ class EmailTeamMember(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
 
     # Foreign keys
-    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=False)
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="CASCADE"), nullable=False)
     user_email: Mapped[str] = mapped_column(String(255), ForeignKey("email_users.email"), nullable=False)
 
     # Membership details
@@ -958,7 +978,7 @@ class EmailTeamInvitation(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
 
     # Foreign keys
-    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=False)
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="CASCADE"), nullable=False)
 
     # Invitation details
     email: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -1061,7 +1081,7 @@ class EmailTeamJoinRequest(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
 
     # Foreign keys
-    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=False)
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="CASCADE"), nullable=False)
     user_email: Mapped[str] = mapped_column(String(255), ForeignKey("email_users.email"), nullable=False)
 
     # Request details
@@ -1270,8 +1290,8 @@ class GlobalConfig(Base):
 
     __tablename__ = "global_config"
 
-    id = Column(Integer, primary_key=True)
-    passthrough_headers: Mapped[Optional[List[str]]] = Column(JSON, nullable=True)  # Store list of strings as JSON array
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    passthrough_headers: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)  # Store list of strings as JSON array
 
 
 class ToolMetric(Base):
@@ -1495,7 +1515,7 @@ class Tool(Base):
     metrics: Mapped[List["ToolMetric"]] = relationship("ToolMetric", back_populates="tool", cascade="all, delete-orphan")
 
     # Team scoping fields for resource organization
-    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private")
 
@@ -1503,90 +1523,80 @@ class Tool(Base):
     # def gateway_slug(self) -> str:
     #     return self.gateway.slug
 
-    _computed_name = Column("name", String(255), unique=True)  # Stored column
+    _computed_name: Mapped[str] = mapped_column("name", String(255), nullable=False)  # Stored column
 
     @hybrid_property
-    def name(self):
-        """Return the display/lookup name.
+    def name(self) -> str:
+        """Return the display/lookup name computed from gateway and custom slug.
 
         Returns:
-            str: Name to display
+            str: Display/lookup name to use for this tool.
         """
-        if self._computed_name:  # pylint: disable=no-member
-            return self._computed_name  # orm column, resolved at runtime
-
-        custom_name_slug = slugify(self.custom_name_slug)  # pylint: disable=no-member
-
-        # Gateway present → prepend its slug and the configured separator
-        if self.gateway_id:  # pylint: disable=no-member
-            gateway_slug = slugify(self.gateway.name)  # pylint: disable=no-member
+        # Instance access resolves Column to Python value; cast ensures static acceptance
+        if getattr(self, "_computed_name", None):
+            return cast(str, getattr(self, "_computed_name"))
+        custom_name_slug = slugify(getattr(self, "custom_name_slug"))
+        if getattr(self, "gateway_id", None):
+            gateway_slug = slugify(self.gateway.name)  # type: ignore[attr-defined]
             return f"{gateway_slug}{settings.gateway_tool_name_separator}{custom_name_slug}"
-
-        # No gateway → only the original name slug
         return custom_name_slug
 
     @name.setter
-    def name(self, value):
-        """Store an explicit value that overrides the calculated one.
+    def name(self, value: str) -> None:
+        """Setter for the stored name column.
 
         Args:
-            value (str): Value to set to _computed_name
+            value: Explicit name to persist to the underlying column.
         """
-        self._computed_name = value
+        setattr(self, "_computed_name", value)
 
     @name.expression
     @classmethod
-    def name(cls):
-        """
-        SQL expression used when the hybrid appears in a filter/order_by.
-        Simply forwards to the ``_computed_name`` column; the Python-side
-        reconstruction above is not needed on the SQL side.
+    def name(cls) -> Any:
+        """SQL expression for name used in queries (backs onto stored column).
 
         Returns:
-            str: computed name for SQL use
+            Any: SQLAlchemy expression referencing the stored name column.
         """
         return cls._computed_name
 
-    __table_args__ = (UniqueConstraint("gateway_id", "original_name", name="uq_gateway_id__original_name"),)
+    __table_args__ = (UniqueConstraint("gateway_id", "original_name", name="uq_gateway_id__original_name"), UniqueConstraint("team_id", "owner_email", "name", name="uq_team_owner_email_name_tool"))
 
     @hybrid_property
-    def gateway_slug(self):
-        """Always returns the current slug from the related Gateway
+    def gateway_slug(self) -> Optional[str]:
+        """Python accessor returning the related gateway's slug if available.
 
         Returns:
-            str: slug for Python use
+            Optional[str]: The gateway slug, or None if no gateway relation.
         """
         return self.gateway.slug if self.gateway else None
 
     @gateway_slug.expression
     @classmethod
-    def gateway_slug(cls):
-        """For database queries - auto-joins to get current slug
+    def gateway_slug(cls) -> Any:
+        """SQL expression to select current gateway slug for this tool.
 
         Returns:
-            str: slug for SQL use
+            Any: SQLAlchemy scalar subquery selecting the gateway slug.
         """
         return select(Gateway.slug).where(Gateway.id == cls.gateway_id).scalar_subquery()
 
     @hybrid_property
     def execution_count(self) -> int:
-        """
-        Returns the number of times the tool has been executed,
-        calculated from the associated ToolMetric records.
+        """Number of ToolMetric records associated with this tool instance.
 
         Returns:
-            int: The total count of tool executions.
+            int: Count of ToolMetric records for this tool.
         """
-        return len(self.metrics)
+        return len(getattr(self, "metrics", []))
 
     @execution_count.expression
     @classmethod
-    def execution_count(cls):
-        """
-        SQL expression to compute the execution count for the tool.
+    def execution_count(cls) -> Any:
+        """SQL expression that counts ToolMetric rows for this tool.
 
         Returns:
-            int: Returns execution count of a given tool
+            Any: SQLAlchemy labeled count expression for tool metrics.
         """
         return select(func.count(ToolMetric.id)).where(ToolMetric.tool_id == cls.id).label("execution_count")  # pylint: disable=not-callable
 
@@ -1703,11 +1713,6 @@ class Tool(Base):
             "avg_response_time": self.avg_response_time,
             "last_execution_time": self.last_execution_time,
         }
-
-    # Team scoping fields for resource organization
-    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=True)
-    owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private")
 
 
 class Resource(Base):
@@ -1921,7 +1926,7 @@ class Resource(Base):
         return max(m.timestamp for m in self.metrics)
 
     # Team scoping fields for resource organization
-    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private")
 
@@ -2126,7 +2131,7 @@ class Prompt(Base):
         return max(m.timestamp for m in self.metrics)
 
     # Team scoping fields for resource organization
-    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private")
 
@@ -2295,7 +2300,7 @@ class Server(Base):
         return max(m.timestamp for m in self.metrics)
 
     # Team scoping fields for resource organization
-    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private")
     __table_args__ = (UniqueConstraint("team_id", "owner_email", "name", name="uq_team_owner_name_server"),)
@@ -2308,8 +2313,8 @@ class Gateway(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    url: Mapped[str] = mapped_column(String(767), unique=True)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    url: Mapped[str] = mapped_column(String(767), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     transport: Mapped[str] = mapped_column(String(20), default="SSE")
     capabilities: Mapped[Dict[str, Any]] = mapped_column(JSON)
@@ -2364,12 +2369,17 @@ class Gateway(Base):
     oauth_config: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True, comment="OAuth 2.0 configuration including grant_type, client_id, encrypted client_secret, URLs, and scopes")
 
     # Team scoping fields for resource organization
-    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private")
 
     # Relationship with OAuth tokens
     oauth_tokens: Mapped[List["OAuthToken"]] = relationship("OAuthToken", back_populates="gateway", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("team_id", "owner_email", "slug", name="uq_team_owner_slug_gateway"),
+        UniqueConstraint("team_id", "owner_email", "url", name="uq_team_owner_url_gateway"),
+    )
 
 
 @event.listens_for(Gateway, "after_update")
@@ -2400,10 +2410,11 @@ def update_tool_names_on_gateway_update(_mapper, connection, target):
     # 4. Construct a single, powerful UPDATE statement using SQLAlchemy Core.
     #    This is highly efficient as it all happens in the database.
     stmt = (
-        tools_table.update()
+        cast(Any, tools_table)
+        .update()
         .where(tools_table.c.gateway_id == target.id)
         .values(name=new_gateway_slug + separator + tools_table.c.custom_name_slug)
-        .execution_options(synchronize_session=False)  # Important for bulk updates
+        .execution_options(synchronize_session=False)
     )
 
     # 5. Execute the statement using the connection from the ongoing transaction.
@@ -2461,7 +2472,7 @@ class A2AAgent(Base):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     # Team scoping fields for resource organization
-    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private")
 
@@ -2634,7 +2645,7 @@ class EmailApiToken(Base):
     # Core identity fields
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_email: Mapped[str] = mapped_column(String(255), ForeignKey("email_users.email", ondelete="CASCADE"), nullable=False, index=True)
-    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="CASCADE"), nullable=True, index=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     jti: Mapped[str] = mapped_column(String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False)

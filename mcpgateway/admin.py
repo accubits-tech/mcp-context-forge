@@ -25,6 +25,7 @@ from functools import wraps
 import html
 import io
 import json
+import logging
 from pathlib import Path
 import time
 from typing import Any, cast, Dict, List, Optional, Union
@@ -41,6 +42,7 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import ValidationError as CoreValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 # First-Party
 from mcpgateway.config import settings
@@ -76,7 +78,7 @@ from mcpgateway.schemas import (
 )
 from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
 from mcpgateway.services.export_service import ExportError, ExportService
-from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNotFoundError, GatewayService
+from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNameConflictError, GatewayNotFoundError, GatewayService, GatewayUrlConflictError
 from mcpgateway.services.import_service import ConflictStrategy
 from mcpgateway.services.import_service import ImportError as ImportServiceError
 from mcpgateway.services.import_service import ImportService, ImportValidationError
@@ -87,7 +89,7 @@ from mcpgateway.services.root_service import RootService
 from mcpgateway.services.server_service import ServerError, ServerNameConflictError, ServerNotFoundError, ServerService
 from mcpgateway.services.tag_service import TagService
 from mcpgateway.services.team_management_service import TeamManagementService
-from mcpgateway.services.tool_service import ToolError, ToolNotFoundError, ToolService
+from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, ToolNotFoundError, ToolService
 from mcpgateway.utils.create_jwt_token import create_jwt_token, get_jwt_token
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.metadata_capture import MetadataCapture
@@ -98,7 +100,7 @@ from mcpgateway.utils.retry_manager import ResilientHttpClient
 # Import the shared logging service from main
 # This will be set by main.py when it imports admin_router
 logging_service: Optional[LoggingService] = None
-LOGGER = None
+LOGGER: logging.Logger = logging.getLogger("mcpgateway.admin")
 
 
 def set_logging_service(service: LoggingService):
@@ -166,7 +168,7 @@ a2a_service: Optional[A2AAgentService] = A2AAgentService() if settings.mcpgatewa
 rate_limit_storage = defaultdict(list)
 
 
-def rate_limit(requests_per_minute: int = None):
+def rate_limit(requests_per_minute: Optional[int] = None):
     """Apply rate limiting to admin endpoints.
 
     Args:
@@ -228,7 +230,7 @@ def rate_limit(requests_per_minute: int = None):
         """
 
         @wraps(func)
-        async def wrapper(*args, request: Request = None, **kwargs):
+        async def wrapper(*args, request: Optional[Request] = None, **kwargs):
             """Execute the wrapped function with rate limiting enforcement.
 
             Args:
@@ -516,6 +518,7 @@ async def update_global_passthrough_headers(
             raise HTTPException(status_code=422, detail="Invalid passthrough headers format")
         if isinstance(e, PassthroughHeadersError):
             raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Unknown error occurred")
 
 
 @admin_router.get("/servers", response_model=List[ServerRead])
@@ -860,9 +863,9 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
             name=form.get("name"),
             description=form.get("description"),
             icon=form.get("icon"),
-            associated_tools=",".join(form.getlist("associatedTools")),
-            associated_resources=",".join(form.getlist("associatedResources")),
-            associated_prompts=",".join(form.getlist("associatedPrompts")),
+            associated_tools=",".join(str(x) for x in form.getlist("associatedTools")),
+            associated_resources=",".join(str(x) for x in form.getlist("associatedResources")),
+            associated_prompts=",".join(str(x) for x in form.getlist("associatedPrompts")),
             tags=tags,
             visibility=visibility,
         )
@@ -872,7 +875,8 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
     try:
         user_email = get_user_email(user)
         # Determine personal team for default assignment
-        team_id = form.get("team_id", None)
+        team_id_raw = form.get("team_id", None)
+        team_id = str(team_id_raw) if team_id_raw is not None else None
 
         team_service = TeamManagementService(db)
         team_id = await team_service.verify_team_for_user(user_email, team_id)
@@ -881,6 +885,7 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
         creation_metadata = MetadataCapture.extract_creation_metadata(request, user)
 
         # Ensure default visibility is private and assign to personal team when available
+        team_id_cast = cast(Optional[str], team_id)
         await server_service.register_server(
             db,
             server,
@@ -888,7 +893,7 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
             created_from_ip=creation_metadata["created_from_ip"],
             created_via=creation_metadata["created_via"],
             created_user_agent=creation_metadata["created_user_agent"],
-            team_id=team_id,
+            team_id=team_id_cast,
             visibility=visibility,
         )
         return JSONResponse(
@@ -1037,7 +1042,8 @@ async def admin_edit_server(
         LOGGER.debug(f"User {get_user_email(user)} is editing server ID {server_id} with name: {form.get('name')}")
         visibility = str(form.get("visibility", "private"))
         user_email = get_user_email(user)
-        team_id = form.get("team_id", None)
+        team_id_raw = form.get("team_id", None)
+        team_id = str(team_id_raw) if team_id_raw is not None else None
 
         team_service = TeamManagementService(db)
         team_id = await team_service.verify_team_for_user(user_email, team_id)
@@ -1049,9 +1055,9 @@ async def admin_edit_server(
             name=form.get("name"),
             description=form.get("description"),
             icon=form.get("icon"),
-            associated_tools=",".join(form.getlist("associatedTools")),
-            associated_resources=",".join(form.getlist("associatedResources")),
-            associated_prompts=",".join(form.getlist("associatedPrompts")),
+            associated_tools=",".join(str(x) for x in form.getlist("associatedTools")),
+            associated_resources=",".join(str(x) for x in form.getlist("associatedResources")),
+            associated_prompts=",".join(str(x) for x in form.getlist("associatedPrompts")),
             tags=tags,
             visibility=visibility,
             team_id=team_id,
@@ -1062,6 +1068,7 @@ async def admin_edit_server(
             db,
             server_id,
             server,
+            user_email,
             modified_by=mod_metadata["modified_by"],
             modified_from_ip=mod_metadata["modified_from_ip"],
             modified_via=mod_metadata["modified_via"],
@@ -1095,7 +1102,7 @@ async def admin_toggle_server(
     request: Request,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
-) -> RedirectResponse:
+) -> Response:
     """
     Toggle a server's active status via the admin UI.
 
@@ -1111,7 +1118,7 @@ async def admin_toggle_server(
         user (str): Authenticated user dependency.
 
     Returns:
-        RedirectResponse: A redirect to the admin dashboard catalog section with a
+        Response: A redirect to the admin dashboard catalog section with a
         status code of 303 (See Other).
 
     Examples:
@@ -2024,7 +2031,7 @@ async def admin_ui(
                 ]
             )
         except Exception:
-            pass
+            pass  # nosec B110 - Intentionally ignore errors when extracting team IDs from objects
         try:
             # If it's a dict-like model_dump output (we'll check keys later after model_dump)
             if isinstance(item, dict):
@@ -2038,7 +2045,7 @@ async def admin_ui(
                     ]
                 )
         except Exception:
-            pass
+            pass  # nosec B110 - Intentionally ignore errors when extracting team IDs from dict objects
 
         for c in candidates:
             if c is None:
@@ -2241,7 +2248,7 @@ async def admin_ui(
 
 
 @admin_router.get("/login")
-async def admin_login_page(request: Request) -> HTMLResponse:
+async def admin_login_page(request: Request) -> Response:
     """
     Render the admin login page.
 
@@ -2252,7 +2259,7 @@ async def admin_login_page(request: Request) -> HTMLResponse:
         request (Request): FastAPI request object.
 
     Returns:
-        HTMLResponse: Rendered HTML login page.
+        Response: Rendered HTML or redirect response.
 
     Examples:
         >>> from fastapi import Request
@@ -2330,8 +2337,10 @@ async def admin_login_handler(request: Request, db: Session = Depends(get_db)) -
 
     try:
         form = await request.form()
-        email = form.get("email")
-        password = form.get("password")
+        email_val = form.get("email")
+        password_val = form.get("password")
+        email = email_val if isinstance(email_val, str) else None
+        password = password_val if isinstance(password_val, str) else None
 
         if not email or not password:
             root_path = request.scope.get("root_path", "")
@@ -3124,7 +3133,7 @@ async def admin_update_team(
     request: Request,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
-) -> HTMLResponse:
+) -> Response:
     """Update team via admin UI.
 
     Args:
@@ -3134,20 +3143,24 @@ async def admin_update_team(
         user: Current authenticated user context
 
     Returns:
-        HTMLResponse: Result of team update operation
+        Response: Result of team update operation
     """
+    # Ensure root_path is available for URL construction in all branches
+    root_path = request.scope.get("root_path", "") if request else ""
+
     if not settings.email_auth_enabled:
         return HTMLResponse(content='<div class="text-red-500">Email authentication is disabled</div>', status_code=403)
 
     try:
-        # Get root path for URL construction
-        root_path = request.scope.get("root_path", "") if request else ""
         team_service = TeamManagementService(db)
 
         form = await request.form()
-        name = form.get("name")
-        description = form.get("description") or None
-        visibility = form.get("visibility", "private")
+        name_val = form.get("name")
+        desc_val = form.get("description")
+        vis_val = form.get("visibility", "private")
+        name = name_val if isinstance(name_val, str) else None
+        description = desc_val if isinstance(desc_val, str) and desc_val != "" else None
+        visibility = vis_val if isinstance(vis_val, str) else "private"
 
         if not name:
             is_htmx = request.headers.get("HX-Request") == "true"
@@ -3291,8 +3304,10 @@ async def admin_add_team_member(
                 return HTMLResponse(content='<div class="text-red-500">Only team owners can add members to private teams. Use the invitation system instead.</div>', status_code=403)
 
         form = await request.form()
-        user_email = form.get("user_email")
-        role = form.get("role", "member")
+        email_val = form.get("user_email")
+        role_val = form.get("role", "member")
+        user_email = email_val if isinstance(email_val, str) else None
+        role = role_val if isinstance(role_val, str) else "member"
 
         if not user_email:
             return HTMLResponse(content='<div class="text-red-500">User email is required</div>', status_code=400)
@@ -3370,8 +3385,10 @@ async def admin_update_team_member_role(
             return HTMLResponse(content='<div class="text-red-500">Only team owners can modify member roles</div>', status_code=403)
 
         form = await request.form()
-        user_email = form.get("user_email")
-        new_role = form.get("role", "member")
+        ue_val = form.get("user_email")
+        nr_val = form.get("role", "member")
+        user_email = ue_val if isinstance(ue_val, str) else None
+        new_role = nr_val if isinstance(nr_val, str) else "member"
 
         if not user_email:
             return HTMLResponse(content='<div class="text-red-500">User email is required</div>', status_code=400)
@@ -3453,7 +3470,8 @@ async def admin_remove_team_member(
             return HTMLResponse(content='<div class="text-red-500">Only team owners can remove members</div>', status_code=403)
 
         form = await request.form()
-        user_email = form.get("user_email")
+        ue_val = form.get("user_email")
+        user_email = ue_val if isinstance(ue_val, str) else None
 
         if not user_email:
             return HTMLResponse(content='<div class="text-red-500">User email is required</div>', status_code=400)
@@ -3639,7 +3657,8 @@ async def admin_create_join_request(
 
         # Get form data for optional message
         form = await request.form()
-        message = form.get("message", "")
+        msg_val = form.get("message", "")
+        message = msg_val if isinstance(msg_val, str) else ""
 
         # Create join request
         join_request = await team_service.create_join_request(team_id=team_id, user_email=user_email, message=message)
@@ -3925,7 +3944,7 @@ async def admin_list_users(
     request: Request,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
-) -> HTMLResponse:
+) -> Response:
     """List users for admin UI via HTMX.
 
     Args:
@@ -3934,7 +3953,7 @@ async def admin_list_users(
         user: Current authenticated user context
 
     Returns:
-        HTMLResponse: HTML response with users list
+        Response: HTML or JSON response with users list
     """
     try:
         if not settings.email_auth_enabled:
@@ -4237,6 +4256,10 @@ async def admin_update_user(
                 return HTMLResponse(content='<div class="text-red-500">Cannot remove administrator privileges from the last remaining admin user</div>', status_code=400)
 
         # Update user
+        fn_val = form.get("full_name")
+        pw_val = form.get("password")
+        full_name = fn_val if isinstance(fn_val, str) else None
+        password = pw_val if isinstance(pw_val, str) else None
         await auth_service.update_user(email=decoded_email, full_name=full_name, is_admin=is_admin, password=password if password else None)
 
         # Return success message with auto-close and refresh
@@ -4816,7 +4839,6 @@ async def admin_add_tool(
     LOGGER.debug(f"User {get_user_email(user)} is adding a new tool")
     form = await request.form()
     LOGGER.debug(f"Received form data: {dict(form)}")
-
     integration_type = form.get("integrationType", "REST")
     request_type = form.get("requestType")
     visibility = str(form.get("visibility", "private"))
@@ -4834,11 +4856,13 @@ async def admin_add_tool(
     team_id = form.get("team_id", None)
     team_service = TeamManagementService(db)
     team_id = await team_service.verify_team_for_user(user_email, team_id)
-
     # Parse tags from comma-separated string
     tags_str = str(form.get("tags", ""))
     tags: list[str] = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
-
+    # Safely parse potential JSON strings from form
+    headers_raw = form.get("headers")
+    input_schema_raw = form.get("input_schema")
+    annotations_raw = form.get("annotations")
     tool_data: dict[str, Any] = {
         "name": form.get("name"),
         "displayName": form.get("displayName"),
@@ -4846,9 +4870,9 @@ async def admin_add_tool(
         "description": form.get("description"),
         "request_type": request_type,
         "integration_type": integration_type,
-        "headers": json.loads(form.get("headers") or "{}"),
-        "input_schema": json.loads(form.get("input_schema") or "{}"),
-        "annotations": json.loads(form.get("annotations") or "{}"),
+        "headers": json.loads(headers_raw if isinstance(headers_raw, str) and headers_raw else "{}"),
+        "input_schema": json.loads(input_schema_raw if isinstance(input_schema_raw, str) and input_schema_raw else "{}"),
+        "annotations": json.loads(annotations_raw if isinstance(annotations_raw, str) and annotations_raw else "{}"),
         "jsonpath_filter": form.get("jsonpath_filter", ""),
         "auth_type": form.get("auth_type", ""),
         "auth_username": form.get("auth_username", ""),
@@ -4885,8 +4909,11 @@ async def admin_add_tool(
         )
     except IntegrityError as ex:
         error_message = ErrorFormatter.format_database_error(ex)
-        LOGGER.error(f"IntegrityError in admin_add_resource: {error_message}")
+        LOGGER.error(f"IntegrityError in admin_add_tool: {error_message}")
         return JSONResponse(status_code=409, content=error_message)
+    except ToolNameConflictError as ex:
+        LOGGER.error(f"ToolNameConflictError in admin_add_tool: {str(ex)}")
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
     except ToolError as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
     except ValidationError as ex:  # This block should catch ValidationError
@@ -5090,15 +5117,19 @@ async def admin_edit_tool(
     team_service = TeamManagementService(db)
     team_id = await team_service.verify_team_for_user(user_email, team_id)
 
+    headers_raw2 = form.get("headers")
+    input_schema_raw2 = form.get("input_schema")
+    annotations_raw2 = form.get("annotations")
+
     tool_data: dict[str, Any] = {
         "name": form.get("name"),
         "displayName": form.get("displayName"),
         "custom_name": form.get("customName"),
         "url": form.get("url"),
         "description": form.get("description"),
-        "headers": json.loads(form.get("headers") or "{}"),
-        "input_schema": json.loads(form.get("input_schema") or "{}"),
-        "annotations": json.loads(form.get("annotations") or "{}"),
+        "headers": json.loads(headers_raw2 if isinstance(headers_raw2, str) and headers_raw2 else "{}"),
+        "input_schema": json.loads(input_schema_raw2 if isinstance(input_schema_raw2, str) and input_schema_raw2 else "{}"),
+        "annotations": json.loads(annotations_raw2 if isinstance(annotations_raw2, str) and annotations_raw2 else "{}"),
         "jsonpath_filter": form.get("jsonpathFilter", ""),
         "auth_type": form.get("auth_type", ""),
         "auth_username": form.get("auth_username", ""),
@@ -5142,6 +5173,9 @@ async def admin_edit_tool(
         error_message = ErrorFormatter.format_database_error(ex)
         LOGGER.error(f"IntegrityError in admin_tool_resource: {error_message}")
         return JSONResponse(status_code=409, content=error_message)
+    except ToolNameConflictError as ex:
+        LOGGER.error(f"ToolNameConflictError in admin_edit_tool: {str(ex)}")
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
     except ToolError as ex:
         LOGGER.error(f"ToolError in admin_edit_tool: {str(ex)}")
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
@@ -5623,6 +5657,7 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
         # Extract creation metadata
         metadata = MetadataCapture.extract_creation_metadata(request, user)
 
+        team_id_cast = cast(Optional[str], team_id)
         await gateway_service.register_gateway(
             db,
             gateway,
@@ -5631,13 +5666,13 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
             created_via=metadata["created_via"],
             created_user_agent=metadata["created_user_agent"],
             visibility=visibility,
-            team_id=team_id,
+            team_id=team_id_cast,
             owner_email=user_email,
         )
 
         # Provide specific guidance for OAuth Authorization Code flow
         message = "Gateway registered successfully!"
-        if oauth_config and oauth_config.get("grant_type") == "authorization_code":
+        if oauth_config and isinstance(oauth_config, dict) and oauth_config.get("grant_type") == "authorization_code":
             message = (
                 "Gateway registered successfully! 🎉\n\n"
                 "⚠️  IMPORTANT: This gateway uses OAuth Authorization Code flow.\n"
@@ -5655,6 +5690,10 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
 
     except GatewayConnectionError as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=502)
+    except GatewayUrlConflictError as ex:
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
+    except GatewayNameConflictError as ex:
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
     except ValueError as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=400)
     except RuntimeError as ex:
@@ -5822,7 +5861,8 @@ async def admin_edit_gateway(
 
         user_email = get_user_email(user)
         # Determine personal team for default assignment
-        team_id = form.get("team_id", None)
+        team_id_raw = form.get("team_id", None)
+        team_id = str(team_id_raw) if team_id_raw is not None else None
 
         team_service = TeamManagementService(db)
         team_id = await team_service.verify_team_for_user(user_email, team_id)
@@ -7353,8 +7393,8 @@ async def admin_test_gateway(request: GatewayTestRequest, user=Depends(get_curre
     full_url = str(request.base_url).rstrip("/") + "/" + request.path.lstrip("/")
     full_url = full_url.rstrip("/")
     LOGGER.debug(f"User {get_user_email(user)} testing server at {request.base_url}.")
+    start_time: float = time.monotonic()
     try:
-        start_time: float = time.monotonic()
         async with ResilientHttpClient(client_args={"timeout": settings.federation_timeout, "verify": not settings.skip_ssl_verify}) as client:
             response: httpx.Response = await client.request(method=request.method.upper(), url=full_url, headers=request.headers, json=request.body)
         latency_ms = int((time.monotonic() - start_time) * 1000)
@@ -7548,7 +7588,7 @@ async def admin_import_tools(
             # Check for file upload first
             if "tools_file" in form:
                 file = form["tools_file"]
-                if hasattr(file, "file"):
+                if isinstance(file, StarletteUploadFile):
                     content = await file.read()
                     try:
                         payload = json.loads(content.decode("utf-8"))
@@ -7559,7 +7599,8 @@ async def admin_import_tools(
                     return JSONResponse({"success": False, "message": "Invalid file upload"}, status_code=422)
             else:
                 # Check for JSON in form fields
-                raw = form.get("tools") or form.get("tools_json") or form.get("json") or form.get("payload")
+                raw_val = form.get("tools") or form.get("tools_json") or form.get("json") or form.get("payload")
+                raw = raw_val if isinstance(raw_val, str) else None
                 if not raw:
                     return JSONResponse({"success": False, "message": "Missing tools/tools_json/json/payload form field."}, status_code=422)
                 try:
@@ -7637,10 +7678,11 @@ async def admin_import_tools(
             },
         }
 
+        rd = cast(Dict[str, Any], response_data)
         if len(errors) == 0:
-            response_data["message"] = f"Successfully imported all {len(created)} tools"
+            rd["message"] = f"Successfully imported all {len(created)} tools"
         else:
-            response_data["message"] = f"Imported {len(created)} of {len(payload)} tools. {len(errors)} failed."
+            rd["message"] = f"Imported {len(created)} of {len(payload)} tools. {len(errors)} failed."
 
         return JSONResponse(
             response_data,
@@ -7697,7 +7739,7 @@ async def admin_get_logs(
         HTTPException: If validation fails or service unavailable
     """
     # Get log storage from logging service
-    storage = logging_service.get_storage()
+    storage = cast(Any, logging_service).get_storage()
     if not storage:
         return {"logs": [], "total": 0, "stats": {}}
 
@@ -7775,7 +7817,7 @@ async def admin_stream_logs(
         HTTPException: If log level is invalid or service unavailable
     """
     # Get log storage from logging service
-    storage = logging_service.get_storage()
+    storage = cast(Any, logging_service).get_storage()
     if not storage:
         raise HTTPException(503, "Log storage not available")
 
@@ -7994,7 +8036,7 @@ async def admin_export_logs(
         raise HTTPException(400, f"Invalid format: {export_format}. Use 'json' or 'csv'")
 
     # Get log storage from logging service
-    storage = logging_service.get_storage()
+    storage = cast(Any, logging_service).get_storage()
     if not storage:
         raise HTTPException(503, "Log storage not available")
 
@@ -8327,7 +8369,8 @@ async def admin_import_configuration(request: Request, db: Session = Depends(get
         try:
             conflict_strategy = ConflictStrategy(conflict_strategy_str.lower())
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid conflict strategy. Must be one of: {[s.value for s in ConflictStrategy]}")
+            allowed = [s.value for s in ConflictStrategy.__members__.values()]
+            raise HTTPException(status_code=400, detail=f"Invalid conflict strategy. Must be one of: {allowed}")
 
         # Extract username from user (which could be string or dict with token)
         username = user if isinstance(user, str) else user.get("username", "unknown")
@@ -8455,7 +8498,7 @@ async def admin_list_a2a_agents(
         # Generate tags HTML separately
         tags_html = ""
         if agent["tags"]:
-            tag_spans = []
+            tag_spans: List[Any] = []
             for tag in agent["tags"]:
                 tag_spans.append(f'<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300">{tag}</span>')
             tags_html = f'<div class="mt-2 flex flex-wrap gap-1">{" ".join(tag_spans)}</div>'
@@ -8530,7 +8573,7 @@ async def admin_add_a2a_agent(
     request: Request,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
-) -> RedirectResponse:
+) -> Response:
     """Add a new A2A agent via admin UI.
 
     Args:
@@ -8539,7 +8582,7 @@ async def admin_add_a2a_agent(
         user: Authenticated user
 
     Returns:
-        HTML response with success/error status
+        Response with success/error status
 
     Raises:
         HTTPException: If A2A features are disabled
@@ -8555,7 +8598,8 @@ async def admin_add_a2a_agent(
         LOGGER.info(f"A2A agent creation form data: {dict(form)}")
 
         # Process tags
-        tags_str = form.get("tags", "")
+        ts_val = form.get("tags", "")
+        tags_str = ts_val if isinstance(ts_val, str) else ""
         tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
 
         agent_data = A2AAgentCreate(
@@ -8633,7 +8677,8 @@ async def admin_toggle_a2a_agent(
 
     try:
         form = await request.form()
-        activate = form.get("activate", "false").lower() == "true"
+        act_val = form.get("activate", "false")
+        activate = act_val.lower() == "true" if isinstance(act_val, str) else False
 
         await a2a_service.toggle_agent_status(db, agent_id, activate)
         root_path = request.scope.get("root_path", "")
@@ -8774,7 +8819,7 @@ async def get_tools_section(
                     "name": tool.name,
                     "description": tool.description,
                     "tags": tool.tags or [],
-                    "isActive": tool.isActive,
+                    "isActive": getattr(tool, "enabled", False),
                     "team_id": getattr(tool, "team_id", None),
                     "visibility": getattr(tool, "visibility", "private"),
                 }
@@ -8829,7 +8874,7 @@ async def get_resources_section(
                     "description": resource.description,
                     "uri": resource.uri,
                     "tags": resource.tags or [],
-                    "isActive": resource.isActive,
+                    "isActive": resource.is_active,
                     "team_id": getattr(resource, "team_id", None),
                     "visibility": getattr(resource, "visibility", "private"),
                 }
@@ -8884,7 +8929,7 @@ async def get_prompts_section(
                     "description": prompt.description,
                     "arguments": prompt.arguments or [],
                     "tags": prompt.tags or [],
-                    "isActive": prompt.isActive,
+                    "isActive": prompt.is_active,
                     "team_id": getattr(prompt, "team_id", None),
                     "visibility": getattr(prompt, "visibility", "private"),
                 }
@@ -8938,7 +8983,7 @@ async def get_servers_section(
                     "name": server.name,
                     "description": server.description,
                     "tags": server.tags or [],
-                    "isActive": server.isActive,
+                    "isActive": server.is_active,
                     "team_id": getattr(server, "team_id", None),
                     "visibility": getattr(server, "visibility", "private"),
                 }
@@ -8990,13 +9035,15 @@ async def get_gateways_section(
                 for key, value in gateway_dict.items():
                     gateway_dict[key] = serialize_datetime(value)
             else:
+                # Parse URL to extract host and port
+                parsed_url = urllib.parse.urlparse(gateway.url) if gateway.url else None
                 gateway_dict = {
                     "id": gateway.id,
                     "name": gateway.name,
-                    "host": gateway.host,
-                    "port": gateway.port,
+                    "host": parsed_url.hostname if parsed_url else "",
+                    "port": parsed_url.port if parsed_url else 80,
                     "tags": gateway.tags or [],
-                    "isActive": gateway.isActive,
+                    "isActive": getattr(gateway, "enabled", False),
                     "team_id": getattr(gateway, "team_id", None),
                     "visibility": getattr(gateway, "visibility", "private"),
                     "created_at": serialize_datetime(getattr(gateway, "created_at", None)),

@@ -44,7 +44,7 @@ import logging
 import os
 import tempfile
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, TYPE_CHECKING
+from typing import Any, AsyncGenerator, cast, Dict, List, Optional, Set, TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
 import uuid
 
@@ -80,6 +80,7 @@ from mcpgateway.schemas import GatewayCreate, GatewayRead, GatewayUpdate, Prompt
 # logging.getLogger("httpx").setLevel(logging.WARNING)  # Disables httpx logs for regular health checks
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.oauth_manager import OAuthManager
+from mcpgateway.services.team_management_service import TeamManagementService
 from mcpgateway.services.tool_service import ToolService
 from mcpgateway.utils.create_slug import slugify
 from mcpgateway.utils.display_name import generate_display_name
@@ -127,11 +128,12 @@ class GatewayNameConflictError(GatewayError):
         name: The conflicting gateway name
         enabled: Whether the existing gateway is enabled
         gateway_id: ID of the existing gateway if available
+        visibility: The visibility of the gateway ("public" or "team").
 
     Examples:
-        >>> error = GatewayNameConflictError("test_gateway")
-        >>> str(error)
-        'Gateway already exists with name: test_gateway'
+    >>> error = GatewayNameConflictError("test_gateway")
+    >>> str(error)
+    'Public Gateway already exists with name: test_gateway'
         >>> error.name
         'test_gateway'
         >>> error.enabled
@@ -139,27 +141,83 @@ class GatewayNameConflictError(GatewayError):
         >>> error.gateway_id is None
         True
 
-        >>> error_inactive = GatewayNameConflictError("inactive_gw", enabled=False, gateway_id=123)
-        >>> str(error_inactive)
-        'Gateway already exists with name: inactive_gw (currently inactive, ID: 123)'
+    >>> error_inactive = GatewayNameConflictError("inactive_gw", enabled=False, gateway_id=123)
+    >>> str(error_inactive)
+    'Public Gateway already exists with name: inactive_gw (currently inactive, ID: 123)'
         >>> error_inactive.enabled
         False
         >>> error_inactive.gateway_id
         123
     """
 
-    def __init__(self, name: str, enabled: bool = True, gateway_id: Optional[int] = None):
+    def __init__(self, name: str, enabled: bool = True, gateway_id: Optional[int] = None, visibility: Optional[str] = "public"):
         """Initialize the error with gateway information.
 
         Args:
             name: The conflicting gateway name
             enabled: Whether the existing gateway is enabled
             gateway_id: ID of the existing gateway if available
+            visibility: The visibility of the gateway ("public" or "team").
         """
         self.name = name
         self.enabled = enabled
         self.gateway_id = gateway_id
-        message = f"Gateway already exists with name: {name}"
+        if visibility == "team":
+            vis_label = "Team-level"
+        else:
+            vis_label = "Public"
+        message = f"{vis_label} Gateway already exists with name: {name}"
+        if not enabled:
+            message += f" (currently inactive, ID: {gateway_id})"
+        super().__init__(message)
+
+
+class GatewayUrlConflictError(GatewayError):
+    """Raised when a gateway URL conflicts with existing (active or inactive) gateway.
+
+    Args:
+        url: The conflicting gateway URL
+        enabled: Whether the existing gateway is enabled
+        gateway_id: ID of the existing gateway if available
+        visibility: The visibility of the gateway ("public" or "team").
+
+    Examples:
+    >>> error = GatewayUrlConflictError("http://example.com/gateway")
+    >>> str(error)
+    'Public Gateway already exists with URL: http://example.com/gateway'
+        >>> error.url
+        'http://example.com/gateway'
+        >>> error.enabled
+        True
+        >>> error.gateway_id is None
+        True
+
+    >>> error_inactive = GatewayUrlConflictError("http://inactive.com/gw", enabled=False, gateway_id=123)
+    >>> str(error_inactive)
+    'Public Gateway already exists with URL: http://inactive.com/gw (currently inactive, ID: 123)'
+        >>> error_inactive.enabled
+        False
+        >>> error_inactive.gateway_id
+        123
+    """
+
+    def __init__(self, url: str, enabled: bool = True, gateway_id: Optional[int] = None, visibility: Optional[str] = "public"):
+        """Initialize the error with gateway information.
+
+        Args:
+            url: The conflicting gateway URL
+            enabled: Whether the existing gateway is enabled
+            gateway_id: ID of the existing gateway if available
+            visibility: The visibility of the gateway ("public" or "team").
+        """
+        self.url = url
+        self.enabled = enabled
+        self.gateway_id = gateway_id
+        if visibility == "team":
+            vis_label = "Team-level"
+        else:
+            vis_label = "Public"
+        message = f"{vis_label} Gateway already exists with URL: {url}"
         if not enabled:
             message += f" (currently inactive, ID: {gateway_id})"
         super().__init__(message)
@@ -238,6 +296,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         # For health checks, we determine the leader instance.
         self.redis_url = settings.redis_url if settings.cache_type == "redis" else None
 
+        # Initialize optional Redis client holder
+        self._redis_client: Optional[Any] = None
+
         if self.redis_url and REDIS_AVAILABLE:
             self._redis_client = redis.from_url(self.redis_url)
             self._instance_id = str(uuid.uuid4())  # Unique ID for this process
@@ -245,8 +306,6 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             self._leader_ttl = 40  # seconds
         elif settings.cache_type != "none":
             # Fallback: File-based lock
-            self._redis_client = None
-
             temp_dir = tempfile.gettempdir()
             user_path = os.path.normpath(settings.filelock_name)
             if os.path.isabs(user_path):
@@ -254,8 +313,6 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             full_path = os.path.join(temp_dir, user_path)
             self._lock_path = full_path.replace("\\", "/")
             self._file_lock = FileLock(self._lock_path)
-        else:
-            self._redis_client = None
 
     @staticmethod
     def normalize_url(url: str) -> str:
@@ -290,7 +347,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             if parsed.port:
                 netloc += f":{parsed.port}"
             normalized = parsed._replace(netloc=netloc)
-            return urlunparse(normalized)
+            return str(urlunparse(normalized))
 
         # For all other URLs, preserve the domain name
         return url
@@ -449,29 +506,61 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         """
         visibility = "public" if visibility not in ("private", "team", "public") else visibility
         try:
-            # Check for name conflicts (both active and inactive)
-            existing_gateway = db.execute(select(DbGateway).where(DbGateway.name == gateway.name)).scalar_one_or_none()
+            # # Check for name conflicts (both active and inactive)
+            # existing_gateway = db.execute(select(DbGateway).where(DbGateway.name == gateway.name)).scalar_one_or_none()
 
-            if existing_gateway:
-                raise GatewayNameConflictError(
-                    gateway.name,
-                    enabled=existing_gateway.enabled,
-                    gateway_id=existing_gateway.id,
-                )
+            # if existing_gateway:
+            #     raise GatewayNameConflictError(
+            #         gateway.name,
+            #         enabled=existing_gateway.enabled,
+            #         gateway_id=existing_gateway.id,
+            #     )
+            # Check for existing gateway with the same slug and visibility
+            slug_name = slugify(gateway.name)
+            if visibility.lower() == "public":
+                # Check for existing public gateway with the same slug
+                existing_gateway = db.execute(select(DbGateway).where(DbGateway.slug == slug_name, DbGateway.visibility == "public")).scalar_one_or_none()
+                if existing_gateway:
+                    raise GatewayNameConflictError(existing_gateway.slug, enabled=existing_gateway.enabled, gateway_id=existing_gateway.id, visibility=existing_gateway.visibility)
+            elif visibility.lower() == "team" and team_id:
+                # Check for existing team gateway with the same slug
+                existing_gateway = db.execute(select(DbGateway).where(DbGateway.slug == slug_name, DbGateway.visibility == "team", DbGateway.team_id == team_id)).scalar_one_or_none()
+                if existing_gateway:
+                    raise GatewayNameConflictError(existing_gateway.slug, enabled=existing_gateway.enabled, gateway_id=existing_gateway.id, visibility=existing_gateway.visibility)
 
             # Normalize the gateway URL
-            normalized_url = self.normalize_url(gateway.url)
+            normalized_url = self.normalize_url(str(gateway.url))
+            # Check for existing gateway with the same URL and visibility
+            if visibility.lower() == "public":
+                # Check for existing public gateway with the same URL
+                existing_gateway = db.execute(select(DbGateway).where(DbGateway.url == normalized_url, DbGateway.visibility == "public")).scalar_one_or_none()
+                if existing_gateway:
+                    raise GatewayUrlConflictError(existing_gateway.url, enabled=existing_gateway.enabled, gateway_id=existing_gateway.id, visibility=existing_gateway.visibility)
+            elif visibility.lower() == "team" and team_id:
+                # Check for existing team gateway with the same URL
+                existing_gateway = db.execute(select(DbGateway).where(DbGateway.url == normalized_url, DbGateway.visibility == "team", DbGateway.team_id == team_id)).scalar_one_or_none()
+                if existing_gateway:
+                    raise GatewayUrlConflictError(existing_gateway.url, enabled=existing_gateway.enabled, gateway_id=existing_gateway.id, visibility=existing_gateway.visibility)
 
             auth_type = getattr(gateway, "auth_type", None)
             # Support multiple custom headers
             auth_value = getattr(gateway, "auth_value", {})
+            authentication_headers: Optional[Dict[str, str]] = None
             if hasattr(gateway, "auth_headers") and gateway.auth_headers:
                 # Convert list of {key, value} to dict
                 header_dict = {h["key"]: h["value"] for h in gateway.auth_headers if h.get("key")}
+                # Keep encoded form for persistence, but pass raw headers for initialization
                 auth_value = encode_auth(header_dict)  # Encode the dict for consistency
+                authentication_headers = {str(k): str(v) for k, v in header_dict.items()}
+            elif isinstance(auth_value, str) and auth_value:
+                # Decode persisted auth for initialization
+                decoded = decode_auth(auth_value)
+                authentication_headers = {str(k): str(v) for k, v in decoded.items()}
+            else:
+                authentication_headers = None
 
             oauth_config = getattr(gateway, "oauth_config", None)
-            capabilities, tools, resources, prompts = await self._initialize_gateway(normalized_url, auth_value, gateway.transport, auth_type, oauth_config)
+            capabilities, tools, resources, prompts = await self._initialize_gateway(normalized_url, authentication_headers, gateway.transport, auth_type, oauth_config)
 
             tools = [
                 DbTool(
@@ -552,7 +641,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             # Create DB model
             db_gateway = DbGateway(
                 name=gateway.name,
-                slug=slugify(gateway.name),
+                slug=slug_name,
                 url=normalized_url,
                 description=gateway.description,
                 tags=gateway.tags,
@@ -600,6 +689,11 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 gnce: ExceptionGroup[GatewayNameConflictError]
             logger.error(f"GatewayNameConflictError in group: {gnce.exceptions}")
             raise gnce.exceptions[0]
+        except* GatewayUrlConflictError as guce:  # pragma: no mutate
+            if TYPE_CHECKING:
+                guce: ExceptionGroup[GatewayUrlConflictError]
+            logger.error(f"GatewayUrlConflictError in group: {guce.exceptions}")
+            raise guce.exceptions[0]
         except* ValueError as ve:  # pragma: no mutate
             if TYPE_CHECKING:
                 ve: ExceptionGroup[ValueError]
@@ -617,7 +711,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             raise ie.exceptions[0]
         except* BaseException as other:  # catches every other sub-exception  # pragma: no mutate
             if TYPE_CHECKING:
-                other: ExceptionGroup[BaseException]
+                other: ExceptionGroup[Exception]
             logger.error(f"Other grouped errors: {other.exceptions}")
             raise other.exceptions[0]
 
@@ -788,6 +882,10 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             List[GatewayRead]: Gateways the user has access to
         """
         # Build query following existing patterns from list_gateways()
+        team_service = TeamManagementService(db)
+        user_teams = await team_service.get_user_teams(user_email)
+        team_ids = [team.id for team in user_teams]
+
         query = select(DbGateway)
 
         # Apply active/inactive filter
@@ -795,29 +893,18 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             query = query.where(DbGateway.enabled.is_(True))
 
         if team_id:
-            # Filter by specific team
-            query = query.where(DbGateway.team_id == team_id)
-
-            # Validate user has access to team
-            # First-Party
-            from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
-
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email)
-            team_ids = [team.id for team in user_teams]
-
             if team_id not in team_ids:
                 return []  # No access to team
 
+            access_conditions = []
+            # Filter by specific team
+            access_conditions.append(and_(DbGateway.team_id == team_id, DbGateway.visibility.in_(["team", "public"])))
+
+            access_conditions.append(and_(DbGateway.team_id == team_id, DbGateway.owner_email == user_email))
+
+            query = query.where(or_(*access_conditions))
         else:
             # Get user's accessible teams
-            # First-Party
-            from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
-
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email)
-            team_ids = [team.id for team in user_teams]
-
             # Build access conditions following existing patterns
             access_conditions = []
             # 1. User's personal resources (owner_email matches)
@@ -829,9 +916,6 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             access_conditions.append(DbGateway.visibility == "public")
 
             query = query.where(or_(*access_conditions))
-
-        # Filter out private gateways not owned by the user
-        query = query.where(~((DbGateway.owner_email != user_email) & (DbGateway.visibility == "private")))
 
         # Apply visibility filter if specified
         if visibility:
@@ -885,14 +969,67 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             if gateway.enabled or include_inactive:
                 # Check for name conflicts if name is being changed
                 if gateway_update.name is not None and gateway_update.name != gateway.name:
-                    existing_gateway = db.execute(select(DbGateway).where(DbGateway.name == gateway_update.name).where(DbGateway.id != gateway_id)).scalar_one_or_none()
+                    # existing_gateway = db.execute(select(DbGateway).where(DbGateway.name == gateway_update.name).where(DbGateway.id != gateway_id)).scalar_one_or_none()
 
-                    if existing_gateway:
-                        raise GatewayNameConflictError(
-                            gateway_update.name,
-                            enabled=existing_gateway.enabled,
-                            gateway_id=existing_gateway.id,
-                        )
+                    # if existing_gateway:
+                    #     raise GatewayNameConflictError(
+                    #         gateway_update.name,
+                    #         enabled=existing_gateway.enabled,
+                    #         gateway_id=existing_gateway.id,
+                    #     )
+                    # Check for existing gateway with the same slug and visibility
+                    new_slug = slugify(gateway_update.name)
+                    if gateway_update.visibility is not None:
+                        vis = gateway_update.visibility
+                    else:
+                        vis = gateway.visibility
+                    if vis == "public":
+                        existing_gateway = db.execute(select(DbGateway).where(DbGateway.slug == new_slug, DbGateway.visibility == "public", DbGateway.id != gateway_id)).scalar_one_or_none()
+                        if existing_gateway:
+                            raise GatewayNameConflictError(
+                                new_slug,
+                                enabled=existing_gateway.enabled,
+                                gateway_id=existing_gateway.id,
+                                visibility=existing_gateway.visibility,
+                            )
+                    elif vis == "team" and gateway.team_id:
+                        existing_gateway = db.execute(
+                            select(DbGateway).where(DbGateway.slug == new_slug, DbGateway.visibility == "team", DbGateway.team_id == gateway.team_id, DbGateway.id != gateway_id)
+                        ).scalar_one_or_none()
+                        if existing_gateway:
+                            raise GatewayNameConflictError(
+                                new_slug,
+                                enabled=existing_gateway.enabled,
+                                gateway_id=existing_gateway.id,
+                                visibility=existing_gateway.visibility,
+                            )
+                # Check for existing gateway with the same URL and visibility
+                if gateway_update.url is not None:
+                    normalized_url = self.normalize_url(str(gateway_update.url))
+                    if gateway_update.visibility is not None:
+                        vis = gateway_update.visibility
+                    else:
+                        vis = gateway.visibility
+                    if vis == "public":
+                        existing_gateway = db.execute(select(DbGateway).where(DbGateway.url == normalized_url, DbGateway.visibility == "public", DbGateway.id != gateway_id)).scalar_one_or_none()
+                        if existing_gateway:
+                            raise GatewayUrlConflictError(
+                                normalized_url,
+                                enabled=existing_gateway.enabled,
+                                gateway_id=existing_gateway.id,
+                                visibility=existing_gateway.visibility,
+                            )
+                    elif vis == "team" and gateway.team_id:
+                        existing_gateway = db.execute(
+                            select(DbGateway).where(DbGateway.url == normalized_url, DbGateway.visibility == "team", DbGateway.team_id == gateway.team_id, DbGateway.id != gateway_id)
+                        ).scalar_one_or_none()
+                        if existing_gateway:
+                            raise GatewayUrlConflictError(
+                                normalized_url,
+                                enabled=existing_gateway.enabled,
+                                gateway_id=existing_gateway.id,
+                                visibility=existing_gateway.visibility,
+                            )
 
                 # Update fields if provided
                 if gateway_update.name is not None:
@@ -900,7 +1037,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     gateway.slug = slugify(gateway_update.name)
                 if gateway_update.url is not None:
                     # Normalize the updated URL
-                    gateway.url = self.normalize_url(gateway_update.url)
+                    gateway.url = self.normalize_url(str(gateway_update.url))
                 if gateway_update.description is not None:
                     gateway.description = gateway_update.description
                 if gateway_update.transport is not None:
@@ -916,7 +1053,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                         gateway.passthrough_headers = gateway_update.passthrough_headers
                     else:
                         if isinstance(gateway_update.passthrough_headers, str):
-                            parsed = [h.strip() for h in gateway_update.passthrough_headers.split(",") if h.strip()]
+                            parsed: List[str] = [h.strip() for h in gateway_update.passthrough_headers.split(",") if h.strip()]
                             gateway.passthrough_headers = parsed
                         else:
                             raise GatewayError("Invalid passthrough_headers format: must be list[str] or comma-separated string")
@@ -928,7 +1065,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
                     # If auth_type is empty, update the auth_value too
                     if gateway_update.auth_type == "":
-                        gateway.auth_value = ""
+                        gateway.auth_value = cast(Any, "")
 
                     # if auth_type is not None and only then check auth_value
                 # Handle OAuth configuration updates
@@ -943,11 +1080,11 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     # Support multiple custom headers on update
                     if hasattr(gateway_update, "auth_headers") and gateway_update.auth_headers:
                         header_dict = {h["key"]: h["value"] for h in gateway_update.auth_headers if h.get("key")}
-                        gateway.auth_value = encode_auth(header_dict)  # Encode the dict for consistency
+                        gateway.auth_value = header_dict  # Store as dict for DB JSON field
                     elif settings.masked_auth_value not in (token, password, header_value):
                         # Check if values differ from existing ones
                         if gateway.auth_value != gateway_update.auth_value:
-                            gateway.auth_value = gateway_update.auth_value
+                            gateway.auth_value = decode_auth(gateway_update.auth_value) if isinstance(gateway_update.auth_value, str) else gateway_update.auth_value
 
                 # Try to reinitialize connection if URL changed
                 if gateway_update.url is not None:
@@ -1074,6 +1211,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 logger.info(f"Updated gateway: {gateway.name}")
 
                 return GatewayRead.model_validate(gateway)
+            # Gateway is inactive and include_inactive is False → skip update, return None
+            return None
         except GatewayNameConflictError as ge:
             logger.error(f"GatewayNameConflictError in group: {ge}")
             raise ge
@@ -1337,9 +1476,36 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             db.rollback()
             raise GatewayError(f"Failed to delete gateway: {str(e)}")
 
-    async def forward_request(self, gateway: DbGateway, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    async def forward_request(self, gateway_or_db, method: str, params: Optional[Dict[str, Any]] = None) -> Any:  # noqa: F811 # pylint: disable=function-redefined
         """
-        Forward a request to a gateway.
+        Forward a request to a gateway or multiple gateways.
+
+        This method handles two calling patterns:
+        1. forward_request(gateway, method, params) - Forward to a specific gateway
+        2. forward_request(db, method, params) - Forward to active gateways in the database
+
+        Args:
+            gateway_or_db: Either a DbGateway object or database Session
+            method: RPC method name
+            params: Optional method parameters
+
+        Returns:
+            Gateway response
+
+        Raises:
+            GatewayConnectionError: If forwarding fails
+            GatewayError: If gateway gave an error
+        """
+        # Dispatch based on first parameter type
+        if hasattr(gateway_or_db, "execute"):
+            # This is a database session - forward to all active gateways
+            return await self._forward_request_to_all(gateway_or_db, method, params)
+        # This is a gateway object - forward to specific gateway
+        return await self._forward_request_to_gateway(gateway_or_db, method, params)
+
+    async def _forward_request_to_gateway(self, gateway: DbGateway, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Forward a request to a specific gateway.
 
         Args:
             gateway: Gateway to forward to
@@ -1352,17 +1518,6 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         Raises:
             GatewayConnectionError: If forwarding fails
             GatewayError: If gateway gave an error
-
-        Examples:
-            >>> from mcpgateway.services.gateway_service import GatewayService
-            >>> from unittest.mock import MagicMock
-            >>> service = GatewayService()
-            >>> gateway = MagicMock()
-            >>> import asyncio
-            >>> try:
-            ...     asyncio.run(service.forward_request(gateway, 'method'))
-            ... except Exception:
-            ...     pass
         """
         start_time = time.monotonic()
 
@@ -1383,16 +1538,52 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             if not gateway.enabled:
                 raise GatewayConnectionError(f"Cannot forward request to inactive gateway: {gateway.name}")
 
+            response = None  # Initialize response to avoid UnboundLocalError
             try:
                 # Build RPC request
-                request = {"jsonrpc": "2.0", "id": 1, "method": method}
+                request: Dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": method}
                 if params:
                     request["params"] = params
                     if span:
                         span.set_attribute("rpc.params_count", len(params))
 
+                # Handle OAuth authentication for the specific gateway
+                headers: Dict[str, str] = {}
+
+                if getattr(gateway, "auth_type", None) == "oauth" and gateway.oauth_config:
+                    try:
+                        grant_type = gateway.oauth_config.get("grant_type", "client_credentials")
+
+                        if grant_type == "client_credentials":
+                            # Use OAuth manager to get access token for Client Credentials flow
+                            access_token = await self.oauth_manager.get_access_token(gateway.oauth_config)
+                            headers = {"Authorization": f"Bearer {access_token}"}
+                        elif grant_type == "authorization_code":
+                            # For Authorization Code flow, try to get a stored token
+                            # First-Party
+                            from mcpgateway.services.token_storage_service import TokenStorageService  # pylint: disable=import-outside-toplevel
+
+                            with cast(Any, SessionLocal)() as token_db:
+                                token_storage = TokenStorageService(token_db)
+                                access_token = await token_storage.get_any_valid_token(gateway.id)
+                                if access_token:
+                                    headers = {"Authorization": f"Bearer {access_token}"}
+                                else:
+                                    raise GatewayConnectionError(f"No valid OAuth token found for authorization_code gateway {gateway.name}")
+                    except Exception as oauth_error:
+                        raise GatewayConnectionError(f"Failed to obtain OAuth token for gateway {gateway.name}: {oauth_error}")
+                else:
+                    # Handle non-OAuth authentication (existing logic)
+                    auth_data = gateway.auth_value or {}
+                    if isinstance(auth_data, str):
+                        headers = decode_auth(auth_data) if auth_data else self._get_auth_headers()
+                    elif isinstance(auth_data, dict):
+                        headers = {str(k): str(v) for k, v in auth_data.items()}
+                    else:
+                        headers = self._get_auth_headers()
+
                 # Directly use the persistent HTTP client (no async with)
-                response = await self._http_client.post(f"{gateway.url}/rpc", json=request, headers=self._get_auth_headers())
+                response = await self._http_client.post(f"{gateway.url}/rpc", json=request, headers=headers)
                 response.raise_for_status()
                 result = response.json()
 
@@ -1418,7 +1609,102 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
             return result.get("result")
 
-    async def _handle_gateway_failure(self, gateway: str) -> None:
+    async def _forward_request_to_all(self, db: Session, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Forward a request to all active gateways that can handle the method.
+
+        Args:
+            db: Database session
+            method: RPC method name
+            params: Optional method parameters
+
+        Returns:
+            Gateway response from the first successful gateway
+
+        Raises:
+            GatewayConnectionError: If no gateways can handle the request
+        """
+        # Get all active gateways
+        active_gateways = db.execute(select(DbGateway).where(DbGateway.enabled.is_(True))).scalars().all()
+
+        if not active_gateways:
+            raise GatewayConnectionError("No active gateways available to forward request")
+
+        errors: List[str] = []
+
+        # Try each active gateway in order
+        for gateway in active_gateways:
+            try:
+                # Handle OAuth authentication for the specific gateway
+                headers: Dict[str, str] = {}
+
+                if getattr(gateway, "auth_type", None) == "oauth" and gateway.oauth_config:
+                    try:
+                        grant_type = gateway.oauth_config.get("grant_type", "client_credentials")
+
+                        if grant_type == "client_credentials":
+                            # Use OAuth manager to get access token for Client Credentials flow
+                            access_token = await self.oauth_manager.get_access_token(gateway.oauth_config)
+                            headers = {"Authorization": f"Bearer {access_token}"}
+                        elif grant_type == "authorization_code":
+                            # For Authorization Code flow, try to get a stored token
+                            # First-Party
+                            from mcpgateway.services.token_storage_service import TokenStorageService  # pylint: disable=import-outside-toplevel
+
+                            token_storage = TokenStorageService(db)
+                            access_token = await token_storage.get_any_valid_token(gateway.id)
+                            if access_token:
+                                headers = {"Authorization": f"Bearer {access_token}"}
+                            else:
+                                logger.warning(f"No valid OAuth token found for authorization_code gateway {gateway.name}. Skipping.")
+                                continue
+                    except Exception as oauth_error:
+                        logger.warning(f"Failed to obtain OAuth token for gateway {gateway.name}: {oauth_error}")
+                        errors.append(f"Gateway {gateway.name}: OAuth error - {str(oauth_error)}")
+                        continue
+                else:
+                    # Handle non-OAuth authentication
+                    auth_data = gateway.auth_value or {}
+                    if isinstance(auth_data, str):
+                        headers = decode_auth(auth_data)
+                    elif isinstance(auth_data, dict):
+                        headers = {str(k): str(v) for k, v in auth_data.items()}
+                    else:
+                        headers = {}
+
+                # Build RPC request
+                request: Dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": method}
+                if params:
+                    request["params"] = params
+
+                # Forward request with proper authentication headers
+                response = await self._http_client.post(f"{gateway.url}/rpc", json=request, headers=headers)
+                response.raise_for_status()
+                result = response.json()
+
+                # Update last seen timestamp
+                gateway.last_seen = datetime.now(timezone.utc)
+
+                # Check for RPC errors
+                if "error" in result:
+                    errors.append(f"Gateway {gateway.name}: {result['error'].get('message', 'Unknown RPC error')}")
+                    continue
+
+                # Success - return the result
+                logger.info(f"Successfully forwarded request to gateway {gateway.name}")
+                return result.get("result")
+
+            except Exception as e:
+                error_msg = f"Gateway {gateway.name}: {str(e)}"
+                errors.append(error_msg)
+                logger.warning(f"Failed to forward request to gateway {gateway.name}: {e}")
+                continue
+
+        # If we get here, all gateways failed
+        error_summary = "; ".join(errors)
+        raise GatewayConnectionError(f"All gateways failed to handle request '{method}': {error_summary}")
+
+    async def _handle_gateway_failure(self, gateway: DbGateway) -> None:
         """Tracks and handles gateway failures during health checks.
         If the failure count exceeds the threshold, the gateway is deactivated.
 
@@ -1463,7 +1749,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
         if count >= GW_FAILURE_THRESHOLD:
             logger.error(f"Gateway {gateway.name} failed {GW_FAILURE_THRESHOLD} times. Deactivating...")
-            with SessionLocal() as db:
+            with cast(Any, SessionLocal)() as db:
                 await self.toggle_gateway_status(db, gateway.id, activate=True, reachable=False, only_update_reachable=True)
                 self._gateway_failure_counts[gateway.id] = 0  # Reset after deactivation
 
@@ -1526,9 +1812,43 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     ) as span:
                         logger.debug(f"Checking health of gateway: {gateway.name} ({gateway.url})")
                         try:
-                            # Ensure auth_value is a dict
-                            auth_data = gateway.auth_value or {}
-                            headers = decode_auth(auth_data)
+                            # Handle different authentication types
+                            headers = {}
+
+                            if getattr(gateway, "auth_type", None) == "oauth" and gateway.oauth_config:
+                                # Handle OAuth authentication for health checks
+                                try:
+                                    grant_type = gateway.oauth_config.get("grant_type", "client_credentials")
+
+                                    if grant_type == "client_credentials":
+                                        # Use OAuth manager to get access token for Client Credentials flow
+                                        access_token = await self.oauth_manager.get_access_token(gateway.oauth_config)
+                                        headers = {"Authorization": f"Bearer {access_token}"}
+                                    elif grant_type == "authorization_code":
+                                        # For Authorization Code flow, try to get a stored token
+                                        # First-Party
+                                        from mcpgateway.services.token_storage_service import TokenStorageService  # pylint: disable=import-outside-toplevel
+
+                                        with cast(Any, SessionLocal)() as token_db:
+                                            token_storage = TokenStorageService(token_db)
+                                            access_token = await token_storage.get_any_valid_token(gateway.id)
+                                            if access_token:
+                                                headers = {"Authorization": f"Bearer {access_token}"}
+                                            else:
+                                                logger.warning(f"No valid OAuth token found for authorization_code gateway {gateway.name}. Health check may fail.")
+                                                headers = {}
+                                except Exception as oauth_error:
+                                    logger.warning(f"Failed to obtain OAuth token for health check of gateway {gateway.name}: {oauth_error}")
+                                    headers = {}
+                            else:
+                                # Handle non-OAuth authentication (existing logic)
+                                auth_data = gateway.auth_value or {}
+                                if isinstance(auth_data, str):
+                                    headers = decode_auth(auth_data)
+                                elif isinstance(auth_data, dict):
+                                    headers = {str(k): str(v) for k, v in auth_data.items()}
+                                else:
+                                    headers = {}
 
                             # Perform the GET and raise on 4xx/5xx
                             if (gateway.transport).lower() == "sse":
@@ -1546,7 +1866,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
                             # Reactivate gateway if it was previously inactive and health check passed now
                             if gateway.enabled and not gateway.reachable:
-                                with SessionLocal() as db:
+                                with cast(Any, SessionLocal)() as db:
                                     logger.info(f"Reactivating gateway: {gateway.name}, as it is healthy now")
                                     await self.toggle_gateway_status(db, gateway.id, activate=True, reachable=True, only_update_reachable=True)
 
@@ -1755,7 +2075,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     return {}, [], [], []
                 # For Client Credentials flow, we can get the token immediately
                 try:
-                    print(f"oauth_config: {oauth_config}")
+                    logger.debug("Obtaining OAuth access token for Client Credentials flow")
                     access_token = await self.oauth_manager.get_access_token(oauth_config)
                     authentication = {"Authorization": f"Bearer {access_token}"}
                 except Exception as e:
@@ -1766,7 +2086,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             tools = []
             resources = []
             prompts = []
-            if auth_type in ("basic", "bearer", "headers"):
+            if auth_type in ("basic", "bearer", "headers") and isinstance(authentication, str):
                 authentication = decode_auth(authentication)
             if transport.lower() == "sse":
                 capabilities, tools, resources, prompts = await self.connect_to_sse_server(url, authentication)
@@ -1807,7 +2127,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             ...     isinstance(result_active_only, list)
             True
         """
-        with SessionLocal() as db:
+        with cast(Any, SessionLocal)() as db:
             if include_inactive:
                 return db.execute(select(DbGateway)).scalars().all()
             # Only return active gateways

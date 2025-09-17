@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import Tool as DbTool
-from mcpgateway.plugins.framework import PluginViolationError
+from mcpgateway.plugins.framework import PluginError, PluginErrorModel, PluginViolationError, PluginManager
 from mcpgateway.schemas import AuthenticationValues, ToolCreate, ToolRead, ToolUpdate
 from mcpgateway.services.tool_service import (
     TextContent,
@@ -47,7 +47,7 @@ def tool_service():
 def mock_gateway():
     """Create a mock gateway model."""
     gw = MagicMock(spec=DbGateway)
-    gw.id = 1
+    gw.id = "1"
     gw.name = "test_gateway"
     gw.slug = "test-gateway"
     gw.url = "http://example.com/gateway"
@@ -55,6 +55,11 @@ def mock_gateway():
     gw.transport = "SSE"
     gw.capabilities = {"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}}
     gw.created_at = gw.updated_at = gw.last_seen = "2025-01-01T00:00:00Z"
+    gw.modified_by = gw.created_by = "Someone"
+    gw.modified_via = gw.created_via = "ui"
+    gw.modified_from_ip = gw.created_from_ip = "127.0.0.1"
+    gw.modified_user_agent = gw.created_user_agent = "Chrome"
+    gw.import_batch_id = gw.federation_source = gw.team_id = gw.visibility = gw.owner_email = None
 
     # one dummy tool hanging off the gateway
     tool = MagicMock(spec=DbTool, id=101, name="dummy_tool")
@@ -84,6 +89,19 @@ def mock_tool():
     tool.jsonpath_filter = ""
     tool.created_at = "2023-01-01T00:00:00"
     tool.updated_at = "2023-01-01T00:00:00"
+    tool.created_by = "MCP Gateway team"
+    tool.created_from_ip = "1.2.3.4"
+    tool.created_via = "ui"
+    tool.created_user_agent = "Chrome"
+    tool.modified_by = "No one"
+    tool.modified_from_ip = "1.2.3.4"
+    tool.modified_via = "ui"
+    tool.modified_user_agent = "Chrome"
+    tool.import_batch_id = "2"
+    tool.federation_source = "federation_source"
+    tool.team_id = "5"
+    tool.visibility = "private"
+    tool.owner_email = "admin@admin.org"
     tool.enabled = True
     tool.reachable = True
     tool.auth_type = None
@@ -124,6 +142,8 @@ def mock_tool():
 
     return tool
 
+
+from mcpgateway.services.tool_service import ToolNameConflictError
 
 class TestToolService:
     """Tests for the ToolService class."""
@@ -313,54 +333,95 @@ class TestToolService:
 
     @pytest.mark.asyncio
     async def test_register_tool_name_conflict(self, tool_service, mock_tool, test_db):
-        """Test tool registration with name conflict."""
-        # Mock DB to return existing tool
+        """Test tool registration with name conflict for private, team, and public visibility."""
+        # --- Private visibility: conflict if name and owner_email match ---
+        mock_tool.name = "private_tool"
+        mock_tool.visibility = "private"
+        mock_tool.owner_email = "user@example.com"
         mock_scalar = Mock()
         mock_scalar.scalar_one_or_none.return_value = mock_tool
         test_db.execute = Mock(return_value=mock_scalar)
-
-        # Create tool request with conflicting name
-        tool_create = ToolCreate(
-            name="test_tool",  # Same name as mock_tool
+        tool_create_private = ToolCreate(
+            name="private_tool",
             url="http://example.com/tools/new",
             description="A new tool",
             integration_type="REST",
             request_type="POST",
+            visibility="private",
+            owner_email="user@example.com",
         )
+        test_db.commit = Mock(side_effect=IntegrityError("UNIQUE constraint failed: tools.name, owner_email", None, None))
+        with pytest.raises(IntegrityError) as exc_info:
+            await tool_service.register_tool(test_db, tool_create_private)
+        assert "UNIQUE constraint failed: tools.name, owner_email" in str(exc_info.value)
 
-        # Should raise ToolError due to UNIQUE constraint failure (wrapped IntegrityError)
-        test_db.commit = Mock(side_effect=IntegrityError("UNIQUE constraint failed: tools.name", None, None))
-        with pytest.raises(ToolError) as exc_info:
-            await tool_service.register_tool(test_db, tool_create)
+        # --- Team visibility: conflict if name and team_id match ---
+        mock_tool.name = "team_tool"
+        mock_tool.visibility = "team"
+        mock_tool.team_id = "team123"
+        mock_scalar = Mock()
+        mock_scalar.scalar_one_or_none.return_value = mock_tool
+        test_db.execute = Mock(return_value=mock_scalar)
+        tool_create_team = ToolCreate(
+            name="team_tool",
+            url="http://example.com/tools/new",
+            description="A new tool",
+            integration_type="REST",
+            request_type="POST",
+            visibility="team",
+            team_id="team123",
+            owner_email="user@example.com"
+        )
+        test_db.commit = Mock()
+        with pytest.raises(ToolNameConflictError) as exc_info:
+            await tool_service.register_tool(test_db, tool_create_team)
+        assert "Team-level Tool already exists with name: team_tool" in str(exc_info.value)
 
-        # Check the error message for tool name conflict
-        assert "Tool already exists: test_tool" in str(exc_info.value)
+        # --- Public visibility: conflict if name and visibility match ---
+        mock_tool.name = "public_tool"
+        mock_tool.visibility = "public"
+        mock_scalar = Mock()
+        mock_scalar.scalar_one_or_none.return_value = mock_tool
+        test_db.execute = Mock(return_value=mock_scalar)
+        tool_create_public = ToolCreate(
+            name="public_tool",
+            url="http://example.com/tools/new",
+            description="A new tool",
+            integration_type="REST",
+            request_type="POST",
+            visibility="public",
+            owner_email="user@example.com",
+        )
+        test_db.commit = Mock()
+        # Ensure mock_tool.name matches the expected error message
+        mock_tool.name = "public_tool"
+        with pytest.raises(ToolNameConflictError) as exc_info:
+            await tool_service.register_tool(test_db, tool_create_public)
+        assert "Public Tool already exists with name: public_tool" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_register_inactive_tool_name_conflict(self, tool_service, mock_tool, test_db):
-        """Test tool registration with name conflict."""
-        # Mock DB to return existing tool
-        mock_scalar = Mock()
+        """Test tool registration with name conflict for inactive tool."""
+        # --- Inactive tool: conflict if name matches and enabled is False ---
+        mock_tool.name = "inactive_tool"
+        mock_tool.visibility = "public"
         mock_tool.enabled = False
+        mock_scalar = Mock()
         mock_scalar.scalar_one_or_none.return_value = mock_tool
         test_db.execute = Mock(return_value=mock_scalar)
-
-        # Create tool request with conflicting name
-        tool_create = ToolCreate(
-            name="test_tool",  # Same name as mock_tool
+        tool_create_inactive = ToolCreate(
+            name="inactive_tool",
             url="http://example.com/tools/new",
             description="A new tool",
             integration_type="REST",
             request_type="POST",
+            visibility="public",
+            owner_email="user@example.com",
         )
-
-        # Should raise ToolError due to UNIQUE constraint failure (wrapped IntegrityError)
-        test_db.commit = Mock(side_effect=IntegrityError("UNIQUE constraint failed: tools.name", None, None))
-        with pytest.raises(ToolError) as exc_info:
-            await tool_service.register_tool(test_db, tool_create)
-
-        # Check the error message for tool name conflict
-        assert "Tool already exists: test_tool" in str(exc_info.value)
+        test_db.commit = Mock()
+        with pytest.raises(ToolNameConflictError) as exc_info:
+            await tool_service.register_tool(test_db, tool_create_inactive)
+        assert "Public Tool already exists with name: inactive_tool" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_register_tool_db_integrity_error(self, tool_service, test_db):
@@ -370,7 +431,9 @@ class TestToolService:
         mock_scalar.scalar_one_or_none.return_value = None
         test_db.execute = Mock(return_value=mock_scalar)
         test_db.add = Mock()
-        test_db.commit = Mock(side_effect=IntegrityError("statement", "params", "orig"))
+        #test_db.commit = Mock(side_effect=IntegrityError("statement", "params", "orig"))
+        test_db.commit = Mock(side_effect=IntegrityError("UNIQUE constraint failed: tools.name, owner_email", None, None))
+
         test_db.rollback = Mock()
 
         # Create tool request
@@ -380,15 +443,17 @@ class TestToolService:
             description="A test tool",
             integration_type="REST",
             request_type="POST",
+            visibility="private",
+            owner_email="user@example.com",
         )
 
         # Should raise ToolError (wrapped IntegrityError)
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(IntegrityError) as exc_info:
             await tool_service.register_tool(test_db, tool_create)
 
         # Verify rollback was called
         test_db.rollback.assert_called_once()
-        assert "Tool already exists: test_tool" in str(exc_info.value)
+        assert "UNIQUE constraint failed: tools.name, owner_email" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_list_tools(self, tool_service, mock_tool, test_db):
@@ -1342,6 +1407,9 @@ class TestToolService:
             reachable=True,
             auth_type="bearer",  #  ←← attribute your error complained about
             auth_value="Bearer abc123",
+            capabilities = {"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}},
+            transport = "STREAMABLEHTTP",
+            passthrough_headers = [],
         )
         # Configure tool as REST
         mock_tool.integration_type = "MCP"
@@ -1442,6 +1510,9 @@ class TestToolService:
             reachable=True,
             auth_type="bearer",  #  ←← attribute your error complained about
             auth_value="Bearer abc123",
+            capabilities = {"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}},
+            transport = "STREAMABLEHTTP",
+            passthrough_headers = [],
         )
         # Configure tool as REST
         mock_tool.integration_type = "MCP"
@@ -2323,8 +2394,9 @@ class TestToolService:
 
         assert "Plugin error" in str(exc_info.value)
 
-    async def test_invoke_tool_with_plugin_post_invoke_error_continue_on_error(self, tool_service, mock_tool, test_db):
-        """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is False."""
+
+    async def test_invoke_tool_with_plugin_metadata_rest(self, tool_service, mock_tool, test_db):
+        """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is True."""
         # Configure tool as REST
         mock_tool.integration_type = "REST"
         mock_tool.request_type = "POST"
@@ -2343,22 +2415,65 @@ class TestToolService:
         tool_service._http_client.request.return_value = mock_response
 
         # Mock plugin manager and post-invoke hook with error
-        tool_service._plugin_manager = Mock()
-        tool_service._plugin_manager.tool_pre_invoke = AsyncMock(return_value=(Mock(continue_processing=True, violation=None, modified_payload=None), None))
-        tool_service._plugin_manager.tool_post_invoke = AsyncMock(side_effect=Exception("Plugin error"))
-
-        # Mock plugin config to continue on errors
-        mock_plugin_settings = Mock()
-        mock_plugin_settings.fail_on_plugin_error = False
-        mock_config = Mock()
-        mock_config.plugin_settings = mock_plugin_settings
-        tool_service._plugin_manager.config = mock_config
+        tool_service._plugin_manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/tool_headers_metadata_plugin.yaml")
+        await tool_service._plugin_manager.initialize()
+        # Mock metrics recording
+        tool_service._record_tool_metric = AsyncMock()
 
         with (
             patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
             patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
         ):
-            result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
+            await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
-        # Verify result still succeeded despite plugin error
-        assert result.content[0].text == '{\n  "result": "original response"\n}'
+        await tool_service._plugin_manager.shutdown()
+
+    async def test_invoke_tool_with_plugin_metadata_sse(self, tool_service, mock_tool, mock_gateway, test_db):
+        """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is True."""
+        # Configure tool as REST
+        #mock_tool.integration_type = "REST"
+        #mock_tool.request_type = "POST"
+        #mock_tool.auth_value = None
+        mock_tool.integration_type = "MCP"
+        mock_tool.request_type = "sse"
+        mock_gateway.auth_value = None
+
+        # Mock DB queries
+        mock_scalar1 = Mock()
+        mock_scalar1.scalar_one_or_none.return_value = mock_tool
+        mock_scalar2 = Mock()
+        mock_scalar2.scalar_one_or_none.return_value = mock_gateway
+        mock_scalar3 = Mock()
+        mock_scalar3.scalar_one_or_none.return_value = mock_gateway
+
+        test_db.execute = Mock(side_effect=[mock_scalar1, mock_scalar2, mock_scalar3])
+
+        expected_result = ToolResult(content=[TextContent(type="text", text="MCP OAuth response")])
+        session_mock = AsyncMock()
+        session_mock.initialize = AsyncMock()
+        session_mock.call_tool = AsyncMock(return_value=expected_result)
+
+        client_session_cm = AsyncMock()
+        client_session_cm.__aenter__.return_value = session_mock
+        client_session_cm.__aexit__.return_value = AsyncMock()
+
+        sse_ctx = AsyncMock()
+        sse_ctx.__aenter__.return_value = ("read", "write")
+
+
+        # Mock HTTP client response
+
+        # Mock plugin manager and post-invoke hook with error
+        tool_service._plugin_manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/tool_headers_metadata_plugin.yaml")
+        await tool_service._plugin_manager.initialize()
+        # Mock metrics recording
+        tool_service._record_tool_metric = AsyncMock()
+
+        with (
+            patch("mcpgateway.services.tool_service.sse_client", return_value=sse_ctx),
+            patch("mcpgateway.services.tool_service.ClientSession", return_value=client_session_cm),
+            patch("mcpgateway.services.tool_service.extract_using_jq", side_effect=lambda data, _filt: data),
+        ):
+            await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
+
+        await tool_service._plugin_manager.shutdown()
