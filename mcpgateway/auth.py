@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Shared authentication utilities.
+"""Location: ./mcpgateway/auth.py
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
+
+Shared authentication utilities.
 
 This module provides common authentication functions that can be shared
 across different parts of the application without creating circular imports.
@@ -62,7 +67,7 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
     logger = logging.getLogger(__name__)
 
     if not credentials:
-        logger.debug("No credentials provided")
+        logger.warning("No credentials provided")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",

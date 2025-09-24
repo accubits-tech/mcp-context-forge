@@ -68,18 +68,24 @@ ContextForge MCP Gateway is a feature-rich gateway, proxy and MCP Registry that 
 * 10. [Configuration (`.env` or env vars)](#configuration-env-or-env-vars)
     * 10.1. [Basic](#basic)
     * 10.2. [Authentication](#authentication)
-    * 10.3. [UI Features](#ui-features)
-    * 10.4. [Security](#security)
-    * 10.5. [Logging](#logging)
-    * 10.6. [Transport](#transport)
-    * 10.7. [Federation](#federation)
-    * 10.8. [Resources](#resources)
-    * 10.9. [Tools](#tools)
-    * 10.10. [Prompts](#prompts)
-    * 10.11. [Health Checks](#health-checks)
-    * 10.12. [Database](#database)
-    * 10.13. [Cache Backend](#cache-backend)
-    * 10.14. [Development](#development)
+    * 10.3. [A2A (Agent-to-Agent) Features](#a2a-agent-to-agent-features)
+    * 10.4. [Email-Based Authentication & User Management](#email-based-authentication--user-management)
+    * 10.5. [MCP Client Authentication](#mcp-client-authentication)
+    * 10.6. [SSO (Single Sign-On) Configuration](#sso-single-sign-on-configuration)
+    * 10.7. [Dynamic Client Registration & Virtual MCP Server Authentication](#dynamic-client-registration--virtual-mcp-server-authentication)
+    * 10.8. [UI Features](#ui-features)
+    * 10.9. [Security](#security)
+    * 10.10. [Logging](#logging)
+    * 10.11. [Transport](#transport)
+    * 10.12. [Federation](#federation)
+    * 10.13. [Resources](#resources)
+    * 10.14. [Tools](#tools)
+    * 10.15. [Prompts](#prompts)
+    * 10.16. [Health Checks](#health-checks)
+    * 10.17. [Database](#database)
+    * 10.18. [Cache Backend](#cache-backend)
+    * 10.19. [Plugin Configuration](#plugin-configuration)
+    * 10.20. [Development](#development)
 * 11. [Running](#running)
     * 11.1. [Makefile](#makefile)
     * 11.2. [Script helper](#script-helper)
@@ -128,7 +134,7 @@ It currently supports:
 * Virtualization of legacy APIs as MCP-compliant tools and servers
 * Transport over HTTP, JSON-RPC, WebSocket, SSE (with configurable keepalive), stdio and streamable-HTTP
 * An Admin UI for real-time management, configuration, and log monitoring
-* Built-in auth, retries, and rate-limiting
+* Built-in auth, retries, and rate-limiting with user-scoped OAuth tokens and unconditional X-Upstream-Authorization header support
 * **OpenTelemetry observability** with Phoenix, Jaeger, Zipkin, and other OTLP backends
 * Scalable deployments via Docker or PyPI, Redis-backed caching, and multi-cluster federation
 
@@ -240,9 +246,18 @@ MCP Gateway is published on [PyPI](https://pypi.org/project/mcp-contextforge-gat
 (single command using [uv](https://docs.astral.sh/uv/))
 
 ```bash
+# Quick start with environment variables
 BASIC_AUTH_PASSWORD=pass \
 MCPGATEWAY_UI_ENABLED=true \
 MCPGATEWAY_ADMIN_API_ENABLED=true \
+PLATFORM_ADMIN_EMAIL=admin@example.com \
+PLATFORM_ADMIN_PASSWORD=changeme \
+PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
+uvx --from mcp-contextforge-gateway mcpgateway --host 0.0.0.0 --port 4444
+
+# Or better: use the provided .env.example
+cp .env.example .env
+# Edit .env to customize your settings
 uvx --from mcp-contextforge-gateway mcpgateway --host 0.0.0.0 --port 4444
 ```
 
@@ -263,10 +278,18 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
 pip install mcp-contextforge-gateway
 
-# 2️⃣  Launch on all interfaces with custom creds & secret key
-# Enable the Admin API endpoints (true/false) - disabled by default
+# 2️⃣  Copy and customize the configuration
+# Download the example environment file
+curl -O https://raw.githubusercontent.com/IBM/mcp-context-forge/main/.env.example
+cp .env.example .env
+# Edit .env to customize your settings (especially passwords!)
+
+# Or set environment variables directly:
 export MCPGATEWAY_UI_ENABLED=true
 export MCPGATEWAY_ADMIN_API_ENABLED=true
+export PLATFORM_ADMIN_EMAIL=admin@example.com
+export PLATFORM_ADMIN_PASSWORD=changeme
+export PLATFORM_ADMIN_FULL_NAME="Platform Administrator"
 
 BASIC_AUTH_PASSWORD=pass JWT_SECRET_KEY=my-test-key \
   mcpgateway --host 0.0.0.0 --port 4444 &   # admin/pass
@@ -289,11 +312,20 @@ python3 -m venv .venv ; .\.venv\Scripts\Activate.ps1
 pip install --upgrade pip
 pip install mcp-contextforge-gateway
 
-# 2️⃣  Environment variables (session-only)
+# 2️⃣  Copy and customize the configuration
+# Download the example environment file
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/IBM/mcp-context-forge/main/.env.example" -OutFile ".env.example"
+Copy-Item .env.example .env
+# Edit .env to customize your settings
+
+# Or set environment variables (session-only)
 $Env:MCPGATEWAY_UI_ENABLED        = "true"
 $Env:MCPGATEWAY_ADMIN_API_ENABLED = "true"
 $Env:BASIC_AUTH_PASSWORD          = "changeme"      # admin/changeme
 $Env:JWT_SECRET_KEY               = "my-test-key"
+$Env:PLATFORM_ADMIN_EMAIL         = "admin@example.com"
+$Env:PLATFORM_ADMIN_PASSWORD      = "changeme"
+$Env:PLATFORM_ADMIN_FULL_NAME     = "Platform Administrator"
 
 # 3️⃣  Launch the gateway
 mcpgateway.exe --host 0.0.0.0 --port 4444
@@ -324,7 +356,7 @@ Copy [.env.example](https://github.com/IBM/mcp-context-forge/blob/main/.env.exam
 ```bash
 # 1️⃣  Spin up the sample GO MCP time server using mcpgateway.translate & docker
 python3 -m mcpgateway.translate \
-     --stdio "docker run --rm -i -p 8888:8080 ghcr.io/ibm/fast-time-server:latest -transport=stdio" \
+     --stdio "docker run --rm -i ghcr.io/ibm/fast-time-server:latest -transport=stdio" \
      --expose-sse \
      --port 8003
 
@@ -447,6 +479,9 @@ docker run -d --name mcpgateway \
   -e BASIC_AUTH_USER=admin \
   -e BASIC_AUTH_PASSWORD=changeme \
   -e AUTH_REQUIRED=true \
+  -e PLATFORM_ADMIN_EMAIL=admin@example.com \
+  -e PLATFORM_ADMIN_PASSWORD=changeme \
+  -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
   -e DATABASE_URL=sqlite:///./mcp.db \
   ghcr.io/ibm/mcp-context-forge:0.7.0
 
@@ -482,6 +517,9 @@ docker run -d --name mcpgateway \
   -e JWT_SECRET_KEY=my-test-key \
   -e BASIC_AUTH_USER=admin \
   -e BASIC_AUTH_PASSWORD=changeme \
+  -e PLATFORM_ADMIN_EMAIL=admin@example.com \
+  -e PLATFORM_ADMIN_PASSWORD=changeme \
+  -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
   ghcr.io/ibm/mcp-context-forge:0.7.0
 ```
 
@@ -505,6 +543,9 @@ docker run -d --name mcpgateway \
   -e HOST=0.0.0.0 \
   -e PORT=4444 \
   -e DATABASE_URL=sqlite:////data/mcp.db \
+  -e PLATFORM_ADMIN_EMAIL=admin@example.com \
+  -e PLATFORM_ADMIN_PASSWORD=changeme \
+  -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
   -v $(pwd)/data:/data \
   ghcr.io/ibm/mcp-context-forge:0.7.0
 ```
@@ -1054,8 +1095,10 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 | `TEMPLATES_DIR`    | Path to Jinja2 templates                 | `mcpgateway/templates` | path                   |
 | `STATIC_DIR`       | Path to static files                     | `mcpgateway/static`    | path                   |
 | `PROTOCOL_VERSION` | MCP protocol version supported           | `2025-03-26`           | string                 |
+| `FORGE_CONTENT_TYPE` | Content-Type for outgoing requests to Forge | `application/json`  | `application/json`, `application/x-www-form-urlencoded` |
 
 > 💡 Use `APP_ROOT_PATH=/foo` if reverse-proxying under a subpath like `https://host.com/foo/`.
+> 🔄 Use `FORGE_CONTENT_TYPE=application/x-www-form-urlencoded` to send URL-encoded form data instead of JSON.
 
 ### Authentication
 
@@ -1108,7 +1151,10 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 | `MCPGATEWAY_UI_ENABLED`        | Enable the interactive Admin dashboard | `false` | bool    |
 | `MCPGATEWAY_ADMIN_API_ENABLED` | Enable API endpoints for admin ops     | `false` | bool    |
 | `MCPGATEWAY_BULK_IMPORT_ENABLED` | Enable bulk import endpoint for tools | `true`  | bool    |
+| `MCPGATEWAY_BULK_IMPORT_MAX_TOOLS` | Maximum number of tools per bulk import request | `200` | int |
+| `MCPGATEWAY_BULK_IMPORT_RATE_LIMIT` | Rate limit for bulk import endpoint (requests per minute) | `10` | int |
 | `MCPGATEWAY_UI_TOOL_TEST_TIMEOUT` | Tool test timeout in milliseconds for the admin UI | `60000` | int |
+| `MCPCONTEXT_UI_ENABLED`        | Enable ContextForge UI features        | `true`  | bool    |
 
 > 🖥️ Set both UI and Admin API to `false` to disable management UI and APIs in production.
 > 📥 The bulk import endpoint allows importing up to 200 tools in a single request via `/admin/tools/import`.
@@ -1209,11 +1255,26 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 | ------------------------------ | ------------------------------------------------ | --------------------- | ------- |
 | `SSO_AUTO_ADMIN_DOMAINS`      | Email domains that automatically get admin privileges | `[]`             | JSON array |
 
+### Dynamic Client Registration & Virtual MCP Server Authentication
+
+ContextForge supports OAuth2 with Dynamic Client Registration (DCR)
+for streamable HTTP servers through integration with an upstream API gateway,
+such as HyperMCP gateway, enabling automatic OAuth2 client provisioning for MCP servers
+without manual configuration.
+
+| Setting                     | Description                                            | Default | Options |
+|-----------------------------|--------------------------------------------------------|---------|---------|
+| `JWT_AUDIENCE_VERIFICATION` | JWT audience verification needs to be disabled for DCR | `true`  | bool    |
+
+You can find an example for using dynamic client registration (DCR) with [HyprMCP Gateway (`hyprmcp/mcp-gateway`)](https://github.com/hyprmcp/mcp-gateway).
+
+Follow the tutorial at https://ibm.github.io/mcp-context-forge/tutorials/dcr-hyprmcp/ to get started.
+
 ### Personal Teams Configuration
 
 | Setting                                  | Description                                      | Default    | Options |
 | ---------------------------------------- | ------------------------------------------------ | ---------- | ------- |
-| `AUTO_CREATE_PERSONAL_TEAMS`            | Enable automatic personal team creation for new users | `true`   | bool    |
+| `AUTO_CREATE_PERSONAL_TEAMS`             | Enable automatic personal team creation for new users | `true`   | bool    |
 | `PERSONAL_TEAM_PREFIX`                   | Personal team naming prefix                      | `personal` | string  |
 | `MAX_TEAMS_PER_USER`                     | Maximum number of teams a user can belong to    | `50`       | int > 0 |
 | `MAX_MEMBERS_PER_TEAM`                   | Maximum number of members per team               | `100`      | int > 0 |
@@ -1234,14 +1295,23 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 | `COOKIE_SAMESITE`         | Cookie SameSite attribute      | `lax`                                          | `strict`/`lax`/`none` |
 | `SECURITY_HEADERS_ENABLED` | Enable security headers middleware | `true`                                     | bool       |
 | `X_FRAME_OPTIONS`         | X-Frame-Options header value   | `DENY`                                         | `DENY`/`SAMEORIGIN` |
+| `X_CONTENT_TYPE_OPTIONS_ENABLED` | Enable X-Content-Type-Options: nosniff header | `true`                           | bool       |
+| `X_XSS_PROTECTION_ENABLED` | Enable X-XSS-Protection header | `true`                                         | bool       |
+| `X_DOWNLOAD_OPTIONS_ENABLED` | Enable X-Download-Options: noopen header | `true`                              | bool       |
 | `HSTS_ENABLED`            | Enable HSTS header             | `true`                                         | bool       |
 | `HSTS_MAX_AGE`            | HSTS max age in seconds        | `31536000`                                     | int        |
+| `HSTS_INCLUDE_SUBDOMAINS` | Include subdomains in HSTS header | `true`                                      | bool       |
 | `REMOVE_SERVER_HEADERS`   | Remove server identification   | `true`                                         | bool       |
 | `DOCS_ALLOW_BASIC_AUTH`   | Allow Basic Auth for docs (in addition to JWT)         | `false`                                        | bool       |
+| `MIN_SECRET_LENGTH`       | Minimum length for secret keys (JWT, encryption) | `32`                                | int        |
+| `MIN_PASSWORD_LENGTH`     | Minimum length for passwords   | `12`                                           | int        |
+| `REQUIRE_STRONG_SECRETS`  | Enforce strong secrets (fail startup on weak secrets) | `false`                        | bool       |
 
 > **CORS Configuration**: When `ENVIRONMENT=development`, CORS origins are automatically configured for common development ports (3000, 8080, gateway port). In production, origins are constructed from `APP_DOMAIN` (e.g., `https://yourdomain.com`, `https://app.yourdomain.com`). You can override this by explicitly setting `ALLOWED_ORIGINS`.
 >
 > **Security Headers**: The gateway automatically adds configurable security headers to all responses including CSP, X-Frame-Options, X-Content-Type-Options, X-Download-Options, and HSTS (on HTTPS). All headers can be individually enabled/disabled. Sensitive server headers are removed.
+>
+> **Security Validation**: Set `REQUIRE_STRONG_SECRETS=true` to enforce minimum lengths for JWT secrets and passwords at startup. This helps prevent weak credentials in production. Default is `false` for backward compatibility.
 >
 > **iframe Embedding**: By default, `X-Frame-Options: DENY` prevents iframe embedding for security. To allow embedding, set `X_FRAME_OPTIONS=SAMEORIGIN` (same domain) or disable with `X_FRAME_OPTIONS=""`. Also update CSP `frame-ancestors` directive if needed.
 >
@@ -1424,6 +1494,8 @@ mcpgateway
 | `UNHEALTHY_THRESHOLD`   | Fail-count before peer deactivation,      | `3`     | int > 0 |
 |                         | Set to -1 if deactivation is not needed.  |         |         |
 | `GATEWAY_VALIDATION_TIMEOUT` | Gateway URL validation timeout (secs) | `5`     | int > 0 |
+| `FILELOCK_NAME`         | File lock for leader election             | `gateway_service_leader.lock` | string |
+| `DEFAULT_ROOTS`         | Default root paths for resources          | `[]`    | JSON array |
 
 ### Database
 
@@ -1443,6 +1515,8 @@ mcpgateway
 | `CACHE_TYPE`              | Backend type | `database` | `none`, `memory`, `database`, `redis` |
 | `REDIS_URL`               | Redis connection URL       | (none)   | string or empty          |
 | `CACHE_PREFIX`            | Key prefix                 | `mcpgw:` | string                   |
+| `SESSION_TTL`             | Session validity (secs)    | `3600`   | int > 0                  |
+| `MESSAGE_TTL`             | Message retention (secs)   | `600`    | int > 0                  |
 | `REDIS_MAX_RETRIES`       | Max Retry Attempts         | `3`      | int > 0                  |
 | `REDIS_RETRY_INTERVAL_MS` | Retry Interval (ms)        | `2000`   | int > 0                  |
 
