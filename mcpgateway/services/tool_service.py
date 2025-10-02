@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 # First-Party
 from mcpgateway.config import settings
 from mcpgateway.db import A2AAgent as DbA2AAgent
+from mcpgateway.db import EmailTeam
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import server_tool_association
 from mcpgateway.db import Tool as DbTool
@@ -269,6 +270,21 @@ class ToolService:
 
         return build_top_performers(results)
 
+    def _get_team_name(self, db: Session, team_id: Optional[str]) -> Optional[str]:
+        """Retrieve the team name given a team ID.
+
+        Args:
+            db (Session): Database session for querying teams.
+            team_id (Optional[str]): The ID of the team.
+
+        Returns:
+            Optional[str]: The name of the team if found, otherwise None.
+        """
+        if not team_id:
+            return None
+        team = db.query(EmailTeam).filter(EmailTeam.id == team_id, EmailTeam.is_active.is_(True)).first()
+        return team.name if team else None
+
     def _convert_tool_to_read(self, tool: DbTool) -> ToolRead:
         """Converts a DbTool instance into a ToolRead model, including aggregated metrics and
         new API gateway fields: request_type and authentication credentials (masked).
@@ -362,7 +378,7 @@ class ToolService:
         tool_dict["gateway_slug"] = getattr(tool, "gateway_slug", "") or ""
         tool_dict["custom_name_slug"] = getattr(tool, "custom_name_slug", "") or ""
         tool_dict["tags"] = getattr(tool, "tags", []) or []
-
+        tool_dict["team"] = getattr(tool, "team", None)
         return ToolRead.model_validate(tool_dict)
 
     async def _record_tool_metric(self, db: Session, tool: DbTool, start_time: float, success: bool, error_message: Optional[str]) -> None:
@@ -464,8 +480,9 @@ class ToolService:
 
             if owner_email is None:
                 owner_email = tool.owner_email
+
             if visibility is None:
-                visibility = tool.visibility or "private"
+                visibility = tool.visibility or "public"
             # Check for existing tool with the same name and visibility
             if visibility.lower() == "public":
                 # Check for existing public tool with the same name
@@ -510,6 +527,7 @@ class ToolService:
                 owner_email=owner_email or created_by,
                 visibility=visibility,
             )
+
             db.add(db_tool)
             db.commit()
             db.refresh(db_tool)
@@ -571,7 +589,12 @@ class ToolService:
             query = query.where(json_contains_expr(db, DbTool.tags, tags, match_any=True))
 
         tools = db.execute(query).scalars().all()
-        return [self._convert_tool_to_read(t) for t in tools]
+        result = []
+        for t in tools:
+            team_name = self._get_team_name(db, getattr(t, "team_id", None))
+            t.team = team_name
+            result.append(self._convert_tool_to_read(t))
+        return result
 
     async def list_server_tools(self, db: Session, server_id: str, include_inactive: bool = False, cursor: Optional[str] = None, _request_headers: Optional[Dict[str, str]] = None) -> List[ToolRead]:
         """
@@ -609,10 +632,15 @@ class ToolService:
         if not include_inactive:
             query = query.where(DbTool.enabled)
         tools = db.execute(query).scalars().all()
-        return [self._convert_tool_to_read(t) for t in tools]
+        result = []
+        for t in tools:
+            team_name = self._get_team_name(db, getattr(t, "team_id", None))
+            t.team = team_name
+            result.append(self._convert_tool_to_read(t))
+        return result
 
     async def list_tools_for_user(
-        self, db: Session, user_email: str, team_id: Optional[str] = None, visibility: Optional[str] = None, include_inactive: bool = False, skip: int = 0, limit: int = 100
+        self, db: Session, user_email: str, team_id: Optional[str] = None, visibility: Optional[str] = None, include_inactive: bool = False, _skip: int = 0, _limit: int = 100
     ) -> List[ToolRead]:
         """
         List tools user has access to with team filtering.
@@ -623,8 +651,8 @@ class ToolService:
             team_id: Optional team ID to filter by specific team
             visibility: Optional visibility filter (private, team, public)
             include_inactive: Whether to include inactive tools
-            skip: Number of tools to skip for pagination
-            limit: Maximum number of tools to return
+            _skip: Number of tools to skip for pagination
+            _limit: Maximum number of tools to return
 
         Returns:
             List[ToolRead]: Tools the user has access to
@@ -673,11 +701,17 @@ class ToolService:
         if visibility:
             query = query.where(DbTool.visibility == visibility)
 
-        # Apply pagination following existing patterns
-        query = query.offset(skip).limit(limit)
+        # Note: Pagination is currently not implemented so this limit is not supporeted as of now
+        # # Apply pagination following existing patterns
+        # query = query.offset(skip).limit(limit)
 
         tools = db.execute(query).scalars().all()
-        return [self._convert_tool_to_read(t) for t in tools]
+        result = []
+        for t in tools:
+            team_name = self._get_team_name(db, getattr(t, "team_id", None))
+            t.team = team_name
+            result.append(self._convert_tool_to_read(t))
+        return result
 
     async def get_tool(self, db: Session, tool_id: str) -> ToolRead:
         """
@@ -708,6 +742,7 @@ class ToolService:
         tool = db.get(DbTool, tool_id)
         if not tool:
             raise ToolNotFoundError(f"Tool not found: {tool_id}")
+        tool.team = self._get_team_name(db, getattr(tool, "team_id", None))
         return self._convert_tool_to_read(tool)
 
     async def delete_tool(self, db: Session, tool_id: str) -> None:
@@ -807,7 +842,6 @@ class ToolService:
                 else:
                     await self._notify_tool_deactivated(tool)
                 logger.info(f"Tool: {tool.name} is {'enabled' if activate else 'disabled'}{' and accessible' if reachable else ' but inaccessible'}")
-
             return self._convert_tool_to_read(tool)
         except Exception as e:
             db.rollback()
@@ -849,6 +883,7 @@ class ToolService:
             True
         """
         # pylint: disable=comparison-with-callable
+        logger.info(f"Invoking tool: {name} with arguments: {arguments.keys() if arguments else None} and headers: {request_headers.keys() if request_headers else None}")
         tool = db.execute(select(DbTool).where(DbTool.name == name).where(DbTool.enabled)).scalar_one_or_none()
         if not tool:
             inactive_tool = db.execute(select(DbTool).where(DbTool.name == name).where(not_(DbTool.enabled))).scalar_one_or_none()
@@ -861,10 +896,9 @@ class ToolService:
 
         if not is_reachable:
             raise ToolNotFoundError(f"Tool '{name}' exists but is currently offline. Please verify if it is running.")
-
         # Check if this is an A2A tool and route to A2A service
         if tool.integration_type == "A2A" and tool.annotations and "a2a_agent_id" in tool.annotations:
-            return await self._invoke_a2a_tool(db, tool, arguments)
+            return await self._invoke_a2a_tool(db=db, tool=tool, arguments=arguments)
 
         # Plugin hook: tool pre-invoke
         context_table = None
@@ -1026,11 +1060,12 @@ class ToolService:
                     if request_headers:
                         headers = get_passthrough_headers(request_headers, headers, db, gateway)
 
-                    async def connect_to_sse_server(server_url: str):
+                    async def connect_to_sse_server(server_url: str, headers: dict = headers):
                         """Connect to an MCP server running with SSE transport.
 
                         Args:
                             server_url: MCP Server SSE URL
+                            headers: HTTP headers to include in the request
 
                         Returns:
                             ToolResult: Result of tool call
@@ -1041,11 +1076,12 @@ class ToolService:
                                 tool_call_result = await session.call_tool(tool.original_name, arguments)
                         return tool_call_result
 
-                    async def connect_to_streamablehttp_server(server_url: str):
+                    async def connect_to_streamablehttp_server(server_url: str, headers: dict = headers):
                         """Connect to an MCP server running with Streamable HTTP transport.
 
                         Args:
                             server_url: MCP Server URL
+                            headers: HTTP headers to include in the request
 
                         Returns:
                             ToolResult: Result of tool call
@@ -1080,9 +1116,9 @@ class ToolService:
 
                     tool_call_result = ToolResult(content=[TextContent(text="", type="text")])
                     if transport == "sse":
-                        tool_call_result = await connect_to_sse_server(tool_gateway.url)
+                        tool_call_result = await connect_to_sse_server(tool_gateway.url, headers=headers)
                     elif transport == "streamablehttp":
-                        tool_call_result = await connect_to_streamablehttp_server(tool_gateway.url)
+                        tool_call_result = await connect_to_streamablehttp_server(tool_gateway.url, headers=headers)
                     content = tool_call_result.model_dump(by_alias=True).get("content", [])
 
                     filtered_response = extract_using_jq(content, tool.jsonpath_filter)
@@ -1521,6 +1557,7 @@ class ToolService:
             ToolNameConflictError: If a tool with the same name already exists.
         """
         # Check if tool already exists for this agent
+        logger.info(f"testing Creating tool for A2A agent: {vars(agent)}")
         tool_name = f"a2a_{agent.slug}"
         existing_query = select(DbTool).where(DbTool.original_name == tool_name)
         existing_tool = db.execute(existing_query).scalar_one_or_none()
@@ -1545,6 +1582,7 @@ class ToolService:
                 },
                 "required": ["parameters"],
             },
+            allow_auto=True,
             annotations={
                 "title": f"A2A Agent: {agent.name}",
                 "a2a_agent_id": agent.id,
@@ -1578,6 +1616,7 @@ class ToolService:
         Raises:
             ToolNotFoundError: If the A2A agent is not found.
         """
+
         # Extract A2A agent ID from tool annotations
         agent_id = tool.annotations.get("a2a_agent_id")
         if not agent_id:
@@ -1594,17 +1633,9 @@ class ToolService:
             raise ToolNotFoundError(f"A2A agent '{agent.name}' is disabled")
 
         # Prepare parameters for A2A invocation
-        parameters = arguments.get("parameters", arguments)
-        interaction_type = arguments.get("interaction_type", "query")
-
-        start_time = time.time()
-        success = False
-        error_message = None
-
         try:
             # Make the A2A agent call
-            response_data = await self._call_a2a_agent(agent, parameters, interaction_type)
-            success = True
+            response_data = await self._call_a2a_agent(agent, arguments)
 
             # Convert A2A response to MCP ToolResult format
             if isinstance(response_data, dict) and "response" in response_data:
@@ -1616,33 +1647,18 @@ class ToolService:
 
         except Exception as e:
             error_message = str(e)
-            success = False
             content = [TextContent(type="text", text=f"A2A agent error: {error_message}")]
             result = ToolResult(content=content, is_error=True)
 
-        finally:
-            # Record metrics for the tool
-            end_time = time.time()
-            response_time = end_time - start_time
-
-            metric = ToolMetric(
-                tool_id=tool.id,
-                response_time=response_time,
-                is_success=success,
-                error_message=error_message,
-            )
-            db.add(metric)
-            db.commit()
-
+        # Note: Metrics are recorded by the calling invoke_tool method, not here
         return result
 
-    async def _call_a2a_agent(self, agent: DbA2AAgent, parameters: Dict[str, Any], interaction_type: str = "query") -> Dict[str, Any]:
+    async def _call_a2a_agent(self, agent: DbA2AAgent, parameters: Dict[str, Any]):
         """Call an A2A agent directly.
 
         Args:
             agent: The A2A agent to call.
             parameters: Parameters for the interaction.
-            interaction_type: Type of interaction.
 
         Returns:
             Response from the A2A agent.
@@ -1650,14 +1666,31 @@ class ToolService:
         Raises:
             Exception: If the call fails.
         """
-        # Format request based on agent type and endpoint
-        if agent.agent_type in ["generic", "jsonrpc"] or agent.endpoint_url.endswith("/"):
-            # Use JSONRPC format for agents that expect it
-            request_data = {"jsonrpc": "2.0", "method": parameters.get("method", "message/send"), "params": parameters.get("params", parameters), "id": 1}
+        logger.info(f"Calling A2A agent '{agent.name}' at {agent.endpoint_url} with arguments: {parameters}")
+        # Patch: Build correct JSON-RPC params structure from flat UI input
+        params = None
+        # If UI sends flat fields, convert to nested message structure
+        if isinstance(parameters, dict) and "parameters" in parameters and "interaction_type" in parameters and isinstance(parameters["interaction_type"], str):
+            # Build the nested message object
+            message_id = f"admin-test-{int(time.time())}"
+            params = {"message": {"messageId": message_id, "role": "user", "parts": [{"type": "text", "text": parameters["interaction_type"]}]}}
+            method = parameters.get("parameters", "message/send")
         else:
-            # Use custom A2A format
-            request_data = {"interaction_type": interaction_type, "parameters": parameters, "protocol_version": agent.protocol_version}
+            # Already in correct format or unknown, pass through
+            params = parameters.get("params", parameters)
+            method = parameters.get("method", "message/send")
 
+        if agent.agent_type in ["generic", "jsonrpc"] or agent.endpoint_url.endswith("/"):
+            try:
+                request_data = {"jsonrpc": "2.0", "method": method, "params": params, "id": 1}
+                logger.info(f"invoke tool JSONRPC request_data prepared: {request_data}")
+            except Exception as e:
+                logger.error(f"Error preparing JSONRPC request data: {e}")
+                raise
+        else:
+            logger.info(f"invoke tool Using custom A2A format for A2A agent '{parameters}'")
+            request_data = {"interaction_type": parameters.get("interaction_type", "query"), "parameters": params, "protocol_version": agent.protocol_version}
+        logger.info(f"invoke tool request_data prepared: {request_data}")
         # Make HTTP request to the agent endpoint
         async with httpx.AsyncClient(timeout=30.0) as client:
             headers = {"Content-Type": "application/json"}

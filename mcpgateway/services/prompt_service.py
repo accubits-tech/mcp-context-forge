@@ -25,12 +25,13 @@ import uuid
 
 # Third-Party
 from jinja2 import Environment, meta, select_autoescape
-from sqlalchemy import case, delete, desc, Float, func, not_, select
+from sqlalchemy import and_, case, delete, desc, Float, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 # First-Party
 from mcpgateway.config import settings
+from mcpgateway.db import EmailTeam
 from mcpgateway.db import Prompt as DbPrompt
 from mcpgateway.db import PromptMetric, server_prompt_association
 from mcpgateway.models import Message, PromptResult, Role, TextContent
@@ -248,6 +249,8 @@ class PromptService:
                 "lastExecutionTime": last_time,
             },
             "tags": db_prompt.tags or [],
+            "visibility": db_prompt.visibility,
+            "team": getattr(db_prompt, "team", None),
             # Include metadata fields for proper API response
             "created_by": getattr(db_prompt, "created_by", None),
             "modified_by": getattr(db_prompt, "modified_by", None),
@@ -258,7 +261,24 @@ class PromptService:
             "modified_via": getattr(db_prompt, "modified_via", None),
             "modified_user_agent": getattr(db_prompt, "modified_user_agent", None),
             "version": getattr(db_prompt, "version", None),
+            "team_id": getattr(db_prompt, "team_id", None),
+            "owner_email": getattr(db_prompt, "owner_email", None),
         }
+
+    def _get_team_name(self, db: Session, team_id: Optional[str]) -> Optional[str]:
+        """Retrieve the team name given a team ID.
+
+        Args:
+            db (Session): Database session for querying teams.
+            team_id (Optional[str]): The ID of the team.
+
+        Returns:
+            Optional[str]: The name of the team if found, otherwise None.
+        """
+        if not team_id:
+            return None
+        team = db.query(EmailTeam).filter(EmailTeam.id == team_id, EmailTeam.is_active.is_(True)).first()
+        return team.name if team else None
 
     async def register_prompt(
         self,
@@ -272,7 +292,7 @@ class PromptService:
         federation_source: Optional[str] = None,
         team_id: Optional[str] = None,
         owner_email: Optional[str] = None,
-        visibility: str = "private",
+        visibility: Optional[str] = "public",
     ) -> PromptRead:
         """Register a new prompt template.
 
@@ -358,11 +378,11 @@ class PromptService:
             db.add(db_prompt)
             db.commit()
             db.refresh(db_prompt)
-
             # Notify subscribers
             await self._notify_prompt_added(db_prompt)
 
             logger.info(f"Registered prompt: {prompt.name}")
+            db_prompt.team = self._get_team_name(db, db_prompt.team_id)
             prompt_dict = self._convert_db_prompt(db_prompt)
             return PromptRead.model_validate(prompt_dict)
 
@@ -419,7 +439,12 @@ class PromptService:
         # Cursor-based pagination logic can be implemented here in the future.
         logger.debug(cursor)
         prompts = db.execute(query).scalars().all()
-        return [PromptRead.model_validate(self._convert_db_prompt(p)) for p in prompts]
+        result = []
+        for t in prompts:
+            team_name = self._get_team_name(db, getattr(t, "team_id", None))
+            t.team = team_name
+            result.append(PromptRead.model_validate(self._convert_db_prompt(t)))
+        return result
 
     async def list_prompts_for_user(
         self, db: Session, user_email: str, team_id: Optional[str] = None, visibility: Optional[str] = None, include_inactive: bool = False, skip: int = 0, limit: int = 100
@@ -443,6 +468,11 @@ class PromptService:
         from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
 
         # Build query following existing patterns from list_prompts()
+        team_service = TeamManagementService(db)
+        user_teams = await team_service.get_user_teams(user_email)
+        team_ids = [team.id for team in user_teams]
+
+        # Build query following existing patterns from list_resources()
         query = select(DbPrompt)
 
         # Apply active/inactive filter
@@ -450,35 +480,25 @@ class PromptService:
             query = query.where(DbPrompt.is_active)
 
         if team_id:
-            # Filter by specific team
-            query = query.where(DbPrompt.team_id == team_id)
-
-            # Validate user has access to team
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email)
-            team_ids = [team.id for team in user_teams]
-
             if team_id not in team_ids:
                 return []  # No access to team
-        else:
-            # Get user's accessible teams
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email)
-            team_ids = [team.id for team in user_teams]
-
-            # Build access conditions following existing patterns
-            # Third-Party
-            from sqlalchemy import and_, or_  # pylint: disable=import-outside-toplevel
 
             access_conditions = []
+            # Filter by specific team
+            access_conditions.append(and_(DbPrompt.team_id == team_id, DbPrompt.visibility.in_(["team", "public"])))
 
+            access_conditions.append(and_(DbPrompt.team_id == team_id, DbPrompt.owner_email == user_email))
+
+            query = query.where(or_(*access_conditions))
+        else:
+            # Get user's accessible teams
+            # Build access conditions following existing patterns
+            access_conditions = []
             # 1. User's personal resources (owner_email matches)
             access_conditions.append(DbPrompt.owner_email == user_email)
-
             # 2. Team resources where user is member
             if team_ids:
                 access_conditions.append(and_(DbPrompt.team_id.in_(team_ids), DbPrompt.visibility.in_(["team", "public"])))
-
             # 3. Public resources (if visibility allows)
             access_conditions.append(DbPrompt.visibility == "public")
 
@@ -492,7 +512,12 @@ class PromptService:
         query = query.offset(skip).limit(limit)
 
         prompts = db.execute(query).scalars().all()
-        return [PromptRead.model_validate(self._convert_db_prompt(p)) for p in prompts]
+        result = []
+        for t in prompts:
+            team_name = self._get_team_name(db, getattr(t, "team_id", None))
+            t.team = team_name
+            result.append(PromptRead.model_validate(self._convert_db_prompt(t)))
+        return result
 
     async def list_server_prompts(self, db: Session, server_id: str, include_inactive: bool = False, cursor: Optional[str] = None) -> List[PromptRead]:
         """
@@ -535,7 +560,35 @@ class PromptService:
         # Cursor-based pagination logic can be implemented here in the future.
         logger.debug(cursor)
         prompts = db.execute(query).scalars().all()
-        return [PromptRead.model_validate(self._convert_db_prompt(p)) for p in prompts]
+        result = []
+        for t in prompts:
+            team_name = self._get_team_name(db, getattr(t, "team_id", None))
+            t.team = team_name
+            result.append(PromptRead.model_validate(self._convert_db_prompt(t)))
+        return result
+
+    async def _record_prompt_metric(self, db: Session, prompt: DbPrompt, start_time: float, success: bool, error_message: Optional[str]) -> None:
+        """
+        Records a metric for a prompt invocation.
+
+        Args:
+            db: Database session
+            prompt: The prompt that was invoked
+            start_time: Monotonic start time of the invocation
+            success: True if successful, False otherwise
+            error_message: Error message if failed, None otherwise
+        """
+        end_time = time.monotonic()
+        response_time = end_time - start_time
+
+        metric = PromptMetric(
+            prompt_id=prompt.id,
+            response_time=response_time,
+            is_success=success,
+            error_message=error_message,
+        )
+        db.add(metric)
+        db.commit()
 
     async def get_prompt(
         self,
@@ -581,6 +634,9 @@ class PromptService:
         """
 
         start_time = time.monotonic()
+        success = False
+        error_message = None
+        prompt = None
 
         # Create a trace span for prompt rendering
         with create_span(
@@ -594,67 +650,81 @@ class PromptService:
                 "request_id": request_id or "none",
             },
         ) as span:
-            if self._plugin_manager:
-                if not request_id:
-                    request_id = uuid.uuid4().hex
-                global_context = GlobalContext(request_id=request_id, user=user, server_id=server_id, tenant_id=tenant_id)
-                pre_result, context_table = await self._plugin_manager.prompt_pre_fetch(
-                    payload=PromptPrehookPayload(name=name, args=arguments), global_context=global_context, local_contexts=None, violations_as_exceptions=True
-                )
+            try:
+                if self._plugin_manager:
+                    if not request_id:
+                        request_id = uuid.uuid4().hex
+                    global_context = GlobalContext(request_id=request_id, user=user, server_id=server_id, tenant_id=tenant_id)
+                    pre_result, context_table = await self._plugin_manager.prompt_pre_fetch(
+                        payload=PromptPrehookPayload(name=name, args=arguments), global_context=global_context, local_contexts=None, violations_as_exceptions=True
+                    )
 
-                # Use modified payload if provided
-                if pre_result.modified_payload:
-                    payload = pre_result.modified_payload
-                    name = payload.name
-                    arguments = payload.args
+                    # Use modified payload if provided
+                    if pre_result.modified_payload:
+                        payload = pre_result.modified_payload
+                        name = payload.name
+                        arguments = payload.args
 
-            # Find prompt
-            prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(DbPrompt.is_active)).scalar_one_or_none()
+                # Find prompt
+                prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(DbPrompt.is_active)).scalar_one_or_none()
 
-            if not prompt:
-                inactive_prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(not_(DbPrompt.is_active))).scalar_one_or_none()
-                if inactive_prompt:
-                    raise PromptNotFoundError(f"Prompt '{name}' exists but is inactive")
+                if not prompt:
+                    inactive_prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name).where(not_(DbPrompt.is_active))).scalar_one_or_none()
+                    if inactive_prompt:
+                        raise PromptNotFoundError(f"Prompt '{name}' exists but is inactive")
 
-                raise PromptNotFoundError(f"Prompt not found: {name}")
+                    raise PromptNotFoundError(f"Prompt not found: {name}")
 
-            if not arguments:
-                result = PromptResult(
-                    messages=[
-                        Message(
-                            role=Role.USER,
-                            content=TextContent(type="text", text=prompt.template),
-                        )
-                    ],
-                    description=prompt.description,
-                )
-            else:
-                try:
-                    prompt.validate_arguments(arguments)
-                    rendered = self._render_template(prompt.template, arguments)
-                    messages = self._parse_messages(rendered)
-                    result = PromptResult(messages=messages, description=prompt.description)
-                except Exception as e:
-                    if span:
-                        span.set_attribute("error", True)
-                        span.set_attribute("error.message", str(e))
-                    raise PromptError(f"Failed to process prompt: {str(e)}")
+                if not arguments:
+                    result = PromptResult(
+                        messages=[
+                            Message(
+                                role=Role.USER,
+                                content=TextContent(type="text", text=prompt.template),
+                            )
+                        ],
+                        description=prompt.description,
+                    )
+                else:
+                    try:
+                        prompt.validate_arguments(arguments)
+                        rendered = self._render_template(prompt.template, arguments)
+                        messages = self._parse_messages(rendered)
+                        result = PromptResult(messages=messages, description=prompt.description)
+                    except Exception as e:
+                        if span:
+                            span.set_attribute("error", True)
+                            span.set_attribute("error.message", str(e))
+                        raise PromptError(f"Failed to process prompt: {str(e)}")
 
-            if self._plugin_manager:
-                post_result, _ = await self._plugin_manager.prompt_post_fetch(
-                    payload=PromptPosthookPayload(name=name, result=result), global_context=global_context, local_contexts=context_table, violations_as_exceptions=True
-                )
-                # Use modified payload if provided
-                return post_result.modified_payload.result if post_result.modified_payload else result
+                if self._plugin_manager:
+                    post_result, _ = await self._plugin_manager.prompt_post_fetch(
+                        payload=PromptPosthookPayload(name=name, result=result), global_context=global_context, local_contexts=context_table, violations_as_exceptions=True
+                    )
+                    # Use modified payload if provided
+                    result = post_result.modified_payload.result if post_result.modified_payload else result
 
-            # Set success attributes on span
-            if span:
-                span.set_attribute("success", True)
-                span.set_attribute("duration.ms", (time.monotonic() - start_time) * 1000)
-                if result and hasattr(result, "messages"):
-                    span.set_attribute("messages.count", len(result.messages))
+                # Set success attributes on span
+                if span:
+                    span.set_attribute("success", True)
+                    span.set_attribute("duration.ms", (time.monotonic() - start_time) * 1000)
+                    if result and hasattr(result, "messages"):
+                        span.set_attribute("messages.count", len(result.messages))
 
-            return result
+                success = True
+                return result
+
+            except Exception as e:
+                success = False
+                error_message = str(e)
+                raise
+            finally:
+                # Record metrics only if we found a prompt
+                if prompt:
+                    try:
+                        await self._record_prompt_metric(db, prompt, start_time, success, error_message)
+                    except Exception as metrics_error:
+                        logger.warning(f"Failed to record prompt metric: {metrics_error}")
 
     async def update_prompt(
         self,
@@ -733,6 +803,9 @@ class PromptService:
                     argument_schema["properties"][arg.name] = schema
                 prompt.argument_schema = argument_schema
 
+            if prompt_update.visibility is not None:
+                prompt.visibility = prompt_update.visibility
+
             # Update tags if provided
             if prompt_update.tags is not None:
                 prompt.tags = prompt_update.tags
@@ -756,6 +829,7 @@ class PromptService:
             db.refresh(prompt)
 
             await self._notify_prompt_updated(prompt)
+            prompt.team = self._get_team_name(db, prompt.team_id)
             return PromptRead.model_validate(self._convert_db_prompt(prompt))
 
         except IntegrityError as ie:
@@ -818,6 +892,7 @@ class PromptService:
                 else:
                     await self._notify_prompt_deactivated(prompt)
                 logger.info(f"Prompt {prompt.name} {'activated' if activate else 'deactivated'}")
+            prompt.team = self._get_team_name(db, prompt.team_id)
             return PromptRead.model_validate(self._convert_db_prompt(prompt))
         except Exception as e:
             db.rollback()
@@ -863,6 +938,7 @@ class PromptService:
                     raise PromptNotFoundError(f"Prompt '{name}' exists but is inactive")
             raise PromptNotFoundError(f"Prompt not found: {name}")
         # Return the fully converted prompt including metrics
+        prompt.team = self._get_team_name(db, prompt.team_id)
         return self._convert_db_prompt(prompt)
 
     async def delete_prompt(self, db: Session, name: str) -> None:

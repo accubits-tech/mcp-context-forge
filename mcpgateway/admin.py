@@ -26,6 +26,7 @@ import html
 import io
 import json
 import logging
+import os
 from pathlib import Path
 import time
 from typing import Any, cast, Dict, List, Optional, Union
@@ -38,7 +39,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 import httpx
 import jwt
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 from pydantic_core import ValidationError as CoreValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -52,6 +53,14 @@ from mcpgateway.middleware.rbac import get_current_user_with_permissions, requir
 from mcpgateway.models import LogLevel
 from mcpgateway.schemas import (
     A2AAgentCreate,
+    A2AAgentRead,
+    CatalogBulkRegisterRequest,
+    CatalogBulkRegisterResponse,
+    CatalogListRequest,
+    CatalogListResponse,
+    CatalogServerRegisterRequest,
+    CatalogServerRegisterResponse,
+    CatalogServerStatusResponse,
     GatewayCreate,
     GatewayRead,
     GatewayTestRequest,
@@ -59,6 +68,9 @@ from mcpgateway.schemas import (
     GatewayUpdate,
     GlobalConfigRead,
     GlobalConfigUpdate,
+    PluginDetail,
+    PluginListResponse,
+    PluginStatsResponse,
     PromptCreate,
     PromptMetrics,
     PromptRead,
@@ -77,12 +89,15 @@ from mcpgateway.schemas import (
     ToolUpdate,
 )
 from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
+from mcpgateway.services.catalog_service import catalog_service
 from mcpgateway.services.export_service import ExportError, ExportService
 from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNameConflictError, GatewayNotFoundError, GatewayService, GatewayUrlConflictError
 from mcpgateway.services.import_service import ConflictStrategy
 from mcpgateway.services.import_service import ImportError as ImportServiceError
 from mcpgateway.services.import_service import ImportService, ImportValidationError
 from mcpgateway.services.logging_service import LoggingService
+from mcpgateway.services.oauth_manager import OAuthManager
+from mcpgateway.services.plugin_service import get_plugin_service
 from mcpgateway.services.prompt_service import PromptNotFoundError, PromptService
 from mcpgateway.services.resource_service import ResourceNotFoundError, ResourceService
 from mcpgateway.services.root_service import RootService
@@ -96,6 +111,7 @@ from mcpgateway.utils.metadata_capture import MetadataCapture
 from mcpgateway.utils.oauth_encryption import get_oauth_encryption
 from mcpgateway.utils.passthrough_headers import PassthroughHeadersError
 from mcpgateway.utils.retry_manager import ResilientHttpClient
+from mcpgateway.utils.services_auth import decode_auth
 
 # Import the shared logging service from main
 # This will be set by main.py when it imports admin_router
@@ -519,6 +535,157 @@ async def update_global_passthrough_headers(
         if isinstance(e, PassthroughHeadersError):
             raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(status_code=500, detail="Unknown error occurred")
+
+
+@admin_router.get("/config/settings")
+async def get_configuration_settings(
+    _db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> Dict[str, Any]:
+    """Get application configuration settings grouped by category.
+
+    Returns configuration settings with sensitive values masked.
+
+    Args:
+        _db: Database session
+        _user: Authenticated user
+
+    Returns:
+        Dict with configuration groups and their settings
+    """
+
+    def mask_sensitive(value: Any, key: str) -> Any:
+        """Mask sensitive configuration values.
+
+        Args:
+            value: Configuration value to potentially mask
+            key: Configuration key name to check for sensitive patterns
+
+        Returns:
+            Masked value if sensitive, original value otherwise
+        """
+        sensitive_keys = {"password", "secret", "key", "token", "credentials", "client_secret", "private_key", "auth_encryption_secret"}
+        if any(s in key.lower() for s in sensitive_keys):
+            # Handle SecretStr objects
+            if isinstance(value, SecretStr):
+                return settings.masked_auth_value
+            if value and str(value) not in ["", "None", "null"]:
+                return settings.masked_auth_value
+        # Handle SecretStr even for non-sensitive keys
+        if isinstance(value, SecretStr):
+            return value.get_secret_value()
+        return value
+
+    # Group settings by category
+    config_groups = {
+        "Basic Settings": {
+            "app_name": settings.app_name,
+            "host": settings.host,
+            "port": settings.port,
+            "environment": settings.environment,
+            "app_domain": str(settings.app_domain),
+            "protocol_version": settings.protocol_version,
+        },
+        "Authentication & Security": {
+            "auth_required": settings.auth_required,
+            "basic_auth_user": settings.basic_auth_user,
+            "basic_auth_password": mask_sensitive(settings.basic_auth_password, "password"),
+            "jwt_algorithm": settings.jwt_algorithm,
+            "jwt_secret_key": mask_sensitive(settings.jwt_secret_key, "secret_key"),
+            "jwt_audience": settings.jwt_audience,
+            "jwt_issuer": settings.jwt_issuer,
+            "token_expiry": settings.token_expiry,
+            "require_token_expiration": settings.require_token_expiration,
+            "mcp_client_auth_enabled": settings.mcp_client_auth_enabled,
+            "trust_proxy_auth": settings.trust_proxy_auth,
+            "skip_ssl_verify": settings.skip_ssl_verify,
+        },
+        "SSO Configuration": {
+            "sso_enabled": settings.sso_enabled,
+            "sso_github_enabled": settings.sso_github_enabled,
+            "sso_google_enabled": settings.sso_google_enabled,
+            "sso_ibm_verify_enabled": settings.sso_ibm_verify_enabled,
+            "sso_okta_enabled": settings.sso_okta_enabled,
+            "sso_auto_create_users": settings.sso_auto_create_users,
+            "sso_preserve_admin_auth": settings.sso_preserve_admin_auth,
+            "sso_require_admin_approval": settings.sso_require_admin_approval,
+        },
+        "Email Authentication": {
+            "email_auth_enabled": settings.email_auth_enabled,
+            "platform_admin_email": settings.platform_admin_email,
+            "platform_admin_password": mask_sensitive(settings.platform_admin_password, "password"),
+        },
+        "Database & Cache": {
+            "database_url": settings.database_url.replace("://", "://***@") if "@" in settings.database_url else settings.database_url,
+            "cache_type": settings.cache_type,
+            "redis_url": settings.redis_url.replace("://", "://***@") if settings.redis_url and "@" in settings.redis_url else settings.redis_url,
+            "db_pool_size": settings.db_pool_size,
+            "db_max_overflow": settings.db_max_overflow,
+        },
+        "Feature Flags": {
+            "mcpgateway_ui_enabled": settings.mcpgateway_ui_enabled,
+            "mcpgateway_admin_api_enabled": settings.mcpgateway_admin_api_enabled,
+            "mcpgateway_bulk_import_enabled": settings.mcpgateway_bulk_import_enabled,
+            "mcpgateway_a2a_enabled": settings.mcpgateway_a2a_enabled,
+            "mcpgateway_catalog_enabled": settings.mcpgateway_catalog_enabled,
+            "plugins_enabled": settings.plugins_enabled,
+            "well_known_enabled": settings.well_known_enabled,
+        },
+        "Federation": {
+            "federation_enabled": settings.federation_enabled,
+            "federation_discovery": settings.federation_discovery,
+            "federation_timeout": settings.federation_timeout,
+            "federation_sync_interval": settings.federation_sync_interval,
+        },
+        "Transport": {
+            "transport_type": settings.transport_type,
+            "websocket_ping_interval": settings.websocket_ping_interval,
+            "sse_retry_timeout": settings.sse_retry_timeout,
+            "sse_keepalive_enabled": settings.sse_keepalive_enabled,
+        },
+        "Logging": {
+            "log_level": settings.log_level,
+            "log_format": settings.log_format,
+            "log_to_file": settings.log_to_file,
+            "log_file": settings.log_file,
+            "log_rotation_enabled": settings.log_rotation_enabled,
+        },
+        "Resources & Tools": {
+            "tool_timeout": settings.tool_timeout,
+            "tool_rate_limit": settings.tool_rate_limit,
+            "tool_concurrent_limit": settings.tool_concurrent_limit,
+            "resource_cache_size": settings.resource_cache_size,
+            "resource_cache_ttl": settings.resource_cache_ttl,
+            "max_resource_size": settings.max_resource_size,
+        },
+        "CORS Settings": {
+            "cors_enabled": settings.cors_enabled,
+            "allowed_origins": list(settings.allowed_origins),
+            "cors_allow_credentials": settings.cors_allow_credentials,
+        },
+        "Security Headers": {
+            "security_headers_enabled": settings.security_headers_enabled,
+            "x_frame_options": settings.x_frame_options,
+            "hsts_enabled": settings.hsts_enabled,
+            "hsts_max_age": settings.hsts_max_age,
+            "remove_server_headers": settings.remove_server_headers,
+        },
+        "Observability": {
+            "otel_enable_observability": settings.otel_enable_observability,
+            "otel_traces_exporter": settings.otel_traces_exporter,
+            "otel_service_name": settings.otel_service_name,
+        },
+        "Development": {
+            "dev_mode": settings.dev_mode,
+            "reload": settings.reload,
+            "debug": settings.debug,
+        },
+    }
+
+    return {
+        "groups": config_groups,
+        "security_status": settings.get_security_status(),
+    }
 
 
 @admin_router.get("/servers", response_model=List[ServerRead])
@@ -2169,8 +2336,13 @@ async def admin_ui(
     # Load A2A agents if enabled
     a2a_agents = []
     if a2a_service and settings.mcpgateway_a2a_enabled:
-        a2a_agents_raw = await a2a_service.list_agents(db, include_inactive=include_inactive)
+        a2a_agents_raw = await a2a_service.list_agents_for_user(
+            db,
+            user_info=user_email,
+            include_inactive=include_inactive,
+        )
         a2a_agents = [agent.model_dump(by_alias=True) for agent in a2a_agents_raw]
+        a2a_agents = _to_dict_and_filter(a2a_agents) if isinstance(a2a_agents, (list, tuple)) else a2a_agents
 
     # Template variables and context: include selected_team_id so the template and frontend can read it
     root_path = settings.app_root_path
@@ -2194,6 +2366,7 @@ async def admin_ui(
             "gateway_tool_name_separator": settings.gateway_tool_name_separator,
             "bulk_import_max_tools": settings.mcpgateway_bulk_import_max_tools,
             "a2a_enabled": settings.mcpgateway_a2a_enabled,
+            "catalog_enabled": settings.mcpgateway_catalog_enabled,
             "current_user": get_user_email(user),
             "email_auth_enabled": getattr(settings, "email_auth_enabled", False),
             "is_admin": bool(user.get("is_admin") if isinstance(user, dict) else False),
@@ -6155,6 +6328,12 @@ async def admin_add_resource(request: Request, db: Session = Depends(get_db), us
     # Parse tags from comma-separated string
     tags_str = str(form.get("tags", ""))
     tags: List[str] = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
+    visibility = str(form.get("visibility", "public"))
+    user_email = get_user_email(user)
+    # Determine personal team for default assignment
+    team_id = form.get("team_id", None)
+    team_service = TeamManagementService(db)
+    team_id = await team_service.verify_team_for_user(user_email, team_id)
 
     try:
         resource = ResourceCreate(
@@ -6165,6 +6344,9 @@ async def admin_add_resource(request: Request, db: Session = Depends(get_db), us
             template=cast(str | None, form.get("template")),
             content=str(form["content"]),
             tags=tags,
+            visibility=visibility,
+            team_id=team_id,
+            owner_email=user_email,
         )
 
         metadata = MetadataCapture.extract_creation_metadata(request, user)
@@ -6290,6 +6472,7 @@ async def admin_edit_resource(
     LOGGER.debug(f"User {get_user_email(user)} is editing resource URI {uri}")
     form = await request.form()
 
+    visibility = str(form.get("visibility", "private"))
     # Parse tags from comma-separated string
     tags_str = str(form.get("tags", ""))
     tags: List[str] = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
@@ -6303,6 +6486,7 @@ async def admin_edit_resource(
             content=str(form["content"]),
             template=str(form.get("template")),
             tags=tags,
+            visibility=visibility,
         )
         await resource_service.update_resource(
             db,
@@ -6656,6 +6840,12 @@ async def admin_add_prompt(request: Request, db: Session = Depends(get_db), user
     """
     LOGGER.debug(f"User {get_user_email(user)} is adding a new prompt")
     form = await request.form()
+    visibility = str(form.get("visibility", "private"))
+    user_email = get_user_email(user)
+    # Determine personal team for default assignment
+    team_id = form.get("team_id", None)
+    team_service = TeamManagementService(db)
+    team_id = await team_service.verify_team_for_user(user_email, team_id)
 
     # Parse tags from comma-separated string
     tags_str = str(form.get("tags", ""))
@@ -6673,6 +6863,9 @@ async def admin_add_prompt(request: Request, db: Session = Depends(get_db), user
             template=str(form["template"]),
             arguments=arguments,
             tags=tags,
+            visibility=visibility,
+            team_id=team_id,
+            owner_email=user_email,
         )
         # Extract creation metadata
         metadata = MetadataCapture.extract_creation_metadata(request, user)
@@ -6709,7 +6902,7 @@ async def admin_edit_prompt(
     request: Request,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
-) -> Response:
+) -> JSONResponse:
     """Edit a prompt via the admin UI.
 
     Expects form fields:
@@ -6725,14 +6918,14 @@ async def admin_edit_prompt(
         user: Authenticated user.
 
     Returns:
-         Response: A JSON response indicating success or failure of the server update operation.
+         JSONResponse: A JSON response indicating success or failure of the server update operation.
 
-    Examples:
+        Examples:
         >>> import asyncio
         >>> from unittest.mock import AsyncMock, MagicMock
         >>> from fastapi import Request
-        >>> from fastapi.responses import RedirectResponse
         >>> from starlette.datastructures import FormData
+        >>> from fastapi.responses import JSONResponse
         >>>
         >>> mock_db = MagicMock()
         >>> mock_user = {"email": "test_user", "db": mock_db}
@@ -6769,7 +6962,7 @@ async def admin_edit_prompt(
         >>>
         >>> async def test_admin_edit_prompt_inactive():
         ...     response = await admin_edit_prompt(prompt_name, mock_request, mock_db, mock_user)
-        ...     return isinstance(response, RedirectResponse) and "include_inactive=true" in response.headers["location"]
+        ...     return isinstance(response, JSONResponse) and response.status_code == 200 and b"Prompt updated successfully!" in response.body
         >>>
         >>> asyncio.run(test_admin_edit_prompt_inactive())
         True
@@ -6777,6 +6970,13 @@ async def admin_edit_prompt(
     """
     LOGGER.debug(f"User {get_user_email(user)} is editing prompt name {name}")
     form = await request.form()
+
+    visibility = str(form.get("visibility", "private"))
+    user_email = get_user_email(user)
+    # Determine personal team for default assignment
+    team_id = form.get("team_id", None)
+    team_service = TeamManagementService(db)
+    team_id = await team_service.verify_team_for_user(user_email, team_id)
 
     args_json: str = str(form.get("arguments")) or "[]"
     arguments = json.loads(args_json)
@@ -6791,6 +6991,9 @@ async def admin_edit_prompt(
             template=str(form["template"]),
             arguments=arguments,
             tags=tags,
+            visibility=visibility,
+            team_id=team_id,
+            user_email=user_email,
         )
         await prompt_service.update_prompt(
             db,
@@ -6801,12 +7004,6 @@ async def admin_edit_prompt(
             modified_via=mod_metadata["modified_via"],
             modified_user_agent=mod_metadata["modified_user_agent"],
         )
-
-        root_path = request.scope.get("root_path", "")
-        is_inactive_checked: str = str(form.get("is_inactive_checked", "false"))
-        if is_inactive_checked.lower() == "true":
-            return RedirectResponse(f"{root_path}/admin/?include_inactive=true#prompts", status_code=303)
-        # return RedirectResponse(f"{root_path}/admin#prompts", status_code=303)
         return JSONResponse(
             content={"message": "Prompt updated successfully!", "success": True},
             status_code=200,
@@ -7250,14 +7447,16 @@ async def admin_reset_metrics(db: Session = Depends(get_db), user=Depends(get_cu
 
 
 @admin_router.post("/gateways/test", response_model=GatewayTestResponse)
-async def admin_test_gateway(request: GatewayTestRequest, user=Depends(get_current_user_with_permissions)) -> GatewayTestResponse:
+async def admin_test_gateway(request: GatewayTestRequest, team_id: Optional[str] = Query(None), user=Depends(get_current_user_with_permissions), db: Session = Depends(get_db)) -> GatewayTestResponse:
     """
     Test a gateway by sending a request to its URL.
     This endpoint allows administrators to test the connectivity and response
 
     Args:
         request (GatewayTestRequest): The request object containing the gateway URL and request details.
+        team_id (Optional[str]): Optional team ID for team-specific gateways.
         user (str): Authenticated user dependency.
+        db (Session): Database session dependency.
 
     Returns:
         GatewayTestResponse: The response from the gateway, including status code, latency, and body
@@ -7393,9 +7592,61 @@ async def admin_test_gateway(request: GatewayTestRequest, user=Depends(get_curre
     full_url = full_url.rstrip("/")
     LOGGER.debug(f"User {get_user_email(user)} testing server at {request.base_url}.")
     start_time: float = time.monotonic()
+    headers = request.headers or {}
+
+    # Attempt to find a registered gateway matching this URL and team
     try:
+        gateway = gateway_service.get_first_gateway_by_url(db, str(request.base_url), team_id=team_id)
+    except Exception:
+        gateway = None
+
+    try:
+        user_email = get_user_email(user)
+        if gateway and gateway.auth_type == "oauth" and gateway.oauth_config:
+            grant_type = gateway.oauth_config.get("grant_type", "client_credentials")
+
+            if grant_type == "authorization_code":
+                # For Authorization Code flow, try to get stored tokens
+                try:
+                    # First-Party
+                    from mcpgateway.services.token_storage_service import TokenStorageService  # pylint: disable=import-outside-toplevel
+
+                    token_storage = TokenStorageService(db)
+
+                    # Get user-specific OAuth token
+                    if not user_email:
+                        latency_ms = int((time.monotonic() - start_time) * 1000)
+                        return GatewayTestResponse(
+                            status_code=401, latency_ms=latency_ms, body={"error": f"User authentication required for OAuth-protected gateway '{gateway.name}'. Please ensure you are authenticated."}
+                        )
+
+                    access_token: str = await token_storage.get_user_token(gateway.id, user_email)
+
+                    if access_token:
+                        headers["Authorization"] = f"Bearer {access_token}"
+                    else:
+                        latency_ms = int((time.monotonic() - start_time) * 1000)
+                        return GatewayTestResponse(
+                            status_code=401, latency_ms=latency_ms, body={"error": f"Please authorize {gateway.name} first. Visit /oauth/authorize/{gateway.id} to complete OAuth flow."}
+                        )
+                except Exception as e:
+                    LOGGER.error(f"Failed to obtain stored OAuth token for gateway {gateway.name}: {e}")
+                    latency_ms = int((time.monotonic() - start_time) * 1000)
+                    return GatewayTestResponse(status_code=500, latency_ms=latency_ms, body={"error": f"OAuth token retrieval failed for gateway: {str(e)}"})
+            else:
+                # For Client Credentials flow, get token directly
+                try:
+                    oauth_manager = OAuthManager(request_timeout=int(os.getenv("OAUTH_REQUEST_TIMEOUT", "30")), max_retries=int(os.getenv("OAUTH_MAX_RETRIES", "3")))
+                    access_token: str = await oauth_manager.get_access_token(gateway.oauth_config)
+                    headers["Authorization"] = f"Bearer {access_token}"
+                except Exception as e:
+                    LOGGER.error(f"Failed to obtain OAuth access token for gateway {gateway.name}: {e}")
+                    response_body = {"error": f"OAuth token retrieval failed for gateway: {str(e)}"}
+        else:
+            headers: dict = decode_auth(gateway.auth_value if gateway else None)
+
         async with ResilientHttpClient(client_args={"timeout": settings.federation_timeout, "verify": not settings.skip_ssl_verify}) as client:
-            response: httpx.Response = await client.request(method=request.method.upper(), url=full_url, headers=request.headers, json=request.body)
+            response: httpx.Response = await client.request(method=request.method.upper(), url=full_url, headers=headers, json=request.body)
         latency_ms = int((time.monotonic() - start_time) * 1000)
         try:
             response_body: Union[Dict[str, Any], str] = response.json()
@@ -8433,138 +8684,202 @@ async def admin_list_import_statuses(user=Depends(get_current_user_with_permissi
 # ============================================================================ #
 
 
+@admin_router.get("/a2a/{agent_id}", response_model=A2AAgentRead)
+async def admin_get_agent(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Dict[str, Any]:
+    """Get A2A agent details for the admin UI.
+
+    Args:
+        agent_id: Agent ID.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        Agent details.
+
+    Raises:
+        HTTPException: If the agent is not found.
+        Exception: For any other unexpected errors.
+
+    Examples:
+        >>> import asyncio
+        >>> from unittest.mock import AsyncMock, MagicMock
+        >>> from mcpgateway.schemas import A2AAgentRead
+        >>> from datetime import datetime, timezone
+        >>> from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
+        >>> from mcpgateway.services.a2a_service import A2AAgentNotFoundError
+        >>> from fastapi import HTTPException
+        >>>
+        >>> a2a_service: Optional[A2AAgentService] = A2AAgentService() if settings.mcpgateway_a2a_enabled else None
+        >>> mock_db = MagicMock()
+        >>> mock_user = {"email": "test_user", "db": mock_db}
+        >>> agent_id = "test-agent-id"
+        >>>
+        >>> mock_agent = A2AAgentRead(
+        ...     id=agent_id, name="Agent1", slug="agent1",
+        ...     description="Test A2A agent", endpoint_url="http://agent.local",
+        ...     agent_type="connector", protocol_version="1.0",
+        ...     capabilities={"ping": True}, config={"x": "y"},
+        ...     auth_type=None, enabled=True, reachable=True,
+        ...     created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+        ...     last_interaction=None, metrics = {
+        ...                                           "requests": 0,
+        ...                                           "totalExecutions": 0,
+        ...                                           "successfulExecutions": 0,
+        ...                                           "failedExecutions": 0,
+        ...                                           "failureRate": 0.0,
+        ...                                             }
+        ... )
+        >>>
+        >>> from mcpgateway import admin
+        >>> original_get_agent = admin.a2a_service.get_agent
+        >>> a2a_service.get_agent = AsyncMock(return_value=mock_agent)
+        >>> admin.a2a_service.get_agent = AsyncMock(return_value=mock_agent)
+        >>> async def test_admin_get_agent_success():
+        ...     result = await admin.admin_get_agent(agent_id, mock_db, mock_user)
+        ...     return isinstance(result, dict) and result['id'] == agent_id
+        >>>
+        >>> asyncio.run(test_admin_get_agent_success())
+        True
+        >>>
+        >>> # Test not found
+        >>> admin.a2a_service.get_agent = AsyncMock(side_effect=A2AAgentNotFoundError("Agent not found"))
+        >>> async def test_admin_get_agent_not_found():
+        ...     try:
+        ...         await admin.admin_get_agent("bad-id", mock_db, mock_user)
+        ...         return False
+        ...     except HTTPException as e:
+        ...         return e.status_code == 404 and "Agent not found" in e.detail
+        >>>
+        >>> asyncio.run(test_admin_get_agent_not_found())
+        True
+        >>>
+        >>> # Test generic exception
+        >>> admin.a2a_service.get_agent = AsyncMock(side_effect=Exception("Generic error"))
+        >>> async def test_admin_get_agent_exception():
+        ...     try:
+        ...         await admin.admin_get_agent(agent_id, mock_db, mock_user)
+        ...         return False
+        ...     except Exception as e:
+        ...         return str(e) == "Generic error"
+        >>>
+        >>> asyncio.run(test_admin_get_agent_exception())
+        True
+        >>>
+        >>> admin.a2a_service.get_agent = original_get_agent
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested details for agent ID {agent_id}")
+    try:
+        agent = await a2a_service.get_agent(db, agent_id)
+        return agent.model_dump(by_alias=True)
+    except A2AAgentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        LOGGER.error(f"Error getting agent {agent_id}: {e}")
+        raise e
+
+
 @admin_router.get("/a2a")
 async def admin_list_a2a_agents(
     include_inactive: bool = False,
-    tags: Optional[str] = None,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
-) -> HTMLResponse:
-    """List A2A agents for admin UI.
+) -> List[A2AAgentRead]:
+    """
+    List A2A Agents for the admin UI with an option to include inactive agents.
+
+    This endpoint retrieves a list of A2A (Agent-to-Agent) agents associated with
+    the current user. Administrators can optionally include inactive agents for
+    management or auditing purposes.
 
     Args:
-        include_inactive: Whether to include inactive agents
-        tags: Comma-separated list of tags to filter by
-        db: Database session
-        user: Authenticated user
+        include_inactive (bool): Whether to include inactive agents in the results.
+        db (Session): Database session dependency.
+        user (dict): Authenticated user dependency.
 
     Returns:
-        HTML response with agents list
+        List[A2AAgentRead]: A list of A2A agent records formatted with by_alias=True.
 
     Raises:
-        HTTPException: If A2A features are disabled
+        HTTPException (500): If an error occurs while retrieving the agent list.
+
+    Examples:
+        >>> import asyncio
+        >>> from unittest.mock import AsyncMock, MagicMock
+        >>> from mcpgateway.schemas import A2AAgentRead, A2AAgentMetrics
+        >>> from datetime import datetime, timezone
+        >>>
+        >>> mock_db = MagicMock()
+        >>> mock_user = {"email": "test_user", "db": mock_db}
+        >>>
+        >>> mock_agent = A2AAgentRead(
+        ...     id="1",
+        ...     name="Agent1",
+        ...     slug="agent1",
+        ...     description="A2A Test Agent",
+        ...     endpoint_url="http://localhost/agent1",
+        ...     agent_type="test",
+        ...     protocol_version="1.0",
+        ...     capabilities={},
+        ...     config={},
+        ...     auth_type=None,
+        ...     enabled=True,
+        ...     reachable=True,
+        ...     created_at=datetime.now(timezone.utc),
+        ...     updated_at=datetime.now(timezone.utc),
+        ...     last_interaction=None,
+        ...     tags=[],
+        ...     metrics=A2AAgentMetrics(
+        ...         total_executions=1,
+        ...         successful_executions=1,
+        ...         failed_executions=0,
+        ...         failure_rate=0.0,
+        ...         min_response_time=0.1,
+        ...         max_response_time=0.2,
+        ...         avg_response_time=0.15,
+        ...         last_execution_time=datetime.now(timezone.utc)
+        ...     )
+        ... )
+        >>>
+        >>> original_list_agents_for_user = a2a_service.list_agents_for_user
+        >>> a2a_service.list_agents_for_user = AsyncMock(return_value=[mock_agent])
+        >>>
+        >>> async def test_admin_list_a2a_agents_active():
+        ...     result = await admin_list_a2a_agents(include_inactive=False, db=mock_db, user=mock_user)
+        ...     return len(result) > 0 and isinstance(result[0], dict) and result[0]['name'] == "Agent1"
+        >>>
+        >>> asyncio.run(test_admin_list_a2a_agents_active())
+        True
+        >>>
+        >>> a2a_service.list_agents_for_user = AsyncMock(side_effect=Exception("A2A error"))
+        >>> async def test_admin_list_a2a_agents_exception():
+        ...     try:
+        ...         await admin_list_a2a_agents(False, db=mock_db, user=mock_user)
+        ...         return False
+        ...     except Exception as e:
+        ...         return "A2A error" in str(e)
+        >>>
+        >>> asyncio.run(test_admin_list_a2a_agents_exception())
+        True
+        >>>
+        >>> a2a_service.list_agents_for_user = original_list_agents_for_user
     """
-    if not a2a_service or not settings.mcpgateway_a2a_enabled:
-        return HTMLResponse(content='<div class="text-center py-8"><p class="text-gray-500">A2A features are disabled. Set MCPGATEWAY_A2A_ENABLED=true to enable.</p></div>', status_code=200)
-    # Parse tags parameter if provided
-    tags_list = None
-    if tags:
-        tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+    if a2a_service is None:
+        LOGGER.warning("A2A features are disabled, returning empty list")
+        return []
 
-    LOGGER.debug(f"Admin user {user} requested A2A agent list with tags={tags_list}")
-    agents = await a2a_service.list_agents(db, include_inactive=include_inactive, tags=tags_list)
+    LOGGER.debug(f"User {get_user_email(user)} requested A2A Agent list")
+    user_email = get_user_email(user)
 
-    # Convert to template format
-    agent_items = []
-    for agent in agents:
-        agent_items.append(
-            {
-                "id": agent.id,
-                "name": agent.name,
-                "description": agent.description or "",
-                "endpoint_url": agent.endpoint_url,
-                "agent_type": agent.agent_type,
-                "protocol_version": agent.protocol_version,
-                "auth_type": agent.auth_type or "None",
-                "enabled": agent.enabled,
-                "reachable": agent.reachable,
-                "tags": agent.tags,
-                "created_at": agent.created_at.isoformat(),
-                "last_interaction": agent.last_interaction.isoformat() if agent.last_interaction else None,
-                "execution_count": agent.metrics.total_executions,
-                "success_rate": f"{100 - agent.metrics.failure_rate:.1f}%" if agent.metrics.total_executions > 0 else "N/A",
-            }
-        )
-
-    # Generate HTML for agents list
-    html_content = ""
-    for agent in agent_items:
-        status_class = "bg-green-100 text-green-800" if agent["enabled"] else "bg-red-100 text-red-800"
-        reachable_class = "bg-green-100 text-green-800" if agent["reachable"] else "bg-yellow-100 text-yellow-800"
-        active_text = "Active" if agent["enabled"] else "Inactive"
-        reachable_text = "Reachable" if agent["reachable"] else "Unreachable"
-
-        # Generate tags HTML separately
-        tags_html = ""
-        if agent["tags"]:
-            tag_spans: List[Any] = []
-            for tag in agent["tags"]:
-                tag_spans.append(f'<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300">{tag}</span>')
-            tags_html = f'<div class="mt-2 flex flex-wrap gap-1">{" ".join(tag_spans)}</div>'
-
-        # Generate last interaction HTML
-        last_interaction_html = ""
-        if agent["last_interaction"]:
-            last_interaction_html = f"<div>Last Interaction: {agent['last_interaction'][:19]}</div>"
-
-        # Generate button classes
-        toggle_class = "text-green-700 bg-green-100 hover:bg-green-200" if not agent["enabled"] else "text-red-700 bg-red-100 hover:bg-red-200"
-        toggle_text = "Activate" if not agent["enabled"] else "Deactivate"
-        toggle_action = "true" if not agent["enabled"] else "false"
-
-        html_content += f"""
-        <div class="border border-gray-200 dark:border-gray-600 rounded-lg p-4 space-y-3">
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <h4 class="text-lg font-medium text-gray-900 dark:text-gray-200">{agent["name"]}</h4>
-              <p class="text-sm text-gray-600 dark:text-gray-400">{agent["description"]}</p>
-              <div class="mt-2 flex flex-wrap gap-2">
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {status_class}">
-                  {active_text}
-                </span>
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {reachable_class}">
-                  {reachable_text}
-                </span>
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                  {agent["agent_type"]}
-                </span>
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                  Auth: {agent["auth_type"]}
-                </span>
-              </div>
-              <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                <div>Endpoint: {agent["endpoint_url"]}</div>
-                <div>Executions: {agent["execution_count"]} | Success Rate: {agent["success_rate"]}</div>
-                <div>Created: {agent["created_at"][:19]}</div>
-                {last_interaction_html}
-              </div>
-              {tags_html}
-            </div>
-            <div class="flex space-x-2">
-              <button
-                hx-post="{{ root_path }}/admin/a2a/{agent["id"]}/toggle"
-                hx-vals='{{"activate": "{toggle_action}"}}'
-                hx-target="#a2a-agents-list"
-                hx-trigger="click"
-                class="px-3 py-1 text-sm font-medium {toggle_class} rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-              >
-                {toggle_text}
-              </button>
-              <button
-                hx-post="{{ root_path }}/admin/a2a/{agent["id"]}/delete"
-                hx-target="#a2a-agents-list"
-                hx-trigger="click"
-                hx-confirm="Are you sure you want to delete this A2A agent?"
-                class="px-3 py-1 text-sm font-medium text-red-700 bg-red-100 hover:bg-red-200 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-        """
-
-    return HTMLResponse(content=html_content)
+    agents = await a2a_service.list_agents_for_user(
+        db,
+        user_info=user_email,
+        include_inactive=include_inactive,
+    )
+    return [agent.model_dump(by_alias=True) for agent in agents]
 
 
 @admin_router.post("/a2a")
@@ -8572,7 +8887,7 @@ async def admin_add_a2a_agent(
     request: Request,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
-) -> Response:
+) -> JSONResponse:
     """Add a new A2A agent via admin UI.
 
     Args:
@@ -8581,7 +8896,7 @@ async def admin_add_a2a_agent(
         user: Authenticated user
 
     Returns:
-        Response with success/error status
+        JSONResponse with success/error status
 
     Raises:
         HTTPException: If A2A features are disabled
@@ -8596,6 +8911,12 @@ async def admin_add_a2a_agent(
         form = await request.form()
         LOGGER.info(f"A2A agent creation form data: {dict(form)}")
 
+        user_email = get_user_email(user)
+        # Determine personal team for default assignment
+        team_id = form.get("team_id", None)
+        team_service = TeamManagementService(db)
+        team_id = await team_service.verify_team_for_user(user_email, team_id)
+
         # Process tags
         ts_val = form.get("tags", "")
         tags_str = ts_val if isinstance(ts_val, str) else ""
@@ -8609,6 +8930,9 @@ async def admin_add_a2a_agent(
             auth_type=form.get("auth_type") if form.get("auth_type") else None,
             auth_value=form.get("auth_value") if form.get("auth_value") else None,
             tags=tags,
+            visibility=form.get("visibility", "private"),
+            team_id=team_id,
+            owner_email=user_email,
         )
 
         LOGGER.info(f"Creating A2A agent: {agent_data.name} at {agent_data.endpoint_url}")
@@ -8627,26 +8951,33 @@ async def admin_add_a2a_agent(
             federation_source=metadata["federation_source"],
         )
 
-        # Return redirect to admin page with A2A tab
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+        return JSONResponse(
+            content={"message": "A2A agent created successfully!", "success": True},
+            status_code=200,
+        )
 
-    except A2AAgentNameConflictError as e:
-        LOGGER.error(f"A2A agent name conflict: {e}")
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
-    except A2AAgentError as e:
-        LOGGER.error(f"A2A agent error: {e}")
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
-    except ValidationError as e:
-        LOGGER.error(f"Validation error while creating A2A agent: {e}")
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
-    except Exception as e:
-        LOGGER.error(f"Error creating A2A agent: {e}")
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+    except CoreValidationError as ex:
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=422)
+    except A2AAgentNameConflictError as ex:
+        LOGGER.error(f"A2A agent name conflict: {ex}")
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
+    except A2AAgentError as ex:
+        LOGGER.error(f"A2A agent error: {ex}")
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
+    except ValidationError as ex:
+        LOGGER.error(f"Validation error while creating A2A agent: {ex}")
+        return JSONResponse(
+            content=ErrorFormatter.format_validation_error(ex),
+            status_code=422,
+        )
+    except IntegrityError as ex:
+        return JSONResponse(
+            content=ErrorFormatter.format_database_error(ex),
+            status_code=409,
+        )
+    except Exception as ex:
+        LOGGER.error(f"Error creating A2A agent: {ex}")
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
 
 
 @admin_router.post("/a2a/{agent_id}/toggle")
@@ -9055,3 +9386,408 @@ async def get_gateways_section(
     except Exception as e:
         LOGGER.error(f"Error loading gateways section: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+####################
+# Plugin Routes    #
+####################
+
+
+@admin_router.get("/plugins/partial")
+async def get_plugins_partial(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> HTMLResponse:  # pylint: disable=unused-argument
+    """Render the plugins partial HTML template.
+
+    This endpoint returns a rendered HTML partial containing plugin information,
+    similar to the version_info_partial pattern. It's designed to be loaded via HTMX
+    into the admin interface.
+
+    Args:
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        HTMLResponse with rendered plugins partial template
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested plugins partial")
+
+    try:
+        # Get plugin service and check if plugins are enabled
+        plugin_service = get_plugin_service()
+
+        # Check if plugin manager is available in app state
+        plugin_manager = getattr(request.app.state, "plugin_manager", None)
+        if plugin_manager:
+            plugin_service.set_plugin_manager(plugin_manager)
+
+        # Get plugin data
+        plugins = plugin_service.get_all_plugins()
+        stats = plugin_service.get_plugin_statistics()
+
+        # Prepare context for template
+        context = {"request": request, "plugins": plugins, "stats": stats, "plugins_enabled": plugin_manager is not None, "root_path": request.scope.get("root_path", "")}
+
+        # Render the partial template
+        return request.app.state.templates.TemplateResponse("plugins_partial.html", context)
+
+    except Exception as e:
+        LOGGER.error(f"Error rendering plugins partial: {e}")
+        # Return error HTML that can be displayed in the UI
+        error_html = f"""
+        <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+            <strong class="font-bold">Error loading plugins:</strong>
+            <span class="block sm:inline">{str(e)}</span>
+        </div>
+        """
+        return HTMLResponse(content=error_html, status_code=500)
+
+
+@admin_router.get("/plugins", response_model=PluginListResponse)
+async def list_plugins(
+    request: Request,
+    search: Optional[str] = None,
+    mode: Optional[str] = None,
+    hook: Optional[str] = None,
+    tag: Optional[str] = None,
+    db: Session = Depends(get_db),  # pylint: disable=unused-argument
+    user=Depends(get_current_user_with_permissions),
+) -> PluginListResponse:
+    """Get list of all plugins with optional filtering.
+
+    Args:
+        request: FastAPI request object
+        search: Optional text search in name/description/author
+        mode: Optional filter by mode (enforce/permissive/disabled)
+        hook: Optional filter by hook type
+        tag: Optional filter by tag
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        PluginListResponse with list of plugins and statistics
+
+    Raises:
+        HTTPException: If there's an error retrieving plugins
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested plugin list")
+
+    try:
+        # Get plugin service
+        plugin_service = get_plugin_service()
+
+        # Check if plugin manager is available
+        plugin_manager = getattr(request.app.state, "plugin_manager", None)
+        if plugin_manager:
+            plugin_service.set_plugin_manager(plugin_manager)
+
+        # Get filtered plugins
+        if any([search, mode, hook, tag]):
+            plugins = plugin_service.search_plugins(query=search, mode=mode, hook=hook, tag=tag)
+        else:
+            plugins = plugin_service.get_all_plugins()
+
+        # Count enabled/disabled
+        enabled_count = sum(1 for p in plugins if p["status"] == "enabled")
+        disabled_count = sum(1 for p in plugins if p["status"] == "disabled")
+
+        return PluginListResponse(plugins=plugins, total=len(plugins), enabled_count=enabled_count, disabled_count=disabled_count)
+
+    except Exception as e:
+        LOGGER.error(f"Error listing plugins: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@admin_router.get("/plugins/stats", response_model=PluginStatsResponse)
+async def get_plugin_stats(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> PluginStatsResponse:  # pylint: disable=unused-argument
+    """Get plugin statistics.
+
+    Args:
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        PluginStatsResponse with aggregated plugin statistics
+
+    Raises:
+        HTTPException: If there's an error getting plugin statistics
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested plugin statistics")
+
+    try:
+        # Get plugin service
+        plugin_service = get_plugin_service()
+
+        # Check if plugin manager is available
+        plugin_manager = getattr(request.app.state, "plugin_manager", None)
+        if plugin_manager:
+            plugin_service.set_plugin_manager(plugin_manager)
+
+        # Get statistics
+        stats = plugin_service.get_plugin_statistics()
+
+        return PluginStatsResponse(**stats)
+
+    except Exception as e:
+        LOGGER.error(f"Error getting plugin statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@admin_router.get("/plugins/{name}", response_model=PluginDetail)
+async def get_plugin_details(name: str, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> PluginDetail:  # pylint: disable=unused-argument
+    """Get detailed information about a specific plugin.
+
+    Args:
+        name: Plugin name
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        PluginDetail with full plugin information
+
+    Raises:
+        HTTPException: If plugin not found
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested details for plugin {name}")
+
+    try:
+        # Get plugin service
+        plugin_service = get_plugin_service()
+
+        # Check if plugin manager is available
+        plugin_manager = getattr(request.app.state, "plugin_manager", None)
+        if plugin_manager:
+            plugin_service.set_plugin_manager(plugin_manager)
+
+        # Get plugin details
+        plugin = plugin_service.get_plugin_by_name(name)
+
+        if not plugin:
+            raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found")
+
+        return PluginDetail(**plugin)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.error(f"Error getting plugin details: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+##################################################
+# MCP Registry Endpoints
+##################################################
+
+
+@admin_router.get("/mcp-registry/servers", response_model=CatalogListResponse)
+async def list_catalog_servers(
+    _request: Request,
+    category: Optional[str] = None,
+    auth_type: Optional[str] = None,
+    provider: Optional[str] = None,
+    search: Optional[str] = None,
+    tags: Optional[List[str]] = Query(None),
+    show_registered_only: bool = False,
+    show_available_only: bool = True,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> CatalogListResponse:
+    """Get list of catalog servers with filtering.
+
+    Args:
+        _request: FastAPI request object
+        category: Filter by category
+        auth_type: Filter by authentication type
+        provider: Filter by provider
+        search: Search in name/description
+        tags: Filter by tags
+        show_registered_only: Show only already registered servers
+        show_available_only: Show only available servers
+        limit: Maximum results
+        offset: Pagination offset
+        db: Database session
+        _user: Authenticated user
+
+    Returns:
+        List of catalog servers matching filters
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    catalog_request = CatalogListRequest(
+        category=category,
+        auth_type=auth_type,
+        provider=provider,
+        search=search,
+        tags=tags or [],
+        show_registered_only=show_registered_only,
+        show_available_only=show_available_only,
+        limit=limit,
+        offset=offset,
+    )
+
+    return await catalog_service.get_catalog_servers(catalog_request, db)
+
+
+@admin_router.post("/mcp-registry/{server_id}/register", response_model=CatalogServerRegisterResponse)
+@require_permission("servers.create")
+async def register_catalog_server(
+    server_id: str,
+    request: Optional[CatalogServerRegisterRequest] = None,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> CatalogServerRegisterResponse:
+    """Register a catalog server.
+
+    Args:
+        server_id: Catalog server ID to register
+        request: Optional registration parameters
+        db: Database session
+        _user: Authenticated user
+
+    Returns:
+        Registration response with success status
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    return await catalog_service.register_catalog_server(catalog_id=server_id, request=request, db=db)
+
+
+@admin_router.get("/mcp-registry/{server_id}/status", response_model=CatalogServerStatusResponse)
+async def check_catalog_server_status(
+    server_id: str,
+    _db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> CatalogServerStatusResponse:
+    """Check catalog server availability.
+
+    Args:
+        server_id: Catalog server ID to check
+        _db: Database session
+        _user: Authenticated user
+
+    Returns:
+        Server status including availability and response time
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    return await catalog_service.check_server_availability(server_id)
+
+
+@admin_router.post("/mcp-registry/bulk-register", response_model=CatalogBulkRegisterResponse)
+@require_permission("servers.create")
+async def bulk_register_catalog_servers(
+    request: CatalogBulkRegisterRequest,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> CatalogBulkRegisterResponse:
+    """Register multiple catalog servers at once.
+
+    Args:
+        request: Bulk registration request with server IDs
+        db: Database session
+        _user: Authenticated user
+
+    Returns:
+        Bulk registration response with success/failure details
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    return await catalog_service.bulk_register_servers(request, db)
+
+
+@admin_router.get("/mcp-registry/partial")
+async def catalog_partial(
+    request: Request,
+    category: Optional[str] = None,
+    auth_type: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> HTMLResponse:
+    """Get HTML partial for catalog servers (used by HTMX).
+
+    Args:
+        request: FastAPI request object
+        category: Filter by category
+        auth_type: Filter by authentication type
+        search: Search term
+        page: Page number (1-indexed)
+        db: Database session
+        _user: Authenticated user
+
+    Returns:
+        HTML partial with filtered catalog servers
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    root_path = request.scope.get("root_path", "")
+
+    # Calculate pagination
+    page_size = 100
+    offset = (page - 1) * page_size
+
+    catalog_request = CatalogListRequest(category=category, auth_type=auth_type, search=search, show_available_only=False, limit=page_size, offset=offset)
+
+    response = await catalog_service.get_catalog_servers(catalog_request, db)
+
+    # Calculate statistics and pagination info
+    total_servers = response.total
+    registered_count = sum(1 for s in response.servers if s.is_registered)
+    total_pages = (total_servers + page_size - 1) // page_size  # Ceiling division
+
+    # Count servers by category, auth type, and provider
+    servers_by_category = {}
+    servers_by_auth_type = {}
+    servers_by_provider = {}
+
+    for server in response.servers:
+        servers_by_category[server.category] = servers_by_category.get(server.category, 0) + 1
+        servers_by_auth_type[server.auth_type] = servers_by_auth_type.get(server.auth_type, 0) + 1
+        servers_by_provider[server.provider] = servers_by_provider.get(server.provider, 0) + 1
+
+    stats = {
+        "total_servers": total_servers,
+        "registered_servers": registered_count,
+        "categories": response.categories,
+        "auth_types": response.auth_types,
+        "providers": response.providers,
+        "servers_by_category": servers_by_category,
+        "servers_by_auth_type": servers_by_auth_type,
+        "servers_by_provider": servers_by_provider,
+    }
+
+    context = {
+        "request": request,
+        "servers": response.servers,
+        "stats": stats,
+        "root_path": root_path,
+        "page": page,
+        "total_pages": total_pages,
+        "page_size": page_size,
+    }
+
+    return request.app.state.templates.TemplateResponse("mcp_registry_partial.html", context)

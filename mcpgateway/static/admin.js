@@ -1101,7 +1101,6 @@ function createKPISection(kpiData) {
         const section = document.createElement("div");
         section.className = "grid grid-cols-1 md:grid-cols-4 gap-4";
 
-        // Define KPI indicators with safe configuration
         const kpis = [
             {
                 key: "totalExecutions",
@@ -1114,26 +1113,35 @@ function createKPISection(kpiData) {
                 label: "Success Rate",
                 icon: "✅",
                 color: "green",
-                suffix: "%",
             },
             {
                 key: "avgResponseTime",
                 label: "Avg Response Time",
                 icon: "⚡",
                 color: "yellow",
-                suffix: "ms",
             },
-            {
-                key: "errorRate",
-                label: "Error Rate",
-                icon: "❌",
-                color: "red",
-                suffix: "%",
-            },
+            { key: "errorRate", label: "Error Rate", icon: "❌", color: "red" },
         ];
 
         kpis.forEach((kpi) => {
-            const value = kpiData[kpi.key] ?? "N/A";
+            let value = kpiData[kpi.key];
+            if (value === null || value === undefined || value === "N/A") {
+                value = "N/A";
+            } else {
+                if (kpi.key === "avgResponseTime") {
+                    // ensure numeric then 3 decimals + unit
+                    value = isNaN(Number(value))
+                        ? "N/A"
+                        : Number(value).toFixed(3) + " ms";
+                } else if (
+                    kpi.key === "successRate" ||
+                    kpi.key === "errorRate"
+                ) {
+                    value = String(value) + "%";
+                } else {
+                    value = String(value);
+                }
+            }
 
             const kpiCard = document.createElement("div");
             kpiCard.className = `bg-white rounded-lg shadow p-4 border-l-4 border-${kpi.color}-500 dark:bg-gray-800`;
@@ -1150,8 +1158,7 @@ function createKPISection(kpiData) {
 
             const valueSpan = document.createElement("div");
             valueSpan.className = `text-2xl font-bold text-${kpi.color}-600`;
-            valueSpan.textContent =
-                (value === "N/A" ? "N/A" : String(value)) + (kpi.suffix || "");
+            valueSpan.textContent = value;
 
             const labelSpan = document.createElement("div");
             labelSpan.className = "text-sm text-gray-500 dark:text-gray-400";
@@ -1166,73 +1173,205 @@ function createKPISection(kpiData) {
         });
 
         return section;
-    } catch (error) {
-        console.error("Error creating KPI section:", error);
-        return document.createElement("div"); // Safe fallback
+    } catch (err) {
+        console.error("Error creating KPI section:", err);
+        return document.createElement("div");
     }
 }
 
 /**
  * SECURITY: Extract and calculate KPI data with validation
  */
+function formatValue(value, key) {
+    if (value === null || value === undefined || value === "N/A") {
+        return "N/A";
+    }
+
+    if (key === "avgResponseTime") {
+        return isNaN(Number(value)) ? "N/A" : Number(value).toFixed(3) + " ms";
+    }
+
+    if (key === "successRate" || key === "errorRate") {
+        return `${value}%`;
+    }
+
+    if (typeof value === "number" && Number.isNaN(value)) {
+        return "N/A";
+    }
+
+    return String(value).trim() === "" ? "N/A" : String(value);
+}
+
 function extractKPIData(data) {
     try {
-        const kpiData = {};
-
-        // Initialize calculation variables
         let totalExecutions = 0;
         let totalSuccessful = 0;
         let totalFailed = 0;
-        const responseTimes = [];
+        let weightedResponseSum = 0;
 
-        // Process each category safely
-        const categories = [
-            "tools",
-            "resources",
-            "prompts",
-            "gateways",
-            "servers",
+        const categoryKeys = [
+            ["tools", "Tools Metrics", "Tools", "tools_metrics"],
+            [
+                "resources",
+                "Resources Metrics",
+                "Resources",
+                "resources_metrics",
+            ],
+            ["prompts", "Prompts Metrics", "Prompts", "prompts_metrics"],
+            ["servers", "Servers Metrics", "Servers", "servers_metrics"],
+            ["gateways", "Gateways Metrics", "Gateways", "gateways_metrics"],
+            [
+                "virtualServers",
+                "Virtual Servers",
+                "VirtualServers",
+                "virtual_servers",
+            ],
         ];
-        categories.forEach((category) => {
-            if (data[category]) {
-                const categoryData = data[category];
-                totalExecutions += Number(categoryData.totalExecutions || 0);
-                totalSuccessful += Number(
-                    categoryData.successfulExecutions || 0,
-                );
-                totalFailed += Number(categoryData.failedExecutions || 0);
 
-                if (
-                    categoryData.avgResponseTime &&
-                    categoryData.avgResponseTime !== "N/A"
-                ) {
-                    responseTimes.push(Number(categoryData.avgResponseTime));
+        categoryKeys.forEach((aliases) => {
+            let categoryData = null;
+            for (const key of aliases) {
+                if (data && data[key]) {
+                    categoryData = data[key];
+                    break;
                 }
+            }
+            if (!categoryData) {
+                return;
+            }
+
+            // Build a lowercase-key map so "Successful Executions" and "successfulExecutions" both match
+            const normalized = {};
+            Object.entries(categoryData).forEach(([k, v]) => {
+                normalized[k.toString().trim().toLowerCase()] = v;
+            });
+
+            const executions = Number(
+                normalized["total executions"] ??
+                    normalized.totalexecutions ??
+                    normalized.execution_count ??
+                    normalized["execution-count"] ??
+                    normalized.executions ??
+                    normalized.total_executions ??
+                    0,
+            );
+
+            const successful = Number(
+                normalized["successful executions"] ??
+                    normalized.successfulexecutions ??
+                    normalized.successful ??
+                    normalized.successful_executions ??
+                    0,
+            );
+
+            const failed = Number(
+                normalized["failed executions"] ??
+                    normalized.failedexecutions ??
+                    normalized.failed ??
+                    normalized.failed_executions ??
+                    0,
+            );
+
+            const avgResponseRaw =
+                normalized["average response time"] ??
+                normalized.avgresponsetime ??
+                normalized.avg_response_time ??
+                normalized.avgresponsetime ??
+                null;
+
+            totalExecutions += Number.isNaN(executions) ? 0 : executions;
+            totalSuccessful += Number.isNaN(successful) ? 0 : successful;
+            totalFailed += Number.isNaN(failed) ? 0 : failed;
+
+            if (
+                avgResponseRaw !== null &&
+                avgResponseRaw !== undefined &&
+                avgResponseRaw !== "N/A" &&
+                !Number.isNaN(Number(avgResponseRaw)) &&
+                executions > 0
+            ) {
+                weightedResponseSum += executions * Number(avgResponseRaw);
             }
         });
 
-        // Calculate safe aggregate metrics
-        kpiData.totalExecutions = totalExecutions;
-        kpiData.successRate =
+        const avgResponseTime =
+            totalExecutions > 0 && weightedResponseSum > 0
+                ? weightedResponseSum / totalExecutions
+                : null;
+
+        const successRate =
             totalExecutions > 0
                 ? Math.round((totalSuccessful / totalExecutions) * 100)
                 : 0;
-        kpiData.errorRate =
+
+        const errorRate =
             totalExecutions > 0
                 ? Math.round((totalFailed / totalExecutions) * 100)
                 : 0;
-        kpiData.avgResponseTime =
-            responseTimes.length > 0
-                ? Math.round(
-                      responseTimes.reduce((a, b) => a + b, 0) /
-                          responseTimes.length,
-                  )
-                : "N/A";
 
-        return kpiData;
-    } catch (error) {
-        console.error("Error extracting KPI data:", error);
-        return {}; // Safe fallback
+        // Debug: show what we've read from the payload
+        console.log("KPI Totals:", {
+            totalExecutions,
+            totalSuccessful,
+            totalFailed,
+            successRate,
+            errorRate,
+            avgResponseTime,
+        });
+
+        return { totalExecutions, successRate, errorRate, avgResponseTime };
+    } catch (err) {
+        console.error("Error extracting KPI data:", err);
+        return {
+            totalExecutions: 0,
+            successRate: 0,
+            errorRate: 0,
+            avgResponseTime: null,
+        };
+    }
+}
+
+// eslint-disable-next-line no-unused-vars
+function updateKPICards(kpiData) {
+    try {
+        if (!kpiData) {
+            return;
+        }
+
+        const idMap = {
+            "metrics-total-executions": formatValue(
+                kpiData.totalExecutions,
+                "totalExecutions",
+            ),
+            "metrics-success-rate": formatValue(
+                kpiData.successRate,
+                "successRate",
+            ),
+            "metrics-avg-response-time": formatValue(
+                kpiData.avgResponseTime,
+                "avgResponseTime",
+            ),
+            "metrics-error-rate": formatValue(kpiData.errorRate, "errorRate"),
+        };
+
+        Object.entries(idMap).forEach(([id, value]) => {
+            const el = document.getElementById(id);
+            if (!el) {
+                return;
+            }
+
+            // If card has a `.value` span inside, update it, else update directly
+            const valueEl =
+                el.querySelector?.(".value") ||
+                el.querySelector?.(".kpi-value");
+            if (valueEl) {
+                valueEl.textContent = value;
+            } else {
+                el.textContent = value;
+            }
+        });
+    } catch (err) {
+        console.error("updateKPICards error:", err);
     }
 }
 
@@ -1389,26 +1528,39 @@ function formatLastUsed(timestamp) {
         return "Never";
     }
 
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
+    let date;
+    if (typeof timestamp === "number" || /^\d+$/.test(timestamp)) {
+        const num = Number(timestamp);
+        date = new Date(num < 1e12 ? num * 1000 : num); // epoch seconds or ms
+    } else {
+        date = new Date(timestamp.endsWith("Z") ? timestamp : timestamp + "Z");
+    }
 
-    if (diffMins < 1) {
+    if (isNaN(date.getTime())) {
+        return "Never";
+    }
+
+    const now = Date.now();
+    const diff = now - date.getTime();
+
+    if (diff < 60 * 1000) {
         return "Just now";
     }
-    if (diffMins < 60) {
-        return `${diffMins} min ago`;
-    }
-    if (diffMins < 1440) {
-        return `${Math.floor(diffMins / 60)} hours ago`;
-    }
-    if (diffMins < 10080) {
-        return `${Math.floor(diffMins / 1440)} days ago`;
+    if (diff < 60 * 60 * 1000) {
+        return `${Math.floor(diff / 60000)} min ago`;
     }
 
-    return date.toLocaleDateString();
+    return date.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
 }
+
 function createTopPerformersTable(entityType, data, isActive) {
     const panel = document.createElement("div");
     panel.id = `top-${entityType}-panel`;
@@ -2291,6 +2443,223 @@ async function editTool(toolId) {
 }
 
 /**
+ * SECURE: View A2A Agents function with safe display
+ */
+async function viewAgent(agentId) {
+    try {
+        console.log(`Viewing agent ID: ${agentId}`);
+
+        const response = await fetchWithTimeout(
+            `${window.ROOT_PATH}/admin/a2a/${agentId}`,
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const agent = await response.json();
+
+        const agentDetailsDiv = safeGetElement("agent-details");
+        if (agentDetailsDiv) {
+            const container = document.createElement("div");
+            container.className =
+                "space-y-2 dark:bg-gray-900 dark:text-gray-100";
+
+            const fields = [
+                { label: "Name", value: agent.name },
+                { label: "Slug", value: agent.slug },
+                { label: "Endpoint URL", value: agent.endpoint_url },
+                { label: "Agent Type", value: agent.agent_type },
+                { label: "Protocol Version", value: agent.protocol_version },
+                { label: "Description", value: agent.description || "N/A" },
+                { label: "Visibility", value: agent.visibility || "private" },
+            ];
+
+            // Tags
+            const tagsP = document.createElement("p");
+            const tagsStrong = document.createElement("strong");
+            tagsStrong.textContent = "Tags: ";
+            tagsP.appendChild(tagsStrong);
+            if (agent.tags && agent.tags.length > 0) {
+                agent.tags.forEach((tag) => {
+                    const tagSpan = document.createElement("span");
+                    tagSpan.className =
+                        "inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full mr-1";
+                    tagSpan.textContent = tag;
+                    tagsP.appendChild(tagSpan);
+                });
+            } else {
+                tagsP.appendChild(document.createTextNode("No tags"));
+            }
+            container.appendChild(tagsP);
+
+            // Render basic fields
+            fields.forEach((field) => {
+                const p = document.createElement("p");
+                const strong = document.createElement("strong");
+                strong.textContent = field.label + ": ";
+                p.appendChild(strong);
+                p.appendChild(document.createTextNode(field.value));
+                container.appendChild(p);
+            });
+
+            // Status
+            const statusP = document.createElement("p");
+            const statusStrong = document.createElement("strong");
+            statusStrong.textContent = "Status: ";
+            statusP.appendChild(statusStrong);
+
+            const statusSpan = document.createElement("span");
+            let statusText = "";
+            let statusClass = "";
+            let statusIcon = "";
+
+            if (!agent.enabled) {
+                statusText = "Inactive";
+                statusClass = "bg-red-100 text-red-800";
+                statusIcon = `
+                    <svg class="ml-1 h-4 w-4 text-red-600 self-center" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M6.293 6.293a1 1 0 011.414 0L10 8.586l2.293-2.293a1 1 0 111.414 1.414L11.414 10l2.293 2.293a1 1 0 11-1.414 1.414L10 11.414l-2.293 2.293a1 1 0 11-1.414-1.414L8.586 10 6.293 7.707a1 1 0 010-1.414z" clip-rule="evenodd"></path>
+                      </svg>`;
+            } else if (agent.enabled && agent.reachable) {
+                statusText = "Active";
+                statusClass = "bg-green-100 text-green-800";
+                statusIcon = `
+                    <svg class="ml-1 h-4 w-4 text-green-600 self-center" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-4.586l5.293-5.293-1.414-1.414L9 11.586 7.121 9.707 5.707 11.121 9 14.414z" clip-rule="evenodd"></path>
+                      </svg>`;
+            } else if (agent.enabled && !agent.reachable) {
+                statusText = "Offline";
+                statusClass = "bg-yellow-100 text-yellow-800";
+                statusIcon = `
+                    <svg class="ml-1 h-4 w-4 text-yellow-600 self-center" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-10h2v4h-2V8zm0 6h2v2h-2v-2z" clip-rule="evenodd"></path>
+                      </svg>`;
+            }
+
+            statusSpan.className = `px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}`;
+            statusSpan.innerHTML = `${statusText} ${statusIcon}`;
+            statusP.appendChild(statusSpan);
+            container.appendChild(statusP);
+
+            // Capabilities + Config (JSON formatted)
+            const capConfigDiv = document.createElement("div");
+            capConfigDiv.className =
+                "mt-4 p-2 bg-gray-50 dark:bg-gray-800 rounded";
+            const capTitle = document.createElement("strong");
+            capTitle.textContent = "Capabilities & Config:";
+            capConfigDiv.appendChild(capTitle);
+
+            const pre = document.createElement("pre");
+            pre.className = "text-xs mt-1 whitespace-pre-wrap break-words";
+            pre.textContent = JSON.stringify(
+                { capabilities: agent.capabilities, config: agent.config },
+                null,
+                2,
+            );
+            capConfigDiv.appendChild(pre);
+            container.appendChild(capConfigDiv);
+
+            // Metadata
+            const metadataDiv = document.createElement("div");
+            metadataDiv.className = "mt-6 border-t pt-4";
+
+            const metadataTitle = document.createElement("strong");
+            metadataTitle.textContent = "Metadata:";
+            metadataDiv.appendChild(metadataTitle);
+
+            const metadataGrid = document.createElement("div");
+            metadataGrid.className = "grid grid-cols-2 gap-4 mt-2 text-sm";
+
+            const metadataFields = [
+                {
+                    label: "Created By",
+                    value:
+                        agent.created_by || agent.createdBy || "Legacy Entity",
+                },
+                {
+                    label: "Created At",
+                    value:
+                        agent.created_at || agent.createdAt
+                            ? new Date(
+                                  agent.created_at || agent.createdAt,
+                              ).toLocaleString()
+                            : "Pre-metadata",
+                },
+                {
+                    label: "Created From IP",
+                    value:
+                        agent.created_from_ip ||
+                        agent.createdFromIp ||
+                        "Unknown",
+                },
+                {
+                    label: "Created Via",
+                    value: agent.created_via || agent.createdVia || "Unknown",
+                },
+                {
+                    label: "Last Modified By",
+                    value: agent.modified_by || agent.modifiedBy || "N/A",
+                },
+                {
+                    label: "Last Modified At",
+                    value:
+                        agent.updated_at || agent.updatedAt
+                            ? new Date(
+                                  agent.updated_at || agent.updatedAt,
+                              ).toLocaleString()
+                            : "N/A",
+                },
+                {
+                    label: "Modified From IP",
+                    value:
+                        agent.modified_from_ip || agent.modifiedFromIp || "N/A",
+                },
+                {
+                    label: "Modified Via",
+                    value: agent.modified_via || agent.modifiedVia || "N/A",
+                },
+                { label: "Version", value: agent.version || "1" },
+                {
+                    label: "Import Batch",
+                    value: agent.importBatchId || "N/A",
+                },
+            ];
+
+            metadataFields.forEach((field) => {
+                const fieldDiv = document.createElement("div");
+
+                const labelSpan = document.createElement("span");
+                labelSpan.className =
+                    "font-medium text-gray-600 dark:text-gray-400";
+                labelSpan.textContent = field.label + ":";
+
+                const valueSpan = document.createElement("span");
+                valueSpan.className = "ml-2";
+                valueSpan.textContent = field.value;
+
+                fieldDiv.appendChild(labelSpan);
+                fieldDiv.appendChild(valueSpan);
+                metadataGrid.appendChild(fieldDiv);
+            });
+
+            metadataDiv.appendChild(metadataGrid);
+            container.appendChild(metadataDiv);
+
+            agentDetailsDiv.innerHTML = "";
+            agentDetailsDiv.appendChild(container);
+        }
+
+        openModal("agent-modal");
+        console.log("✓ Agent details loaded successfully");
+    } catch (error) {
+        console.error("Error fetching agent details:", error);
+        const errorMessage = handleFetchError(error, "load agent details");
+        showErrorMessage(errorMessage);
+    }
+}
+
+/**
  * SECURE: View Resource function with safe display
  */
 async function viewResource(resourceUri) {
@@ -2322,6 +2691,10 @@ async function viewResource(resourceUri) {
                 { label: "Name", value: resource.name },
                 { label: "Type", value: resource.mimeType || "N/A" },
                 { label: "Description", value: resource.description || "N/A" },
+                {
+                    label: "Visibility",
+                    value: resource.visibility || "private",
+                },
             ];
 
             fields.forEach((field) => {
@@ -2476,7 +2849,7 @@ async function viewResource(resourceUri) {
                             : "Pre-metadata",
                 },
                 {
-                    label: "Created From",
+                    label: "Created From IP",
                     value:
                         resource.created_from_ip ||
                         resource.createdFromIp ||
@@ -2503,7 +2876,7 @@ async function viewResource(resourceUri) {
                             : "N/A",
                 },
                 {
-                    label: "Modified From",
+                    label: "Modified From IP",
                     value:
                         resource.modified_from_ip ||
                         resource.modifiedFromIp ||
@@ -2579,22 +2952,52 @@ async function editResource(resourceUri) {
         const data = await response.json();
         const resource = data.resource;
         const content = data.content;
+        // Ensure hidden inactive flag is preserved
         const isInactiveCheckedBool = isInactiveChecked("resources");
         let hiddenField = safeGetElement("edit-resource-show-inactive");
-        if (!hiddenField) {
+        const editForm = safeGetElement("edit-resource-form");
+
+        if (!hiddenField && editForm) {
             hiddenField = document.createElement("input");
             hiddenField.type = "hidden";
             hiddenField.name = "is_inactive_checked";
             hiddenField.id = "edit-resource-show-inactive";
             const editForm = safeGetElement("edit-resource-form");
-            if (editForm) {
-                editForm.appendChild(hiddenField);
-            }
+            editForm.appendChild(hiddenField);
         }
         hiddenField.value = isInactiveCheckedBool;
 
+        // ✅ Prefill visibility radios (consistent with server)
+        const visibility = resource.visibility
+            ? resource.visibility.toLowerCase()
+            : null;
+
+        const publicRadio = safeGetElement("edit-resource-visibility-public");
+        const teamRadio = safeGetElement("edit-resource-visibility-team");
+        const privateRadio = safeGetElement("edit-resource-visibility-private");
+
+        // Clear all first
+        if (publicRadio) {
+            publicRadio.checked = false;
+        }
+        if (teamRadio) {
+            teamRadio.checked = false;
+        }
+        if (privateRadio) {
+            privateRadio.checked = false;
+        }
+
+        if (visibility) {
+            if (visibility === "public" && publicRadio) {
+                publicRadio.checked = true;
+            } else if (visibility === "team" && teamRadio) {
+                teamRadio.checked = true;
+            } else if (visibility === "private" && privateRadio) {
+                privateRadio.checked = true;
+            }
+        }
+
         // Set form action and populate fields with validation
-        const editForm = safeGetElement("edit-resource-form");
         if (editForm) {
             editForm.action = `${window.ROOT_PATH}/admin/resources/${encodeURIComponent(resourceUri)}/edit`;
         }
@@ -2704,6 +3107,7 @@ async function viewPrompt(promptName) {
             const fields = [
                 { label: "Name", value: prompt.name },
                 { label: "Description", value: prompt.description || "N/A" },
+                { label: "Visibility", value: prompt.visibility || "private" },
             ];
 
             fields.forEach((field) => {
@@ -2864,7 +3268,7 @@ async function viewPrompt(promptName) {
                             : "Pre-metadata",
                 },
                 {
-                    label: "Created From",
+                    label: "Created From IP",
                     value:
                         prompt.created_from_ip ||
                         prompt.createdFromIp ||
@@ -2888,7 +3292,7 @@ async function viewPrompt(promptName) {
                             : "N/A",
                 },
                 {
-                    label: "Modified From",
+                    label: "Modified From IP",
                     value:
                         prompt.modified_from_ip ||
                         prompt.modifiedFromIp ||
@@ -2966,6 +3370,36 @@ async function editPrompt(promptName) {
             }
         }
         hiddenField.value = isInactiveCheckedBool;
+
+        // ✅ Prefill visibility radios (consistent with server)
+        const visibility = prompt.visibility
+            ? prompt.visibility.toLowerCase()
+            : null;
+
+        const publicRadio = safeGetElement("edit-prompt-visibility-public");
+        const teamRadio = safeGetElement("edit-prompt-visibility-team");
+        const privateRadio = safeGetElement("edit-prompt-visibility-private");
+
+        // Clear all first
+        if (publicRadio) {
+            publicRadio.checked = false;
+        }
+        if (teamRadio) {
+            teamRadio.checked = false;
+        }
+        if (privateRadio) {
+            privateRadio.checked = false;
+        }
+
+        if (visibility) {
+            if (visibility === "public" && publicRadio) {
+                publicRadio.checked = true;
+            } else if (visibility === "team" && teamRadio) {
+                teamRadio.checked = true;
+            } else if (visibility === "private" && privateRadio) {
+                privateRadio.checked = true;
+            }
+        }
 
         // Set form action and populate fields with validation
         const editForm = safeGetElement("edit-prompt-form");
@@ -3066,6 +3500,7 @@ async function viewGateway(gatewayId) {
                 { label: "Name", value: gateway.name },
                 { label: "URL", value: gateway.url },
                 { label: "Description", value: gateway.description || "N/A" },
+                { label: "Visibility", value: gateway.visibility || "private" },
             ];
 
             // Add tags field with special handling
@@ -3163,7 +3598,7 @@ async function viewGateway(gatewayId) {
                             : "Pre-metadata",
                 },
                 {
-                    label: "Created From",
+                    label: "Created From IP",
                     value:
                         gateway.created_from_ip ||
                         gateway.createdFromIp ||
@@ -3188,7 +3623,7 @@ async function viewGateway(gatewayId) {
                             : "N/A",
                 },
                 {
-                    label: "Modified From",
+                    label: "Modified From IP",
                     value:
                         gateway.modified_from_ip ||
                         gateway.modifiedFromIp ||
@@ -3574,6 +4009,7 @@ async function viewServer(serverId) {
                 { label: "Server ID", value: server.id },
                 { label: "URL", value: getCatalogUrl(server) || "N/A" },
                 { label: "Type", value: "Virtual Server" },
+                { label: "Visibility", value: server.visibility || "private" },
             ];
 
             fields.forEach((field) => {
@@ -4359,6 +4795,165 @@ function showTab(tabName) {
                     }
                 }
 
+                if (tabName === "mcp-registry") {
+                    // Load MCP Registry content
+                    const registryContent = safeGetElement(
+                        "mcp-registry-content",
+                    );
+                    if (registryContent) {
+                        // Always load on first visit or if showing loading message
+                        const hasLoadingMessage =
+                            registryContent.innerHTML.includes(
+                                "Loading MCP Registry servers...",
+                            );
+                        const needsLoad =
+                            hasLoadingMessage ||
+                            !registryContent.getAttribute("data-loaded");
+
+                        if (needsLoad) {
+                            const rootPath = window.ROOT_PATH || "";
+
+                            // Use HTMX if available
+                            if (window.htmx && window.htmx.ajax) {
+                                window.htmx
+                                    .ajax(
+                                        "GET",
+                                        `${rootPath}/admin/mcp-registry/partial`,
+                                        {
+                                            target: "#mcp-registry-content",
+                                            swap: "innerHTML",
+                                        },
+                                    )
+                                    .then(() => {
+                                        registryContent.setAttribute(
+                                            "data-loaded",
+                                            "true",
+                                        );
+                                    });
+                            } else {
+                                // Fallback to fetch if HTMX is not available
+                                fetch(`${rootPath}/admin/mcp-registry/partial`)
+                                    .then((response) => response.text())
+                                    .then((html) => {
+                                        registryContent.innerHTML = html;
+                                        registryContent.setAttribute(
+                                            "data-loaded",
+                                            "true",
+                                        );
+                                        // Process any HTMX attributes in the new content
+                                        if (window.htmx) {
+                                            window.htmx.process(
+                                                registryContent,
+                                            );
+                                        }
+                                    })
+                                    .catch((error) => {
+                                        console.error(
+                                            "Failed to load MCP Registry:",
+                                            error,
+                                        );
+                                        registryContent.innerHTML =
+                                            '<div class="text-center text-red-600 py-8">Failed to load MCP Registry servers</div>';
+                                    });
+                            }
+                        }
+                    }
+                }
+
+                if (tabName === "gateways") {
+                    // Reload gateways list to show any newly registered servers
+                    const gatewaysSection = safeGetElement("gateways-section");
+                    if (gatewaysSection) {
+                        const gatewaysTbody =
+                            gatewaysSection.querySelector("tbody");
+                        if (gatewaysTbody) {
+                            // Trigger HTMX reload if available
+                            if (window.htmx && window.htmx.trigger) {
+                                window.htmx.trigger(gatewaysTbody, "load");
+                            } else {
+                                // Fallback: reload the page section via fetch
+                                const rootPath = window.ROOT_PATH || "";
+                                fetch(`${rootPath}/admin`)
+                                    .then((response) => response.text())
+                                    .then((html) => {
+                                        // Parse the HTML and extract just the gateways table
+                                        const parser = new DOMParser();
+                                        const doc = parser.parseFromString(
+                                            html,
+                                            "text/html",
+                                        );
+                                        const newTbody = doc.querySelector(
+                                            "#gateways-section tbody",
+                                        );
+                                        if (newTbody) {
+                                            gatewaysTbody.innerHTML =
+                                                newTbody.innerHTML;
+                                            // Process any HTMX attributes in the new content
+                                            if (window.htmx) {
+                                                window.htmx.process(
+                                                    gatewaysTbody,
+                                                );
+                                            }
+                                        }
+                                    })
+                                    .catch((error) => {
+                                        console.error(
+                                            "Failed to reload gateways:",
+                                            error,
+                                        );
+                                    });
+                            }
+                        }
+                    }
+                }
+
+                if (tabName === "plugins") {
+                    const pluginsPanel = safeGetElement("plugins-panel");
+                    if (pluginsPanel && pluginsPanel.innerHTML.trim() === "") {
+                        const rootPath = window.ROOT_PATH || "";
+                        fetchWithTimeout(
+                            `${rootPath}/admin/plugins/partial`,
+                            {
+                                method: "GET",
+                                credentials: "same-origin",
+                                headers: {
+                                    Accept: "text/html",
+                                },
+                            },
+                            5000,
+                        )
+                            .then((response) => {
+                                if (!response.ok) {
+                                    throw new Error(
+                                        `HTTP error! status: ${response.status}`,
+                                    );
+                                }
+                                return response.text();
+                            })
+                            .then((html) => {
+                                pluginsPanel.innerHTML = html;
+                                // Initialize plugin functions after HTML is loaded
+                                initializePluginFunctions();
+                                // Populate filter dropdowns
+                                if (window.populatePluginFilters) {
+                                    window.populatePluginFilters();
+                                }
+                            })
+                            .catch((error) => {
+                                console.error(
+                                    "Error loading plugins partial:",
+                                    error,
+                                );
+                                pluginsPanel.innerHTML = `
+                                    <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+                                        <strong class="font-bold">Error loading plugins:</strong>
+                                        <span class="block sm:inline">${escapeHtml(error.message)}</span>
+                                    </div>
+                                `;
+                            });
+                    }
+                }
+
                 if (tabName === "version-info") {
                     const versionPanel = safeGetElement("version-info-panel");
                     if (versionPanel && versionPanel.innerHTML.trim() === "") {
@@ -4456,6 +5051,7 @@ function showTab(tabName) {
     }
 }
 
+window.showTab = showTab;
 // ===================================================================
 // AUTH HANDLING
 // ===================================================================
@@ -6681,6 +7277,10 @@ async function viewTool(toolId) {
                 <span class="font-medium text-gray-700 dark:text-gray-300">Type:</span>
                 <div class="mt-1 tool-type text-sm"></div>
               </div>
+              <div>
+                <span class="font-medium text-gray-700 dark:text-gray-300">Visibility:</span>
+                <div class="mt-1 tool-visibility text-sm"></div>
+              </div>
             </div>
             <!-- Right Column -->
             <div class="space-y-3">
@@ -6762,6 +7362,7 @@ async function viewTool(toolId) {
             </div>
           </div>
           <div class="mt-6 border-t pt-4">
+          <!-- Metadata Section -->
             <strong>Metadata:</strong>
             <div class="grid grid-cols-2 gap-4 mt-2 text-sm">
               <div>
@@ -6773,7 +7374,7 @@ async function viewTool(toolId) {
                 <span class="ml-2 metadata-created-at"></span>
               </div>
               <div>
-                <span class="font-medium text-gray-600 dark:text-gray-400">Created From:</span>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Created From IP:</span>
                 <span class="ml-2 metadata-created-from"></span>
               </div>
               <div>
@@ -6787,6 +7388,14 @@ async function viewTool(toolId) {
               <div>
                 <span class="font-medium text-gray-600 dark:text-gray-400">Last Modified At:</span>
                 <span class="ml-2 metadata-modified-at"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Modified From IP:</span>
+                <span class="ml-2 modified-from"></span>
+              </div>
+              <div>
+                <span class="font-medium text-gray-600 dark:text-gray-400">Modified Via:</span>
+                <span class="ml-2 metadata-modified-via"></span>
               </div>
               <div>
                 <span class="font-medium text-gray-600 dark:text-gray-400">Version:</span>
@@ -6820,6 +7429,7 @@ async function viewTool(toolId) {
             setTextSafely(".tool-url", tool.url);
             setTextSafely(".tool-type", tool.integrationType);
             setTextSafely(".tool-description", tool.description);
+            setTextSafely(".tool-visibility", tool.visibility);
 
             // Set tags as HTML with badges
             const tagsElement = toolDetailsDiv.querySelector(".tool-tags");
@@ -7195,7 +7805,11 @@ async function handleResourceFormSubmit(e) {
 
         const isInactiveCheckedBool = isInactiveChecked("resources");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
-
+        formData.append("visibility", formData.get("visibility"));
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+        teamId && formData.append("team_id", teamId);
         const response = await fetch(`${window.ROOT_PATH}/admin/resources`, {
             method: "POST",
             body: formData,
@@ -7260,7 +7874,11 @@ async function handlePromptFormSubmit(e) {
 
         const isInactiveCheckedBool = isInactiveChecked("prompts");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
-
+        formData.append("visibility", formData.get("visibility"));
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+        teamId && formData.append("team_id", teamId);
         const response = await fetch(`${window.ROOT_PATH}/admin/prompts`, {
             method: "POST",
             body: formData,
@@ -7269,10 +7887,6 @@ async function handlePromptFormSubmit(e) {
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add prompt");
         }
-        // Only redirect on success
-        const teamId = new URL(window.location.href).searchParams.get(
-            "team_id",
-        );
 
         const searchParams = new URLSearchParams();
         if (isInactiveCheckedBool) {
@@ -7422,6 +8036,77 @@ async function handleServerFormSubmit(e) {
             status.classList.add("error-status");
         }
         showErrorMessage(error.message); // Optional if you use global popup/snackbar
+    } finally {
+        if (loading) {
+            loading.style.display = "none";
+        }
+    }
+}
+
+// Handle Add A2A Form Submit
+async function handleA2AFormSubmit(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const status = safeGetElement("a2aFormError");
+    const loading = safeGetElement("add-a2a-loading");
+
+    try {
+        // Basic validation
+        const name = formData.get("name");
+
+        const nameValidation = validateInputName(name, "A2A Agent");
+        if (!nameValidation.valid) {
+            throw new Error(nameValidation.error);
+        }
+
+        if (loading) {
+            loading.style.display = "block";
+        }
+        if (status) {
+            status.textContent = "";
+            status.classList.remove("error-status");
+        }
+
+        // Append visibility (radio buttons)
+
+        // ✅ Ensure visibility is captured from checked radio button
+
+        // formData.set("visibility", visibility);
+        formData.append("visibility", formData.get("visibility"));
+
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+        teamId && formData.append("team_id", teamId);
+
+        // Submit to backend
+        const response = await fetch(`${window.ROOT_PATH}/admin/a2a`, {
+            method: "POST",
+            body: formData,
+        });
+
+        const result = await response.json();
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to add A2A Agent.");
+        } else {
+            // Success redirect
+            const searchParams = new URLSearchParams();
+            if (teamId) {
+                searchParams.set("team_id", teamId);
+            }
+
+            const queryString = searchParams.toString();
+            const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#a2a-agents`;
+            window.location.href = redirectUrl;
+        }
+    } catch (error) {
+        console.error("Add A2A Agent Error:", error);
+        if (status) {
+            status.textContent = error.message || "An error occurred.";
+            status.classList.add("error-status");
+        }
+        showErrorMessage(error.message); // global popup/snackbar if available
     } finally {
         if (loading) {
             loading.style.display = "none";
@@ -8278,6 +8963,7 @@ function setupTabNavigation() {
         "a2a-agents",
         "roots",
         "metrics",
+        "plugins",
         "logs",
         "export-import",
         "version-info",
@@ -8285,7 +8971,13 @@ function setupTabNavigation() {
 
     tabs.forEach((tabName) => {
         // Suppress warnings for optional tabs that might not be enabled
-        const optionalTabs = ["roots", "logs", "export-import", "version-info"];
+        const optionalTabs = [
+            "roots",
+            "logs",
+            "export-import",
+            "version-info",
+            "plugins",
+        ];
         const suppressWarning = optionalTabs.includes(tabName);
 
         const tabElement = safeGetElement(`tab-${tabName}`, suppressWarning);
@@ -8424,6 +9116,12 @@ function setupFormHandlers() {
     const serverForm = safeGetElement("add-server-form");
     if (serverForm) {
         serverForm.addEventListener("submit", handleServerFormSubmit);
+    }
+
+    // Add A2A Form
+    const a2aForm = safeGetElement("add-a2a-form");
+    if (a2aForm) {
+        a2aForm.addEventListener("submit", handleA2AFormSubmit);
     }
 
     const editServerForm = safeGetElement("edit-server-form");
@@ -8863,6 +9561,7 @@ window.viewGateway = viewGateway;
 window.editGateway = editGateway;
 window.viewServer = viewServer;
 window.editServer = editServer;
+window.viewAgent = viewAgent;
 window.runToolTest = runToolTest;
 window.testPrompt = testPrompt;
 window.runPromptTest = runPromptTest;
@@ -12965,3 +13664,521 @@ window.processApiDocsUpload = processApiDocsUpload;
 window.processApiDocsUrl = processApiDocsUrl;
 window.clearApiDocsUploadForm = clearApiDocsUploadForm;
 window.clearApiDocsUrlForm = clearApiDocsUrlForm;
+
+// ===================================================================
+// PLUGIN MANAGEMENT FUNCTIONS
+// ===================================================================
+
+// Plugin management functions
+function initializePluginFunctions() {
+    // Populate hook, tag, and author filters on page load
+    window.populatePluginFilters = function () {
+        const cards = document.querySelectorAll(".plugin-card");
+        const hookSet = new Set();
+        const tagSet = new Set();
+        const authorSet = new Set();
+
+        cards.forEach((card) => {
+            const hooks = card.dataset.hooks
+                ? card.dataset.hooks.split(",")
+                : [];
+            const tags = card.dataset.tags ? card.dataset.tags.split(",") : [];
+            const author = card.dataset.author;
+
+            hooks.forEach((hook) => {
+                if (hook.trim()) {
+                    hookSet.add(hook.trim());
+                }
+            });
+            tags.forEach((tag) => {
+                if (tag.trim()) {
+                    tagSet.add(tag.trim());
+                }
+            });
+            if (author && author.trim()) {
+                authorSet.add(author.trim());
+            }
+        });
+
+        const hookFilter = document.getElementById("plugin-hook-filter");
+        const tagFilter = document.getElementById("plugin-tag-filter");
+        const authorFilter = document.getElementById("plugin-author-filter");
+
+        if (hookFilter) {
+            hookSet.forEach((hook) => {
+                const option = document.createElement("option");
+                option.value = hook;
+                option.textContent = hook
+                    .replace(/_/g, " ")
+                    .replace(/\b\w/g, (l) => l.toUpperCase());
+                hookFilter.appendChild(option);
+            });
+        }
+
+        if (tagFilter) {
+            tagSet.forEach((tag) => {
+                const option = document.createElement("option");
+                option.value = tag;
+                option.textContent = tag;
+                tagFilter.appendChild(option);
+            });
+        }
+
+        if (authorFilter) {
+            // Convert authorSet to array and sort for consistent ordering
+            const sortedAuthors = Array.from(authorSet).sort();
+            sortedAuthors.forEach((author) => {
+                const option = document.createElement("option");
+                // Value is lowercase (matches data-author), text is capitalized for display
+                option.value = author.toLowerCase();
+                option.textContent =
+                    author.charAt(0).toUpperCase() + author.slice(1);
+                authorFilter.appendChild(option);
+            });
+        }
+    };
+
+    // Filter plugins based on search and filters
+    window.filterPlugins = function () {
+        const searchInput = document.getElementById("plugin-search");
+        const modeFilter = document.getElementById("plugin-mode-filter");
+        const statusFilter = document.getElementById("plugin-status-filter");
+        const hookFilter = document.getElementById("plugin-hook-filter");
+        const tagFilter = document.getElementById("plugin-tag-filter");
+        const authorFilter = document.getElementById("plugin-author-filter");
+
+        const searchQuery = searchInput ? searchInput.value.toLowerCase() : "";
+        const selectedMode = modeFilter ? modeFilter.value : "";
+        const selectedStatus = statusFilter ? statusFilter.value : "";
+        const selectedHook = hookFilter ? hookFilter.value : "";
+        const selectedTag = tagFilter ? tagFilter.value : "";
+        const selectedAuthor = authorFilter ? authorFilter.value : "";
+
+        // Update visual highlighting for all filter types
+        updateBadgeHighlighting("hook", selectedHook);
+        updateBadgeHighlighting("tag", selectedTag);
+        updateBadgeHighlighting("author", selectedAuthor);
+
+        const cards = document.querySelectorAll(".plugin-card");
+
+        cards.forEach((card) => {
+            const name = card.dataset.name
+                ? card.dataset.name.toLowerCase()
+                : "";
+            const description = card.dataset.description
+                ? card.dataset.description.toLowerCase()
+                : "";
+            const author = card.dataset.author
+                ? card.dataset.author.toLowerCase()
+                : "";
+            const mode = card.dataset.mode;
+            const status = card.dataset.status;
+            const hooks = card.dataset.hooks
+                ? card.dataset.hooks.split(",")
+                : [];
+            const tags = card.dataset.tags ? card.dataset.tags.split(",") : [];
+
+            let visible = true;
+
+            // Search filter
+            if (
+                searchQuery &&
+                !name.includes(searchQuery) &&
+                !description.includes(searchQuery) &&
+                !author.includes(searchQuery)
+            ) {
+                visible = false;
+            }
+
+            // Mode filter
+            if (selectedMode && mode !== selectedMode) {
+                visible = false;
+            }
+
+            // Status filter
+            if (selectedStatus && status !== selectedStatus) {
+                visible = false;
+            }
+
+            // Hook filter
+            if (selectedHook && !hooks.includes(selectedHook)) {
+                visible = false;
+            }
+
+            // Tag filter
+            if (selectedTag && !tags.includes(selectedTag)) {
+                visible = false;
+            }
+
+            // Author filter
+            if (
+                selectedAuthor &&
+                author.trim() !== selectedAuthor.toLowerCase().trim()
+            ) {
+                visible = false;
+            }
+
+            if (visible) {
+                card.style.display = "block";
+            } else {
+                card.style.display = "none";
+            }
+        });
+    };
+
+    // Filter by hook when clicking on hook point
+    window.filterByHook = function (hook) {
+        const hookFilter = document.getElementById("plugin-hook-filter");
+        if (hookFilter) {
+            hookFilter.value = hook;
+            window.filterPlugins();
+            hookFilter.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+            // Update visual highlighting
+            updateBadgeHighlighting("hook", hook);
+        }
+    };
+
+    // Filter by tag when clicking on tag
+    window.filterByTag = function (tag) {
+        const tagFilter = document.getElementById("plugin-tag-filter");
+        if (tagFilter) {
+            tagFilter.value = tag;
+            window.filterPlugins();
+            tagFilter.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+            // Update visual highlighting
+            updateBadgeHighlighting("tag", tag);
+        }
+    };
+
+    // Filter by author when clicking on author
+    window.filterByAuthor = function (author) {
+        const authorFilter = document.getElementById("plugin-author-filter");
+        if (authorFilter) {
+            // Convert to lowercase to match data-author attribute
+            authorFilter.value = author.toLowerCase();
+            window.filterPlugins();
+            authorFilter.scrollIntoView({
+                behavior: "smooth",
+                block: "nearest",
+            });
+
+            // Update visual highlighting
+            updateBadgeHighlighting("author", author);
+        }
+    };
+
+    // Helper function to update badge highlighting
+    function updateBadgeHighlighting(type, value) {
+        // Define selectors for each type
+        const selectors = {
+            hook: "[onclick^='filterByHook']",
+            tag: "[onclick^='filterByTag']",
+            author: "[onclick^='filterByAuthor']",
+        };
+
+        const selector = selectors[type];
+        if (!selector) {
+            return;
+        }
+
+        // Get all badges of this type
+        const badges = document.querySelectorAll(selector);
+
+        badges.forEach((badge) => {
+            // Check if this is the "All" badge (empty value)
+            const isAllBadge = badge.getAttribute("onclick").includes("('')");
+
+            // Check if this badge matches the selected value
+            const badgeValue = badge
+                .getAttribute("onclick")
+                .match(/'([^']*)'/)?.[1];
+            const isSelected =
+                value === ""
+                    ? isAllBadge
+                    : badgeValue?.toLowerCase() === value?.toLowerCase();
+
+            if (isSelected) {
+                // Apply active/selected styling
+                badge.classList.remove(
+                    "bg-gray-100",
+                    "text-gray-800",
+                    "hover:bg-gray-200",
+                );
+                badge.classList.remove(
+                    "dark:bg-gray-700",
+                    "dark:text-gray-200",
+                    "dark:hover:bg-gray-600",
+                );
+                badge.classList.add(
+                    "bg-indigo-100",
+                    "text-indigo-800",
+                    "border",
+                    "border-indigo-300",
+                );
+                badge.classList.add(
+                    "dark:bg-indigo-900",
+                    "dark:text-indigo-200",
+                    "dark:border-indigo-700",
+                );
+            } else if (!isAllBadge) {
+                // Reset to default styling for non-All badges
+                badge.classList.remove(
+                    "bg-indigo-100",
+                    "text-indigo-800",
+                    "border",
+                    "border-indigo-300",
+                );
+                badge.classList.remove(
+                    "dark:bg-indigo-900",
+                    "dark:text-indigo-200",
+                    "dark:border-indigo-700",
+                );
+                badge.classList.add(
+                    "bg-gray-100",
+                    "text-gray-800",
+                    "hover:bg-gray-200",
+                );
+                badge.classList.add(
+                    "dark:bg-gray-700",
+                    "dark:text-gray-200",
+                    "dark:hover:bg-gray-600",
+                );
+            }
+        });
+    }
+
+    // Show plugin details modal
+    window.showPluginDetails = async function (pluginName) {
+        const modal = document.getElementById("plugin-details-modal");
+        const modalName = document.getElementById("modal-plugin-name");
+        const modalContent = document.getElementById("modal-plugin-content");
+
+        if (!modal || !modalName || !modalContent) {
+            console.error("Plugin details modal elements not found");
+            return;
+        }
+
+        // Show loading state
+        modalName.textContent = pluginName;
+        modalContent.innerHTML =
+            '<div class="text-center py-4">Loading...</div>';
+        modal.classList.remove("hidden");
+
+        try {
+            const rootPath = window.ROOT_PATH || "";
+            // Fetch plugin details
+            const response = await fetch(
+                `${rootPath}/admin/plugins/${encodeURIComponent(pluginName)}`,
+                {
+                    credentials: "same-origin",
+                    headers: {
+                        Accept: "application/json",
+                    },
+                },
+            );
+
+            if (!response.ok) {
+                throw new Error(
+                    `Failed to load plugin details: ${response.statusText}`,
+                );
+            }
+
+            const plugin = await response.json();
+
+            // Render plugin details
+            modalContent.innerHTML = `
+                <div class="space-y-4">
+                    <div>
+                        <h4 class="font-medium text-gray-700 dark:text-gray-300">Description</h4>
+                        <p class="mt-1">${plugin.description || "No description available"}</p>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Author</h4>
+                            <p class="mt-1">${plugin.author || "Unknown"}</p>
+                        </div>
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Version</h4>
+                            <p class="mt-1">${plugin.version || "0.0.0"}</p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Mode</h4>
+                            <p class="mt-1">
+                                <span class="px-2 py-1 text-xs rounded-full ${
+                                    plugin.mode === "enforce"
+                                        ? "bg-red-100 text-red-800"
+                                        : plugin.mode === "permissive"
+                                          ? "bg-yellow-100 text-yellow-800"
+                                          : "bg-gray-100 text-gray-800"
+                                }">
+                                    ${plugin.mode}
+                                </span>
+                            </p>
+                        </div>
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Priority</h4>
+                            <p class="mt-1">${plugin.priority}</p>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4 class="font-medium text-gray-700 dark:text-gray-300">Hooks</h4>
+                        <div class="mt-1 flex flex-wrap gap-1">
+                            ${(plugin.hooks || [])
+                                .map(
+                                    (hook) =>
+                                        `<span class="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">${hook}</span>`,
+                                )
+                                .join("")}
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4 class="font-medium text-gray-700 dark:text-gray-300">Tags</h4>
+                        <div class="mt-1 flex flex-wrap gap-1">
+                            ${(plugin.tags || [])
+                                .map(
+                                    (tag) =>
+                                        `<span class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded">${tag}</span>`,
+                                )
+                                .join("")}
+                        </div>
+                    </div>
+
+                    ${
+                        plugin.config && Object.keys(plugin.config).length > 0
+                            ? `
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Configuration</h4>
+                            <pre class="mt-1 p-2 bg-gray-50 dark:bg-gray-800 rounded text-xs overflow-x-auto">${JSON.stringify(plugin.config, null, 2)}</pre>
+                        </div>
+                    `
+                            : ""
+                    }
+                </div>
+            `;
+        } catch (error) {
+            console.error("Error loading plugin details:", error);
+            modalContent.innerHTML = `
+                <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+                    <strong class="font-bold">Error:</strong>
+                    <span class="block sm:inline">${error.message}</span>
+                </div>
+            `;
+        }
+    };
+
+    // Close plugin details modal
+    window.closePluginDetails = function () {
+        const modal = document.getElementById("plugin-details-modal");
+        if (modal) {
+            modal.classList.add("hidden");
+        }
+    };
+}
+
+// Initialize plugin functions if plugins panel exists
+if (document.getElementById("plugins-panel")) {
+    initializePluginFunctions();
+    // Populate filter dropdowns on initial load
+    if (window.populatePluginFilters) {
+        window.populatePluginFilters();
+    }
+}
+
+// Expose plugin functions to global scope
+window.initializePluginFunctions = initializePluginFunctions;
+
+// ===================================================================
+// MCP REGISTRY MODAL FUNCTIONS
+// ===================================================================
+
+// Define modal functions in global scope for MCP Registry
+window.showApiKeyModal = function (serverId, serverName, serverUrl) {
+    const modal = document.getElementById("api-key-modal");
+    if (modal) {
+        document.getElementById("modal-server-id").value = serverId;
+        document.getElementById("modal-server-name").textContent = serverName;
+        document.getElementById("modal-custom-name").placeholder = serverName;
+        modal.classList.remove("hidden");
+    }
+};
+
+window.closeApiKeyModal = function () {
+    const modal = document.getElementById("api-key-modal");
+    if (modal) {
+        modal.classList.add("hidden");
+    }
+    const form = document.getElementById("api-key-form");
+    if (form) {
+        form.reset();
+    }
+};
+
+window.submitApiKeyForm = function (event) {
+    event.preventDefault();
+    const serverId = document.getElementById("modal-server-id").value;
+    const customName = document.getElementById("modal-custom-name").value;
+    const apiKey = document.getElementById("modal-api-key").value;
+
+    // Prepare request data
+    const requestData = {};
+    if (customName) {
+        requestData.name = customName;
+    }
+    if (apiKey) {
+        requestData.api_key = apiKey;
+    }
+
+    const rootPath = window.ROOT_PATH || "";
+
+    // Send registration request
+    fetch(`${rootPath}/admin/mcp-registry/${serverId}/register`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + (getCookie("jwt_token") || ""),
+        },
+        body: JSON.stringify(requestData),
+    })
+        .then((response) => response.json())
+        .then((data) => {
+            if (data.success) {
+                window.closeApiKeyModal();
+                // Reload the catalog
+                if (window.htmx && window.htmx.ajax) {
+                    window.htmx.ajax(
+                        "GET",
+                        `${rootPath}/admin/mcp-registry/partial`,
+                        {
+                            target: "#mcp-registry-content",
+                            swap: "innerHTML",
+                        },
+                    );
+                }
+            } else {
+                alert("Registration failed: " + (data.error || data.message));
+            }
+        })
+        .catch((error) => {
+            alert("Error registering server: " + error);
+        });
+};
+
+// Helper function to get cookie if not already defined
+if (typeof window.getCookie === "undefined") {
+    window.getCookie = function (name) {
+        const value = "; " + document.cookie;
+        const parts = value.split("; " + name + "=");
+        if (parts.length === 2) {
+            return parts.pop().split(";").shift();
+        }
+        return "";
+    };
+}

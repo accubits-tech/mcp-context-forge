@@ -396,6 +396,7 @@ class ToolCreate(BaseModel):
     """
 
     model_config = ConfigDict(str_strip_whitespace=True, populate_by_name=True)
+    allow_auto: bool = False  # Internal flag to allow system-initiated A2A tool creation
 
     name: str = Field(..., description="Unique name for the tool")
     displayName: Optional[str] = Field(None, description="Display name for the tool (shown in UI)")  # noqa: N815
@@ -417,7 +418,7 @@ class ToolCreate(BaseModel):
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
     owner_email: Optional[str] = Field(None, description="Email of the tool owner")
-    visibility: str = Field(default="private", description="Visibility level (private, team, public)")
+    visibility: Optional[str] = Field(default="public", description="Visibility level (private, team, public)")
 
     @field_validator("tags")
     @classmethod
@@ -574,7 +575,7 @@ class ToolCreate(BaseModel):
     @field_validator("request_type")
     @classmethod
     def validate_request_type(cls, v: str, info: ValidationInfo) -> str:
-        """Validate request type based on integration type
+        """Validate request type based on integration type (REST, MCP, A2A)
 
         Args:
             v (str): Value to validate
@@ -587,34 +588,45 @@ class ToolCreate(BaseModel):
             ValueError: When value is unsafe
 
         Examples:
-            >>> # Test REST integration types with valid method
             >>> from pydantic import ValidationInfo
-            >>> info = type('obj', (object,), {'data': {'integration_type': 'REST'}})
-            >>> ToolCreate.validate_request_type('POST', info)
-            'POST'
-
-            >>> # Test REST integration types
-            >>> info = type('obj', (object,), {'data': {'integration_type': 'REST'}})
-            >>> ToolCreate.validate_request_type('GET', info)
-            'GET'
-
-            >>> # Test MCP integration types with valid transport
-            >>> info = type('obj', (object,), {'data': {'integration_type': 'MCP'}})
-            >>> ToolCreate.validate_request_type('SSE', info)
-            'SSE'
-
-            >>> # Test invalid REST type
+            >>> # REST integration types with valid methods
             >>> info_rest = type('obj', (object,), {'data': {'integration_type': 'REST'}})
+            >>> ToolCreate.validate_request_type('POST', info_rest)
+            'POST'
+            >>> ToolCreate.validate_request_type('GET', info_rest)
+            'GET'
+            >>> # MCP integration types with valid transports
+            >>> info_mcp = type('obj', (object,), {'data': {'integration_type': 'MCP'}})
+            >>> ToolCreate.validate_request_type('SSE', info_mcp)
+            'SSE'
+            >>> ToolCreate.validate_request_type('STDIO', info_mcp)
+            'STDIO'
+            >>> # A2A integration type with valid method
+            >>> info_a2a = type('obj', (object,), {'data': {'integration_type': 'A2A'}})
+            >>> ToolCreate.validate_request_type('POST', info_a2a)
+            'POST'
+            >>> # Invalid REST type
             >>> try:
             ...     ToolCreate.validate_request_type('SSE', info_rest)
             ... except ValueError as e:
             ...     "not allowed for REST" in str(e)
             True
-
-            >>> # Test invalid integration type
-            >>> info = type('obj', (object,), {'data': {'integration_type': 'INVALID'}})
+            >>> # Invalid MCP type
             >>> try:
-            ...     ToolCreate.validate_request_type('GET', info)
+            ...     ToolCreate.validate_request_type('POST', info_mcp)
+            ... except ValueError as e:
+            ...     "not allowed for MCP" in str(e)
+            True
+            >>> # Invalid A2A type
+            >>> try:
+            ...     ToolCreate.validate_request_type('GET', info_a2a)
+            ... except ValueError as e:
+            ...     "not allowed for A2A" in str(e)
+            True
+            >>> # Invalid integration type
+            >>> info_invalid = type('obj', (object,), {'data': {'integration_type': 'INVALID'}})
+            >>> try:
+            ...     ToolCreate.validate_request_type('GET', info_invalid)
             ... except ValueError as e:
             ...     "Unknown integration type" in str(e)
             True
@@ -622,7 +634,7 @@ class ToolCreate(BaseModel):
 
         integration_type = info.data.get("integration_type")
 
-        if integration_type not in ["REST", "MCP"]:
+        if integration_type not in ["REST", "MCP", "A2A"]:
             raise ValueError(f"Unknown integration type: {integration_type}")
 
         if integration_type == "REST":
@@ -633,7 +645,10 @@ class ToolCreate(BaseModel):
             allowed = ["SSE", "STDIO", "STREAMABLEHTTP"]
             if v not in allowed:
                 raise ValueError(f"Request type '{v}' not allowed for MCP. Only {allowed} transports are accepted.")
-
+        elif integration_type == "A2A":
+            allowed = ["POST"]
+            if v not in allowed:
+                raise ValueError(f"Request type '{v}' not allowed for A2A. Only {allowed} methods are accepted.")
         return v
 
     @model_validator(mode="before")
@@ -729,9 +744,10 @@ class ToolCreate(BaseModel):
             ValueError: If attempting to manually create MCP integration type
         """
         integration_type = values.get("integration_type")
+        allow_auto = values.get("allow_auto", False)
         if integration_type == "MCP":
             raise ValueError("Cannot manually create MCP tools. Add MCP servers via the Gateways interface - tools will be auto-discovered and registered with integration_type='MCP'.")
-        if integration_type == "A2A":
+        if integration_type == "A2A" and not allow_auto:
             raise ValueError("Cannot manually create A2A tools. Add A2A agents via the A2A interface - tools will be auto-created when agents are associated with servers.")
         return values
 
@@ -756,7 +772,7 @@ class ToolUpdate(BaseModelWithConfigDict):
     auth: Optional[AuthenticationValues] = Field(None, description="Authentication credentials (Basic or Bearer Token or custom headers) if required")
     gateway_id: Optional[str] = Field(None, description="id of gateway for the tool")
     tags: Optional[List[str]] = Field(None, description="Tags for categorizing the tool")
-    visibility: str = Field(default="private", description="Visibility level: private, team, or public")
+    visibility: Optional[str] = Field(default="public", description="Visibility level: private, team, or public")
 
     @field_validator("tags")
     @classmethod
@@ -1050,8 +1066,9 @@ class ToolRead(BaseModelWithConfigDict):
 
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="ID of the team that owns this resource")
+    team: Optional[str] = Field(None, description="Name of the team that owns this resource")
     owner_email: Optional[str] = Field(None, description="Email of the user who owns this resource")
-    visibility: str = Field(default="private", description="Visibility level: private, team, or public")
+    visibility: Optional[str] = Field(default="public", description="Visibility level: private, team, or public")
 
 
 class ToolInvocation(BaseModelWithConfigDict):
@@ -1239,7 +1256,7 @@ class ResourceCreate(BaseModel):
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
     owner_email: Optional[str] = Field(None, description="Email of the resource owner")
-    visibility: str = Field(default="private", description="Visibility level (private, team, public)")
+    visibility: Optional[str] = Field(default="public", description="Visibility level (private, team, public)")
 
     @field_validator("tags")
     @classmethod
@@ -1530,8 +1547,9 @@ class ResourceRead(BaseModelWithConfigDict):
 
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="ID of the team that owns this resource")
+    team: Optional[str] = Field(None, description="Name of the team that owns this resource")
     owner_email: Optional[str] = Field(None, description="Email of the user who owns this resource")
-    visibility: str = Field(default="private", description="Visibility level: private, team, or public")
+    visibility: Optional[str] = Field(default="public", description="Visibility level: private, team, or public")
 
 
 class ResourceSubscription(BaseModelWithConfigDict):
@@ -1767,7 +1785,7 @@ class PromptCreate(BaseModel):
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
     owner_email: Optional[str] = Field(None, description="Email of the prompt owner")
-    visibility: str = Field(default="private", description="Visibility level (private, team, public)")
+    visibility: Optional[str] = Field(default="public", description="Visibility level (private, team, public)")
 
     @field_validator("tags")
     @classmethod
@@ -2031,8 +2049,9 @@ class PromptRead(BaseModelWithConfigDict):
 
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="ID of the team that owns this resource")
+    team: Optional[str] = Field(None, description="Name of the team that owns this resource")
     owner_email: Optional[str] = Field(None, description="Email of the user who owns this resource")
-    visibility: str = Field(default="private", description="Visibility level: private, team, or public")
+    visibility: Optional[str] = Field(default="public", description="Visibility level: private, team, or public")
 
 
 class PromptInvocation(BaseModelWithConfigDict):
@@ -2137,7 +2156,7 @@ class GatewayCreate(BaseModel):
     # Team scoping fields for resource organization
     team_id: Optional[str] = Field(None, description="Team ID this gateway belongs to")
     owner_email: Optional[str] = Field(None, description="Email of the gateway owner")
-    visibility: str = Field(default="public", description="Gateway visibility: private, team, or public")
+    visibility: Optional[str] = Field(default="public", description="Gateway visibility: private, team, or public")
 
     @field_validator("tags")
     @classmethod
@@ -2649,8 +2668,9 @@ class GatewayRead(BaseModelWithConfigDict):
 
     # Team scoping fields for resource organization
     team_id: Optional[str] = Field(None, description="Team ID this gateway belongs to")
+    team: Optional[str] = Field(None, description="Name of the team that owns this resource")
     owner_email: Optional[str] = Field(None, description="Email of the gateway owner")
-    visibility: str = Field(default="private", description="Gateway visibility: private, team, or public")
+    visibility: Optional[str] = Field(default="public", description="Gateway visibility: private, team, or public")
 
     # Comprehensive metadata for audit tracking
     created_by: Optional[str] = Field(None, description="Username who created this entity")
@@ -3108,7 +3128,7 @@ class ServerCreate(BaseModel):
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
     owner_email: Optional[str] = Field(None, description="Email of the server owner")
-    visibility: str = Field(default="private", description="Visibility level (private, team, public)")
+    visibility: Optional[str] = Field(default="public", description="Visibility level (private, team, public)")
 
     @field_validator("name")
     @classmethod
@@ -3407,8 +3427,9 @@ class ServerRead(BaseModelWithConfigDict):
 
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="ID of the team that owns this resource")
+    team: Optional[str] = Field(None, description="Name of the team that owns this resource")
     owner_email: Optional[str] = Field(None, description="Email of the user who owns this resource")
-    visibility: str = Field(default="private", description="Visibility level: private, team, or public")
+    visibility: Optional[str] = Field(default="public", description="Visibility level: private, team, or public")
 
     @model_validator(mode="before")
     @classmethod
@@ -3564,7 +3585,7 @@ class A2AAgentCreate(BaseModel):
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
     owner_email: Optional[str] = Field(None, description="Email of the agent owner")
-    visibility: str = Field(default="private", description="Visibility level (private, team, public)")
+    visibility: Optional[str] = Field(default="public", description="Visibility level (private, team, public)")
 
     @field_validator("tags")
     @classmethod
@@ -3884,7 +3905,7 @@ class A2AAgentRead(BaseModelWithConfigDict):
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="ID of the team that owns this resource")
     owner_email: Optional[str] = Field(None, description="Email of the user who owns this resource")
-    visibility: str = Field(default="private", description="Visibility level: private, team, or public")
+    visibility: Optional[str] = Field(default="public", description="Visibility level: private, team, or public")
 
 
 class A2AAgentInvocation(BaseModelWithConfigDict):
@@ -4511,7 +4532,7 @@ class TeamResponse(BaseModel):
     description: Optional[str] = Field(None, description="Team description")
     created_by: str = Field(..., description="Email of team creator")
     is_personal: bool = Field(..., description="Whether this is a personal team")
-    visibility: str = Field(..., description="Team visibility level")
+    visibility: Optional[str] = Field(..., description="Team visibility level")
     max_members: Optional[int] = Field(None, description="Maximum number of members allowed")
     member_count: int = Field(..., description="Current number of team members")
     created_at: datetime = Field(..., description="Team creation timestamp")
@@ -5295,3 +5316,148 @@ class SSOCallbackResponse(BaseModelWithConfigDict):
     token_type: str = Field(default="bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration in seconds")
     user: Dict[str, Any] = Field(..., description="User information")
+
+
+# Plugin-related schemas
+
+
+class PluginSummary(BaseModel):
+    """Summary information for a plugin in list views."""
+
+    name: str = Field(..., description="Unique plugin name")
+    description: str = Field("", description="Plugin description")
+    author: str = Field("Unknown", description="Plugin author")
+    version: str = Field("0.0.0", description="Plugin version")
+    mode: str = Field(..., description="Plugin mode: enforce, permissive, or disabled")
+    priority: int = Field(..., description="Plugin execution priority (lower = higher priority)")
+    hooks: List[str] = Field(default_factory=list, description="Hook points where plugin executes")
+    tags: List[str] = Field(default_factory=list, description="Plugin tags for categorization")
+    status: str = Field(..., description="Plugin status: enabled or disabled")
+    config_summary: Dict[str, Any] = Field(default_factory=dict, description="Summary of plugin configuration")
+
+
+class PluginDetail(PluginSummary):
+    """Detailed plugin information including full configuration."""
+
+    kind: str = Field("", description="Plugin type or class")
+    namespace: Optional[str] = Field(None, description="Plugin namespace")
+    conditions: List[Any] = Field(default_factory=list, description="Conditions for plugin execution")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Full plugin configuration")
+    manifest: Optional[Dict[str, Any]] = Field(None, description="Plugin manifest information")
+
+
+class PluginListResponse(BaseModel):
+    """Response for plugin list endpoint."""
+
+    plugins: List[PluginSummary] = Field(..., description="List of plugins")
+    total: int = Field(..., description="Total number of plugins")
+    enabled_count: int = Field(0, description="Number of enabled plugins")
+    disabled_count: int = Field(0, description="Number of disabled plugins")
+
+
+class PluginStatsResponse(BaseModel):
+    """Response for plugin statistics endpoint."""
+
+    total_plugins: int = Field(..., description="Total number of plugins")
+    enabled_plugins: int = Field(..., description="Number of enabled plugins")
+    disabled_plugins: int = Field(..., description="Number of disabled plugins")
+    plugins_by_hook: Dict[str, int] = Field(default_factory=dict, description="Plugin count by hook type")
+    plugins_by_mode: Dict[str, int] = Field(default_factory=dict, description="Plugin count by mode")
+
+
+# MCP Server Catalog Schemas
+
+
+class CatalogServer(BaseModel):
+    """Schema for a catalog server entry."""
+
+    id: str = Field(..., description="Unique identifier for the catalog server")
+    name: str = Field(..., description="Display name of the server")
+    category: str = Field(..., description="Server category (e.g., Project Management, Software Development)")
+    url: str = Field(..., description="Server endpoint URL")
+    auth_type: str = Field(..., description="Authentication type (e.g., OAuth2.1, API Key, Open)")
+    provider: str = Field(..., description="Provider/vendor name")
+    description: str = Field(..., description="Server description")
+    requires_api_key: bool = Field(default=False, description="Whether API key is required")
+    secure: bool = Field(default=False, description="Whether additional security is required")
+    tags: List[str] = Field(default_factory=list, description="Tags for categorization")
+    logo_url: Optional[str] = Field(None, description="URL to server logo/icon")
+    documentation_url: Optional[str] = Field(None, description="URL to server documentation")
+    is_registered: bool = Field(default=False, description="Whether server is already registered")
+    is_available: bool = Field(default=True, description="Whether server is currently available")
+
+
+class CatalogServerRegisterRequest(BaseModel):
+    """Request to register a catalog server."""
+
+    server_id: str = Field(..., description="Catalog server ID to register")
+    name: Optional[str] = Field(None, description="Optional custom name for the server")
+    api_key: Optional[str] = Field(None, description="API key if required")
+    oauth_credentials: Optional[Dict[str, Any]] = Field(None, description="OAuth credentials if required")
+
+
+class CatalogServerRegisterResponse(BaseModel):
+    """Response after registering a catalog server."""
+
+    success: bool = Field(..., description="Whether registration was successful")
+    server_id: str = Field(..., description="ID of the registered server in the system")
+    message: str = Field(..., description="Status message")
+    error: Optional[str] = Field(None, description="Error message if registration failed")
+
+
+class CatalogServerStatusRequest(BaseModel):
+    """Request to check catalog server status."""
+
+    server_id: str = Field(..., description="Catalog server ID to check")
+
+
+class CatalogServerStatusResponse(BaseModel):
+    """Response for catalog server status check."""
+
+    server_id: str = Field(..., description="Catalog server ID")
+    is_available: bool = Field(..., description="Whether server is reachable")
+    is_registered: bool = Field(..., description="Whether server is registered")
+    last_checked: Optional[datetime] = Field(None, description="Last health check timestamp")
+    response_time_ms: Optional[float] = Field(None, description="Response time in milliseconds")
+    error: Optional[str] = Field(None, description="Error message if check failed")
+
+
+class CatalogListRequest(BaseModel):
+    """Request to list catalog servers."""
+
+    category: Optional[str] = Field(None, description="Filter by category")
+    auth_type: Optional[str] = Field(None, description="Filter by auth type")
+    provider: Optional[str] = Field(None, description="Filter by provider")
+    search: Optional[str] = Field(None, description="Search term for name/description")
+    tags: Optional[List[str]] = Field(None, description="Filter by tags")
+    show_registered_only: bool = Field(default=False, description="Show only registered servers")
+    show_available_only: bool = Field(default=True, description="Show only available servers")
+    limit: int = Field(default=100, description="Maximum number of results")
+    offset: int = Field(default=0, description="Offset for pagination")
+
+
+class CatalogListResponse(BaseModel):
+    """Response containing catalog servers."""
+
+    servers: List[CatalogServer] = Field(..., description="List of catalog servers")
+    total: int = Field(..., description="Total number of matching servers")
+    categories: List[str] = Field(..., description="Available categories")
+    auth_types: List[str] = Field(..., description="Available auth types")
+    providers: List[str] = Field(..., description="Available providers")
+    all_tags: List[str] = Field(default_factory=list, description="All available tags")
+
+
+class CatalogBulkRegisterRequest(BaseModel):
+    """Request to register multiple catalog servers."""
+
+    server_ids: List[str] = Field(..., description="List of catalog server IDs to register")
+    skip_errors: bool = Field(default=True, description="Continue on error")
+
+
+class CatalogBulkRegisterResponse(BaseModel):
+    """Response after bulk registration."""
+
+    successful: List[str] = Field(..., description="Successfully registered server IDs")
+    failed: List[Dict[str, str]] = Field(..., description="Failed registrations with error messages")
+    total_attempted: int = Field(..., description="Total servers attempted")
+    total_successful: int = Field(..., description="Total successful registrations")

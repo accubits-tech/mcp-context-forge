@@ -12,7 +12,7 @@ plugin_settings:
   plugin_timeout: 120
   fail_on_plugin_error: false
   enable_plugin_api: true
-  plugin_health_check_interval: 60
+  plugin_health_check_interval: 120
 
 plugins:
   # Argument Normalizer - stabilize inputs before anything else
@@ -23,7 +23,7 @@ plugins:
     author: "Mihai Criveti"
     hooks: ["prompt_pre_fetch", "tool_pre_invoke"]
     tags: ["normalize", "inputs", "whitespace", "unicode", "dates", "numbers"]
-    mode: "permissive"
+    mode: "disabled"
     priority: 40
     conditions: []
     config:
@@ -98,7 +98,7 @@ plugins:
     author: "Mihai Criveti"
     hooks: ["prompt_pre_fetch", "prompt_post_fetch", "tool_pre_invoke", "tool_post_invoke"]
     tags: ["plugin", "transformer", "regex", "search-and-replace", "pre-post"]
-    mode: "enforce"  # enforce | permissive | disabled
+    mode: "disabled"  # enforce | permissive | disabled
     priority: 150
     conditions:
       # Apply to specific tools/servers
@@ -120,7 +120,7 @@ plugins:
     author: "Mihai Criveti"
     hooks: ["prompt_pre_fetch"]
     tags: ["plugin", "filter", "denylist", "pre-post"]
-    mode: "enforce"  # enforce | permissive | disabled
+    mode: "disabled"  # enforce | permissive | disabled
     priority: 100
     conditions:
       # Apply to specific tools/servers
@@ -141,7 +141,7 @@ plugins:
     author: "MCP Gateway Team"
     hooks: ["resource_pre_fetch", "resource_post_fetch", "prompt_post_fetch", "tool_post_invoke"]
     tags: ["resource", "filter", "security", "example"]
-    mode: "enforce"  # Block resources that violate rules
+    mode: "disabled"  # Block resources that violate rules
     priority: 75
     conditions: []  # Apply to all resources
     config:
@@ -175,7 +175,7 @@ plugins:
     author: "MCP Context Forge Team"
     hooks: ["resource_post_fetch"]
     tags: ["security", "html", "xss", "sanitize"]
-    mode: "enforce"
+    mode: "disabled"
     priority: 119
     conditions: []
     config:
@@ -200,7 +200,7 @@ plugins:
     author: "Mihai Criveti"
     hooks: ["resource_post_fetch"]
     tags: ["transform", "markdown", "html"]
-    mode: "permissive"
+    mode: "disabled"
     priority: 120
     conditions: []
     config: {}
@@ -213,7 +213,7 @@ plugins:
     author: "Mihai Criveti"
     hooks: ["prompt_pre_fetch", "tool_pre_invoke"]
     tags: ["limits", "throttle"]
-    mode: "enforce"
+    mode: "disabled"
     priority: 20
     conditions: []
     config:
@@ -448,19 +448,19 @@ plugins:
       tool_allowlist: ["search", "retrieve"]
       resource_uri_prefixes: ["http://", "https://"]
 
-  # ClamAV Remote Scanner (external MCP)
-  - name: "ClamAVRemote"
-    kind: "external"
-    description: "External ClamAV scanner (file/text) via MCP STDIO"
-    version: "0.1.0"
-    author: "Mihai Criveti"
-    hooks: ["resource_pre_fetch", "resource_post_fetch"]
-    tags: ["security", "malware", "clamav"]
-    mode: "enforce"
-    priority: 62
-    mcp:
-      proto: STDIO
-      script: plugins/external/clamav_server/run.sh
+  # ClamAV Remote Scanner (external MCP) - DISABLED due to script path issue
+  # - name: "ClamAVRemote"
+  #   kind: "external"
+  #   description: "External ClamAV scanner (file/text) via MCP STDIO"
+  #   version: "0.1.0"
+  #   author: "Mihai Criveti"
+  #   hooks: ["resource_pre_fetch", "resource_post_fetch"]
+  #   tags: ["security", "malware", "clamav"]
+  #   mode: "enforce"
+  #   priority: 62
+  #   mcp:
+  #     proto: STDIO
+  #     script: plugins/external/clamav_server/run.sh
 
   # - name: "OPAPluginFilter"
   #   kind: "external"
@@ -558,24 +558,24 @@ plugins:
       direction: "to_user"
       fields: ["start_time", "end_time"]
 
-  # AI Artifacts Normalizer - clean smart quotes, ligatures, bidi controls
-  - name: "AIArtifactsNormalizer"
-    kind: "plugins.ai_artifacts_normalizer.ai_artifacts_normalizer.AIArtifactsNormalizerPlugin"
-    description: "Normalize AI artifacts: smart quotes, ligatures, dashes, ellipses; remove bidi/zero-width; collapse spacing"
-    version: "0.1.0"
-    author: "MCP Context Forge Team"
-    hooks: ["prompt_pre_fetch", "resource_post_fetch", "tool_post_invoke"]
-    tags: ["normalize", "unicode", "safety"]
-    mode: "permissive"
-    priority: 138
-    conditions: []
-    config:
-      replace_smart_quotes: true
-      replace_ligatures: true
-      remove_bidi_controls: true
-      collapse_spacing: true
-      normalize_dashes: true
-      normalize_ellipsis: true
+  # AI Artifacts Normalizer - DISABLED due to syntax error in plugin
+  # - name: "AIArtifactsNormalizer"
+  #   kind: "plugins.ai_artifacts_normalizer.ai_artifacts_normalizer.AIArtifactsNormalizerPlugin"
+  #   description: "Normalize AI artifacts: smart quotes, ligatures, dashes, ellipses; remove bidi/zero-width; collapse spacing"
+  #   version: "0.1.0"
+  #   author: "MCP Context Forge Team"
+  #   hooks: ["prompt_pre_fetch", "resource_post_fetch", "tool_post_invoke"]
+  #   tags: ["normalize", "unicode", "safety"]
+  #   mode: "permissive"
+  #   priority: 138
+  #   conditions: []
+  #   config:
+  #     replace_smart_quotes: true
+  #     replace_ligatures: true
+  #     remove_bidi_controls: true
+  #     collapse_spacing: true
+  #     normalize_dashes: true
+  #     normalize_ellipsis: true
 
   # SQL Sanitizer - detect dangerous SQL patterns in inputs
   - name: "SQLSanitizer"
@@ -750,3 +750,104 @@ plugins:
       vault_header_name: "X-Vault-Tokens"
       vault_handling: "raw"
       system_handling: "tag"
+
+  # Webhook Notification Plugin - Send HTTP notifications on events
+  - name: "WebhookNotification"
+    kind: "plugins.webhook_notification.webhook_notification.WebhookNotificationPlugin"
+    description: "Send HTTP webhook notifications on events, violations, and state changes"
+    version: "1.0.0"
+    author: "Manav Gupta"
+    hooks: ["tool_pre_invoke", "tool_post_invoke", "prompt_post_fetch", "resource_post_fetch"]
+    tags: ["notification", "webhook", "monitoring", "observability"]
+    mode: "permissive"
+    priority: 900  # Run after other plugins to capture their violations
+    conditions: []
+    config:
+      webhooks:
+        # Webhook.site for testing - UPDATE WITH YOUR UNIQUE URL
+        - url: "https://webhook.site/38df7ac1-672a-4e49-9b55-3c0ed469e9d0"
+          events: ["violation", "tool_success", "tool_error", "rate_limit_exceeded", "pii_detected"]
+          authentication:
+            type: "none"
+          retry_attempts: 2
+          retry_delay: 1000
+          timeout: 10
+          enabled: true
+
+      # Simple default template
+      default_template: |
+        {
+          "event": "{{event}}",
+          "plugin": "{{plugin_name}}",
+          "timestamp": "{{timestamp}}",
+          "request_id": "{{request_id}}",
+          "user": "{{user}}",
+          "tenant_id": "{{tenant_id}}",
+          "violation": {{violation}},
+          "metadata": {{metadata}}
+        }
+
+      include_payload_data: false
+      max_payload_size: 1000
+
+  # Content Moderation Plugin - AI-powered content safety using IBM, OpenAI, Azure, AWS
+  - name: "ContentModeration"
+    kind: "plugins.content_moderation.content_moderation.ContentModerationPlugin"
+    description: "Advanced content moderation using AI services (IBM Watson, IBM Granite Guardian, OpenAI, Azure, AWS)"
+    version: "1.0.0"
+    author: "Manav Gupta"
+    hooks: ["prompt_pre_fetch", "tool_pre_invoke", "tool_post_invoke"]
+    tags: ["safety", "moderation", "content", "ai", "ibm", "watson", "granite"]
+    mode: "permissive"  # Use permissive mode for testing
+    priority: 30  # Run early in the pipeline
+    conditions: []
+    config:
+      provider: "ibm_granite"  # Use Granite for easier testing (no API key needed)
+      fallback_provider: null
+      fallback_on_error: "warn"  # Action when providers fail
+
+      # IBM Granite Guardian via Ollama (for testing)
+      ibm_granite:
+        ollama_url: "http://localhost:11434"
+        model: "granite3-guardian"
+        temperature: 0.1
+        timeout: 30
+
+      # IBM Watson Natural Language Understanding (requires API key)
+      # ibm_watson:
+      #   api_key: "${env.IBM_WATSON_API_KEY}"
+      #   url: "${env.IBM_WATSON_URL}"
+      #   version: "2022-04-07"
+      #   language: "en"
+      #   timeout: 30
+
+      # Category thresholds and actions
+      categories:
+        hate:
+          threshold: 0.7
+          action: "warn"  # Use warn for testing
+        violence:
+          threshold: 0.8
+          action: "warn"
+        sexual:
+          threshold: 0.6
+          action: "warn"
+        self_harm:
+          threshold: 0.5
+          action: "warn"
+        harassment:
+          threshold: 0.7
+          action: "warn"
+        profanity:
+          threshold: 0.6
+          action: "redact"
+        toxic:
+          threshold: 0.7
+          action: "warn"
+
+      # General settings
+      audit_decisions: true
+      include_confidence_scores: true
+      enable_caching: true
+      cache_ttl: 3600
+      max_text_length: 10000
