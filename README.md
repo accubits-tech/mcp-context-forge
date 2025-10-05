@@ -123,7 +123,7 @@ ContextForge MCP Gateway is a feature-rich gateway, proxy and MCP Registry that 
 
 ## 🚀 Overview & Goals
 
-**ContextForge MCP Gateway** is a gateway, registry, and proxy that sits in front of any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server or REST API-exposing a unified endpoint for all your AI clients.
+**ContextForge** is a gateway, registry, and proxy that sits in front of any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server or REST API-exposing a unified endpoint for all your AI clients.
 
 **⚠️ Caution**: The current release (0.7.0) is considered alpha / early beta. It is not production-ready and should only be used for local development, testing, or experimentation. Features, APIs, and behaviors are subject to change without notice. **Do not** deploy in production environments without thorough security review, validation and additional security mechanisms.  Many of the features required for secure, large-scale, or multi-tenant production deployments are still on the [project roadmap](https://ibm.github.io/mcp-context-forge/architecture/roadmap/) - which is itself evolving.
 
@@ -140,7 +140,7 @@ It currently supports:
 
 ![MCP Gateway Architecture](https://ibm.github.io/mcp-context-forge/images/mcpgateway.svg)
 
-For a list of upcoming features, check out the [ContextForge MCP Gateway Roadmap](https://ibm.github.io/mcp-context-forge/architecture/roadmap/)
+For a list of upcoming features, check out the [ContextForge Roadmap](https://ibm.github.io/mcp-context-forge/architecture/roadmap/)
 
 > Note on Multi‑Tenancy (v0.7.0): A comprehensive multi‑tenant architecture with email authentication, teams, RBAC, and resource visibility is landing in v0.7.0. See the [Migration Guide](https://github.com/IBM/mcp-context-forge/blob/main/MIGRATION-0.7.0.md) and [Changelog](https://github.com/IBM/mcp-context-forge/blob/main/CHANGELOG.md) for details.
 
@@ -238,7 +238,7 @@ See [Observability Documentation](https://ibm.github.io/mcp-context-forge/manage
 
 ## Quick Start - PyPI
 
-MCP Gateway is published on [PyPI](https://pypi.org/project/mcp-contextforge-gateway/) as `mcp-contextforge-gateway`.
+ContextForge is published on [PyPI](https://pypi.org/project/mcp-contextforge-gateway/) as `mcp-contextforge-gateway`.
 
 ---
 
@@ -379,7 +379,7 @@ python3 -m mcpgateway.translate \
 # 2️⃣  Register it with the gateway
 curl -s -X POST -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"name":"fast_time","url":"http://localhost:9000/sse"}' \
+     -d '{"name":"fast_time","url":"http://localhost:8003/sse"}' \
      http://localhost:4444/gateways
 
 # 3️⃣  Verify tool catalog
@@ -462,6 +462,7 @@ When using a MCP Client such as Claude with stdio:
 ## Quick Start - Containers
 
 Use the official OCI image from GHCR with **Docker** *or* **Podman**.
+Please note: Currently, arm64 is not supported. If you are e.g. running on MacOS, install via PyPi.
 
 ---
 
@@ -1255,20 +1256,35 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 | ------------------------------ | ------------------------------------------------ | --------------------- | ------- |
 | `SSO_AUTO_ADMIN_DOMAINS`      | Email domains that automatically get admin privileges | `[]`             | JSON array |
 
-### Dynamic Client Registration & Virtual MCP Server Authentication
+### OAuth 2.0 Dynamic Client Registration (DCR) & PKCE
 
-ContextForge supports OAuth2 with Dynamic Client Registration (DCR)
-for streamable HTTP servers through integration with an upstream API gateway,
-such as HyperMCP gateway, enabling automatic OAuth2 client provisioning for MCP servers
-without manual configuration.
+ContextForge implements **OAuth 2.0 Dynamic Client Registration (RFC 7591)** and **PKCE (RFC 7636)** for seamless integration with OAuth-protected MCP servers and upstream API gateways like HyperMCP.
 
-| Setting                     | Description                                            | Default | Options |
-|-----------------------------|--------------------------------------------------------|---------|---------|
-| `JWT_AUDIENCE_VERIFICATION` | JWT audience verification needs to be disabled for DCR | `true`  | bool    |
+**Key Features:**
+- ✅ Automatic client registration with Authorization Servers (no manual credential configuration)
+- ✅ Authorization Server metadata discovery (RFC 8414)
+- ✅ PKCE (Proof Key for Code Exchange) enabled for all Authorization Code flows
+- ✅ Support for public clients (PKCE-only, no client secret)
+- ✅ Encrypted credential storage with Fernet encryption
+- ✅ Configurable issuer allowlist for security
 
-You can find an example for using dynamic client registration (DCR) with [HyprMCP Gateway (`hyprmcp/mcp-gateway`)](https://github.com/hyprmcp/mcp-gateway).
+| Setting                                                | Description                                                    | Default                        | Options       |
+|-------------------------------------------------------|----------------------------------------------------------------|--------------------------------|---------------|
+| `MCPGATEWAY_DCR_ENABLED`                              | Enable Dynamic Client Registration (RFC 7591)                  | `true`                         | bool          |
+| `MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS` | Auto-register when gateway has issuer but no client_id         | `true`                         | bool          |
+| `MCPGATEWAY_DCR_DEFAULT_SCOPES`                       | Default OAuth scopes to request during DCR                     | `mcp:read`                     | string        |
+| `MCPGATEWAY_DCR_ALLOWED_ISSUERS`                      | Allowlist of trusted issuer URLs (empty = allow any)           | `[]`                           | JSON array    |
+| `MCPGATEWAY_DCR_TOKEN_ENDPOINT_AUTH_METHOD`           | Token endpoint auth method                                     | `client_secret_basic`          | `client_secret_basic`, `client_secret_post`, `none` |
+| `MCPGATEWAY_DCR_METADATA_CACHE_TTL`                   | AS metadata cache TTL in seconds                               | `3600`                         | int           |
+| `MCPGATEWAY_DCR_CLIENT_NAME_TEMPLATE`                 | Template for client_name in DCR requests                       | `MCP Gateway ({gateway_name})` | string        |
+| `MCPGATEWAY_OAUTH_DISCOVERY_ENABLED`                  | Enable AS metadata discovery (RFC 8414)                        | `true`                         | bool          |
+| `MCPGATEWAY_OAUTH_PREFERRED_CODE_CHALLENGE_METHOD`    | PKCE code challenge method                                     | `S256`                         | `S256`, `plain` |
+| `JWT_AUDIENCE_VERIFICATION`                           | JWT audience verification (disable for DCR)                    | `true`                         | bool          |
 
-Follow the tutorial at https://ibm.github.io/mcp-context-forge/tutorials/dcr-hyprmcp/ to get started.
+**Documentation:**
+- [DCR Configuration Guide](https://ibm.github.io/mcp-context-forge/manage/dcr/) - Complete DCR setup and troubleshooting
+- [OAuth 2.0 Integration](https://ibm.github.io/mcp-context-forge/manage/oauth/) - OAuth configuration and PKCE details
+- [HyperMCP Tutorial](https://ibm.github.io/mcp-context-forge/tutorials/dcr-hyprmcp/) - End-to-end DCR setup with HyperMCP gateway
 
 ### Personal Teams Configuration
 
@@ -1280,6 +1296,29 @@ Follow the tutorial at https://ibm.github.io/mcp-context-forge/tutorials/dcr-hyp
 | `MAX_MEMBERS_PER_TEAM`                   | Maximum number of members per team               | `100`      | int > 0 |
 | `INVITATION_EXPIRY_DAYS`                 | Number of days before team invitations expire   | `7`        | int > 0 |
 | `REQUIRE_EMAIL_VERIFICATION_FOR_INVITES` | Require email verification for team invitations | `true`     | bool    |
+
+### MCP Server Catalog
+
+> 🆕 **New in v0.7.0**: The MCP Server Catalog allows you to define a catalog of pre-configured MCP servers in a YAML file for easy discovery and management via the Admin UI.
+
+| Setting                              | Description                                      | Default            | Options |
+| ------------------------------------ | ------------------------------------------------ | ------------------ | ------- |
+| `MCPGATEWAY_CATALOG_ENABLED`        | Enable MCP server catalog feature                | `true`             | bool    |
+| `MCPGATEWAY_CATALOG_FILE`           | Path to catalog configuration file               | `mcp-catalog.yml`  | string  |
+| `MCPGATEWAY_CATALOG_AUTO_HEALTH_CHECK` | Automatically health check catalog servers    | `true`             | bool    |
+| `MCPGATEWAY_CATALOG_CACHE_TTL`      | Catalog cache TTL in seconds                     | `3600`             | int > 0 |
+| `MCPGATEWAY_CATALOG_PAGE_SIZE`      | Number of catalog servers per page               | `12`               | int > 0 |
+
+**Key Features:**
+- 🔄 Refresh Button - Manually refresh catalog without page reload
+- 🔍 Debounced Search - Optimized search with 300ms debounce
+- 📝 Custom Server Names - Specify custom names when registering
+- 🔌 Transport Detection - Auto-detect SSE, WebSocket, or HTTP transports
+- 🔐 OAuth Support - Register OAuth servers and configure later
+- ⚡ Better Error Messages - User-friendly errors for common issues
+
+**Documentation:**
+- [MCP Server Catalog Guide](https://ibm.github.io/mcp-context-forge/manage/catalog/) - Complete catalog setup and configuration
 
 ### Security
 
@@ -2178,7 +2217,7 @@ make lint            # Run lint tools
 
 ## Doctest Coverage
 
-MCP Context Forge implements comprehensive doctest coverage to ensure all code examples in documentation are tested and verified:
+ContextForge implements comprehensive doctest coverage to ensure all code examples in documentation are tested and verified:
 
 ```bash
 make doctest         # Run all doctests
@@ -2400,7 +2439,7 @@ This project offer the following Makefile targets. Type `make` in the project ro
 <summary><strong>🔧 Available Makefile targets</strong></summary>
 
 ```bash
-🐍 MCP CONTEXT FORGE  (An enterprise-ready Model Context Protocol Gateway)
+🐍 MCP CONTEXTFORGE  (An enterprise-ready Model Context Protocol Gateway)
 🔧 SYSTEM-LEVEL DEPENDENCIES (DEV BUILD ONLY)
 os-deps              - Install Graphviz, Pandoc, Trivy, SCC used for dev docs generation and security scan
 🌱 VIRTUAL ENVIRONMENT & INSTALLATION
@@ -2702,7 +2741,7 @@ Licensed under the **Apache License 2.0** - see [LICENSE](./LICENSE)
 
 - [Mihai Criveti](https://www.linkedin.com/in/crivetimihai) - Distinguished Engineer, Agentic AI
 
-Special thanks to our contributors for helping us improve ContextForge MCP Gateway:
+Special thanks to our contributors for helping us improve ContextForge:
 
 <a href="https://github.com/ibm/mcp-context-forge/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=ibm/mcp-context-forge&max=100&anon=0&columns=10" />

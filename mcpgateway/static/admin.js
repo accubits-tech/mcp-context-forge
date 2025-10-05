@@ -4798,7 +4798,7 @@ function showTab(tabName) {
                 if (tabName === "mcp-registry") {
                     // Load MCP Registry content
                     const registryContent = safeGetElement(
-                        "mcp-registry-content",
+                        "mcp-registry-servers",
                     );
                     if (registryContent) {
                         // Always load on first visit or if showing loading message
@@ -4820,7 +4820,7 @@ function showTab(tabName) {
                                         "GET",
                                         `${rootPath}/admin/mcp-registry/partial`,
                                         {
-                                            target: "#mcp-registry-content",
+                                            target: "#mcp-registry-servers",
                                             swap: "innerHTML",
                                         },
                                     )
@@ -7683,49 +7683,15 @@ async function handleGatewayFormSubmit(e) {
         }
 
         // Handle OAuth configuration
-        const authType = formData.get("auth_type");
-        if (authType === "oauth") {
-            const oauthConfig = {
-                grant_type: formData.get("oauth_grant_type"),
-                client_id: formData.get("oauth_client_id"),
-                client_secret: formData.get("oauth_client_secret"),
-                token_url: formData.get("oauth_token_url"),
-                scopes: formData.get("oauth_scopes")
-                    ? formData
-                          .get("oauth_scopes")
-                          .split(" ")
-                          .filter((s) => s.trim())
-                    : [],
-            };
-
-            // Add authorization code specific fields
-            if (oauthConfig.grant_type === "authorization_code") {
-                oauthConfig.authorization_url = formData.get(
-                    "oauth_authorization_url",
-                );
-                oauthConfig.redirect_uri = formData.get("oauth_redirect_uri");
-
-                // Add token management options
-                oauthConfig.token_management = {
-                    store_tokens: formData.get("oauth_store_tokens") === "on",
-                    auto_refresh: formData.get("oauth_auto_refresh") === "on",
-                    refresh_threshold_seconds: 300,
-                };
-            }
-
-            // Remove individual OAuth fields and add as oauth_config
-            formData.delete("oauth_grant_type");
-            formData.delete("oauth_client_id");
-            formData.delete("oauth_client_secret");
-            formData.delete("oauth_token_url");
-            formData.delete("oauth_scopes");
-            formData.delete("oauth_authorization_url");
-            formData.delete("oauth_redirect_uri");
-            formData.delete("oauth_store_tokens");
-            formData.delete("oauth_auto_refresh");
-
-            formData.append("oauth_config", JSON.stringify(oauthConfig));
-        }
+        // NOTE: OAuth config assembly is now handled by the backend (mcpgateway/admin.py)
+        // The backend assembles individual form fields into oauth_config with proper field names
+        // and supports DCR (Dynamic Client Registration) when client_id/client_secret are empty
+        //
+        // Leaving this commented for reference:
+        // const authType = formData.get("auth_type");
+        // if (authType === "oauth") {
+        //     ... backend handles this now ...
+        // }
 
         formData.append("visibility", formData.get("visibility"));
 
@@ -8307,40 +8273,15 @@ async function handleEditGatewayFormSubmit(e) {
         );
 
         // Handle OAuth configuration
-        const authType = formData.get("auth_type");
-        if (authType === "oauth") {
-            const oauthConfig = {
-                grant_type: formData.get("oauth_grant_type"),
-                client_id: formData.get("oauth_client_id"),
-                client_secret: formData.get("oauth_client_secret"),
-                token_url: formData.get("oauth_token_url"),
-                scopes: formData.get("oauth_scopes")
-                    ? formData
-                          .get("oauth_scopes")
-                          .split(" ")
-                          .filter((s) => s.trim())
-                    : [],
-            };
-
-            // Add authorization code specific fields
-            if (oauthConfig.grant_type === "authorization_code") {
-                oauthConfig.authorization_url = formData.get(
-                    "oauth_authorization_url",
-                );
-                oauthConfig.redirect_uri = formData.get("oauth_redirect_uri");
-            }
-
-            // Remove individual OAuth fields and add as oauth_config
-            formData.delete("oauth_grant_type");
-            formData.delete("oauth_client_id");
-            formData.delete("oauth_client_secret");
-            formData.delete("oauth_token_url");
-            formData.delete("oauth_scopes");
-            formData.delete("oauth_authorization_url");
-            formData.delete("oauth_redirect_uri");
-
-            formData.append("oauth_config", JSON.stringify(oauthConfig));
-        }
+        // NOTE: OAuth config assembly is now handled by the backend (mcpgateway/admin.py)
+        // The backend assembles individual form fields into oauth_config with proper field names
+        // and supports DCR (Dynamic Client Registration) when client_id/client_secret are empty
+        //
+        // Leaving this commented for reference:
+        // const authType = formData.get("auth_type");
+        // if (authType === "oauth") {
+        //     ... backend handles this now ...
+        // }
 
         const isInactiveCheckedBool = isInactiveChecked("gateways");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
@@ -9365,6 +9306,8 @@ function handleAuthTypeChange() {
 function handleOAuthGrantTypeChange() {
     const grantType = this.value;
     const authCodeFields = safeGetElement("oauth-auth-code-fields-gw");
+    const usernameField = safeGetElement("oauth-username-field-gw");
+    const passwordField = safeGetElement("oauth-password-field-gw");
 
     if (authCodeFields) {
         if (grantType === "authorization_code") {
@@ -9392,11 +9335,48 @@ function handleOAuthGrantTypeChange() {
             });
         }
     }
+
+    // Handle password grant type fields
+    if (usernameField && passwordField) {
+        if (grantType === "password") {
+            usernameField.style.display = "block";
+            passwordField.style.display = "block";
+
+            // Make username and password required for password grant
+            const usernameInput = safeGetElement("oauth-username-gw");
+            const passwordInput = safeGetElement("oauth-password-gw");
+            if (usernameInput) {
+                usernameInput.required = true;
+            }
+            if (passwordInput) {
+                passwordInput.required = true;
+            }
+
+            console.log(
+                "Password grant flow selected - username and password are now required",
+            );
+        } else {
+            usernameField.style.display = "none";
+            passwordField.style.display = "none";
+
+            // Remove required validation for hidden fields
+            const usernameInput = safeGetElement("oauth-username-gw");
+            const passwordInput = safeGetElement("oauth-password-gw");
+            if (usernameInput) {
+                usernameInput.required = false;
+            }
+            if (passwordInput) {
+                passwordInput.required = false;
+            }
+        }
+    }
 }
 
 function handleEditOAuthGrantTypeChange() {
     const grantType = this.value;
     const authCodeFields = safeGetElement("oauth-auth-code-fields-gw-edit");
+    const usernameField = safeGetElement("oauth-username-field-edit");
+    const passwordField = safeGetElement("oauth-password-field-edit");
 
     if (authCodeFields) {
         if (grantType === "authorization_code") {
@@ -9422,6 +9402,41 @@ function handleEditOAuthGrantTypeChange() {
             requiredFields.forEach((field) => {
                 field.required = false;
             });
+        }
+    }
+
+    // Handle password grant type fields
+    if (usernameField && passwordField) {
+        if (grantType === "password") {
+            usernameField.style.display = "block";
+            passwordField.style.display = "block";
+
+            // Make username and password required for password grant
+            const usernameInput = safeGetElement("oauth-username-gw-edit");
+            const passwordInput = safeGetElement("oauth-password-gw-edit");
+            if (usernameInput) {
+                usernameInput.required = true;
+            }
+            if (passwordInput) {
+                passwordInput.required = true;
+            }
+
+            console.log(
+                "Password grant flow selected - username and password are now required",
+            );
+        } else {
+            usernameField.style.display = "none";
+            passwordField.style.display = "none";
+
+            // Remove required validation for hidden fields
+            const usernameInput = safeGetElement("oauth-username-gw-edit");
+            const passwordInput = safeGetElement("oauth-password-gw-edit");
+            if (usernameInput) {
+                usernameInput.required = false;
+            }
+            if (passwordInput) {
+                passwordInput.required = false;
+            }
         }
     }
 }

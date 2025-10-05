@@ -5766,9 +5766,14 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
             except (json.JSONDecodeError, ValueError):
                 auth_headers = []
 
-        # Parse OAuth configuration if present
+        # Parse OAuth configuration - support both JSON string and individual form fields
         oauth_config_json = str(form.get("oauth_config"))
         oauth_config: Optional[dict[str, Any]] = None
+
+        LOGGER.info(f"DEBUG: oauth_config_json from form = '{oauth_config_json}'")
+        LOGGER.info(f"DEBUG: Individual OAuth fields - grant_type='{form.get('oauth_grant_type')}', issuer='{form.get('oauth_issuer')}'")
+
+        # Option 1: Pre-assembled oauth_config JSON (from API calls)
         if oauth_config_json and oauth_config_json != "None":
             try:
                 oauth_config = json.loads(oauth_config_json)
@@ -5779,6 +5784,55 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
             except (json.JSONDecodeError, ValueError) as e:
                 LOGGER.error(f"Failed to parse OAuth config: {e}")
                 oauth_config = None
+
+        # Option 2: Assemble from individual UI form fields
+        if not oauth_config:
+            oauth_grant_type = str(form.get("oauth_grant_type", ""))
+            oauth_issuer = str(form.get("oauth_issuer", ""))
+            oauth_token_url = str(form.get("oauth_token_url", ""))
+            oauth_authorization_url = str(form.get("oauth_authorization_url", ""))
+            oauth_redirect_uri = str(form.get("oauth_redirect_uri", ""))
+            oauth_client_id = str(form.get("oauth_client_id", ""))
+            oauth_client_secret = str(form.get("oauth_client_secret", ""))
+            oauth_username = str(form.get("oauth_username", ""))
+            oauth_password = str(form.get("oauth_password", ""))
+            oauth_scopes_str = str(form.get("oauth_scopes", ""))
+
+            # If any OAuth field is provided, assemble oauth_config
+            if any([oauth_grant_type, oauth_issuer, oauth_token_url, oauth_authorization_url, oauth_client_id]):
+                oauth_config = {}
+
+                if oauth_grant_type:
+                    oauth_config["grant_type"] = oauth_grant_type
+                if oauth_issuer:
+                    oauth_config["issuer"] = oauth_issuer
+                if oauth_token_url:
+                    oauth_config["token_url"] = oauth_token_url  # OAuthManager expects 'token_url', not 'token_endpoint'
+                if oauth_authorization_url:
+                    oauth_config["authorization_url"] = oauth_authorization_url  # OAuthManager expects 'authorization_url', not 'authorization_endpoint'
+                if oauth_redirect_uri:
+                    oauth_config["redirect_uri"] = oauth_redirect_uri
+                if oauth_client_id:
+                    oauth_config["client_id"] = oauth_client_id
+                if oauth_client_secret:
+                    # Encrypt the client secret
+                    encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                    oauth_config["client_secret"] = encryption.encrypt_secret(oauth_client_secret)
+
+                # Add username and password for password grant type
+                if oauth_username:
+                    oauth_config["username"] = oauth_username
+                if oauth_password:
+                    oauth_config["password"] = oauth_password
+
+                # Parse scopes (comma or space separated)
+                if oauth_scopes_str:
+                    scopes = [s.strip() for s in oauth_scopes_str.replace(",", " ").split() if s.strip()]
+                    if scopes:
+                        oauth_config["scopes"] = scopes
+
+                LOGGER.info(f"✅ Assembled OAuth config from UI form fields: grant_type={oauth_grant_type}, issuer={oauth_issuer}")
+                LOGGER.info(f"DEBUG: Complete oauth_config = {oauth_config}")
 
         visibility = str(form.get("visibility", "private"))
 
@@ -5793,13 +5847,22 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
         else:
             passthrough_headers = None
 
+        # Auto-detect OAuth: if oauth_config is present and auth_type not explicitly set, use "oauth"
+        auth_type_from_form = str(form.get("auth_type", ""))
+        LOGGER.info(f"DEBUG: auth_type from form: '{auth_type_from_form}', oauth_config present: {oauth_config is not None}")
+        if oauth_config and not auth_type_from_form:
+            auth_type_from_form = "oauth"
+            LOGGER.info("✅ Auto-detected OAuth configuration, setting auth_type='oauth'")
+        elif oauth_config and auth_type_from_form:
+            LOGGER.info(f"✅ OAuth config present with explicit auth_type='{auth_type_from_form}'")
+
         gateway = GatewayCreate(
             name=str(form["name"]),
             url=str(form["url"]),
             description=str(form.get("description")),
             tags=tags,
             transport=str(form.get("transport", "SSE")),
-            auth_type=str(form.get("auth_type", "")),
+            auth_type=auth_type_from_form,
             auth_username=str(form.get("auth_username", "")),
             auth_password=str(form.get("auth_password", "")),
             auth_token=str(form.get("auth_token", "")),
@@ -6017,9 +6080,11 @@ async def admin_edit_gateway(
         else:
             passthrough_headers = None
 
-        # Parse OAuth configuration if present
+        # Parse OAuth configuration - support both JSON string and individual form fields
         oauth_config_json = str(form.get("oauth_config"))
         oauth_config: Optional[dict[str, Any]] = None
+
+        # Option 1: Pre-assembled oauth_config JSON (from API calls)
         if oauth_config_json and oauth_config_json != "None":
             try:
                 oauth_config = json.loads(oauth_config_json)
@@ -6031,6 +6096,54 @@ async def admin_edit_gateway(
                 LOGGER.error(f"Failed to parse OAuth config: {e}")
                 oauth_config = None
 
+        # Option 2: Assemble from individual UI form fields
+        if not oauth_config:
+            oauth_grant_type = str(form.get("oauth_grant_type", ""))
+            oauth_issuer = str(form.get("oauth_issuer", ""))
+            oauth_token_url = str(form.get("oauth_token_url", ""))
+            oauth_authorization_url = str(form.get("oauth_authorization_url", ""))
+            oauth_redirect_uri = str(form.get("oauth_redirect_uri", ""))
+            oauth_client_id = str(form.get("oauth_client_id", ""))
+            oauth_client_secret = str(form.get("oauth_client_secret", ""))
+            oauth_username = str(form.get("oauth_username", ""))
+            oauth_password = str(form.get("oauth_password", ""))
+            oauth_scopes_str = str(form.get("oauth_scopes", ""))
+
+            # If any OAuth field is provided, assemble oauth_config
+            if any([oauth_grant_type, oauth_issuer, oauth_token_url, oauth_authorization_url, oauth_client_id]):
+                oauth_config = {}
+
+                if oauth_grant_type:
+                    oauth_config["grant_type"] = oauth_grant_type
+                if oauth_issuer:
+                    oauth_config["issuer"] = oauth_issuer
+                if oauth_token_url:
+                    oauth_config["token_url"] = oauth_token_url  # OAuthManager expects 'token_url', not 'token_endpoint'
+                if oauth_authorization_url:
+                    oauth_config["authorization_url"] = oauth_authorization_url  # OAuthManager expects 'authorization_url', not 'authorization_endpoint'
+                if oauth_redirect_uri:
+                    oauth_config["redirect_uri"] = oauth_redirect_uri
+                if oauth_client_id:
+                    oauth_config["client_id"] = oauth_client_id
+                if oauth_client_secret:
+                    # Encrypt the client secret
+                    encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                    oauth_config["client_secret"] = encryption.encrypt_secret(oauth_client_secret)
+
+                # Add username and password for password grant type
+                if oauth_username:
+                    oauth_config["username"] = oauth_username
+                if oauth_password:
+                    oauth_config["password"] = oauth_password
+
+                # Parse scopes (comma or space separated)
+                if oauth_scopes_str:
+                    scopes = [s.strip() for s in oauth_scopes_str.replace(",", " ").split() if s.strip()]
+                    if scopes:
+                        oauth_config["scopes"] = scopes
+
+                LOGGER.info(f"✅ Assembled OAuth config from UI form fields (edit): grant_type={oauth_grant_type}, issuer={oauth_issuer}")
+
         user_email = get_user_email(user)
         # Determine personal team for default assignment
         team_id_raw = form.get("team_id", None)
@@ -6039,13 +6152,19 @@ async def admin_edit_gateway(
         team_service = TeamManagementService(db)
         team_id = await team_service.verify_team_for_user(user_email, team_id)
 
+        # Auto-detect OAuth: if oauth_config is present and auth_type not explicitly set, use "oauth"
+        auth_type_from_form = str(form.get("auth_type", ""))
+        if oauth_config and not auth_type_from_form:
+            auth_type_from_form = "oauth"
+            LOGGER.info("Auto-detected OAuth configuration in edit, setting auth_type='oauth'")
+
         gateway = GatewayUpdate(  # Pydantic validation happens here
             name=str(form.get("name")),
             url=str(form["url"]),
             description=str(form.get("description")),
             transport=str(form.get("transport", "SSE")),
             tags=tags,
-            auth_type=str(form.get("auth_type", "")),
+            auth_type=auth_type_from_form,
             auth_username=str(form.get("auth_username", "")),
             auth_password=str(form.get("auth_password", "")),
             auth_token=str(form.get("auth_token", "")),
@@ -9747,34 +9866,45 @@ async def catalog_partial(
     root_path = request.scope.get("root_path", "")
 
     # Calculate pagination
-    page_size = 100
+    page_size = settings.mcpgateway_catalog_page_size
     offset = (page - 1) * page_size
 
     catalog_request = CatalogListRequest(category=category, auth_type=auth_type, search=search, show_available_only=False, limit=page_size, offset=offset)
 
     response = await catalog_service.get_catalog_servers(catalog_request, db)
 
+    # Get ALL servers (no filters, no pagination) for counting statistics
+    all_servers_request = CatalogListRequest(show_available_only=False, limit=1000, offset=0)
+    all_servers_response = await catalog_service.get_catalog_servers(all_servers_request, db)
+
+    # Pass filter parameters to template for pagination links
+    filter_params = {
+        "category": category,
+        "auth_type": auth_type,
+        "search": search,
+    }
+
     # Calculate statistics and pagination info
     total_servers = response.total
     registered_count = sum(1 for s in response.servers if s.is_registered)
     total_pages = (total_servers + page_size - 1) // page_size  # Ceiling division
 
-    # Count servers by category, auth type, and provider
+    # Count ALL servers by category, auth type, and provider (not just current page)
     servers_by_category = {}
     servers_by_auth_type = {}
     servers_by_provider = {}
 
-    for server in response.servers:
+    for server in all_servers_response.servers:
         servers_by_category[server.category] = servers_by_category.get(server.category, 0) + 1
         servers_by_auth_type[server.auth_type] = servers_by_auth_type.get(server.auth_type, 0) + 1
         servers_by_provider[server.provider] = servers_by_provider.get(server.provider, 0) + 1
 
     stats = {
-        "total_servers": total_servers,
+        "total_servers": all_servers_response.total,  # Use total from all servers
         "registered_servers": registered_count,
-        "categories": response.categories,
-        "auth_types": response.auth_types,
-        "providers": response.providers,
+        "categories": all_servers_response.categories,
+        "auth_types": all_servers_response.auth_types,
+        "providers": all_servers_response.providers,
         "servers_by_category": servers_by_category,
         "servers_by_auth_type": servers_by_auth_type,
         "servers_by_provider": servers_by_provider,
@@ -9788,6 +9918,7 @@ async def catalog_partial(
         "page": page,
         "total_pages": total_pages,
         "page_size": page_size,
+        "filter_params": filter_params,
     }
 
     return request.app.state.templates.TemplateResponse("mcp_registry_partial.html", context)
