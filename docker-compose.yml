@@ -68,14 +68,15 @@ services:
       - ENVIRONMENT=development
       - SECURITY_HEADERS_ENABLED=true
       - CORS_ALLOW_CREDENTIALS=true
+      - SECURE_COOKIES=false
       # - SSL=true
       # - CERT_FILE=/app/certs/cert.pem
       # - KEY_FILE=/app/certs/key.pem
       # Uncomment to enable plugins
-      # - PLUGINS_ENABLED=true
+      - PLUGINS_ENABLED=true
       # Uncomment to enable catalog
-      # - MCPGATEWAY_CATALOG_ENABLED=true
-      # - MCPGATEWAY_CATALOG_FILE=/app/mcp-catalog.yml
+      - MCPGATEWAY_CATALOG_ENABLED=true
+      - MCPGATEWAY_CATALOG_FILE=/app/mcp-catalog.yml
 
       # Phoenix Observability Integration (uncomment when using Phoenix)
       # - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT:-http://phoenix:6006}
@@ -115,7 +116,7 @@ services:
 ###############################################################################
 
   postgres:              # Official image - easy defaults
-    image: postgres:17
+    image: postgres:18
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=mysecretpassword
