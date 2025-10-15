@@ -153,7 +153,7 @@ class PromptService:
         self._event_subscribers.clear()
         logger.info("Prompt service shutdown complete")
 
-    async def get_top_prompts(self, db: Session, limit: int = 5) -> List[TopPerformer]:
+    async def get_top_prompts(self, db: Session, limit: Optional[int] = 5) -> List[TopPerformer]:
         """Retrieve the top-performing prompts based on execution count.
 
         Queries the database to get prompts with their metrics, ordered by the number of executions
@@ -162,7 +162,7 @@ class PromptService:
 
         Args:
             db (Session): Database session for querying prompt metrics.
-            limit (int): Maximum number of prompts to return. Defaults to 5.
+            limit (Optional[int]): Maximum number of prompts to return. Defaults to 5. If None, returns all prompts.
 
         Returns:
             List[TopPerformer]: A list of TopPerformer objects, each containing:
@@ -173,7 +173,7 @@ class PromptService:
                 - success_rate: Success rate percentage, or None if no metrics.
                 - last_execution: Timestamp of the last execution, or None if no metrics.
         """
-        results = (
+        query = (
             db.query(
                 DbPrompt.id,
                 DbPrompt.name,
@@ -191,9 +191,12 @@ class PromptService:
             .outerjoin(PromptMetric)
             .group_by(DbPrompt.id, DbPrompt.name)
             .order_by(desc("execution_count"))
-            .limit(limit)
-            .all()
         )
+
+        if limit is not None:
+            query = query.limit(limit)
+
+        results = query.all()
 
         return build_top_performers(results)
 
@@ -735,6 +738,7 @@ class PromptService:
         modified_from_ip: Optional[str] = None,
         modified_via: Optional[str] = None,
         modified_user_agent: Optional[str] = None,
+        user_email: Optional[str] = None,
     ) -> PromptRead:
         """
         Update a prompt template.
@@ -747,12 +751,14 @@ class PromptService:
             modified_from_ip: IP address where the modification originated
             modified_via: Source of modification (ui/api/import)
             modified_user_agent: User agent string from the modification request
+            user_email: Email of user performing update (for ownership check)
 
         Returns:
             The updated PromptRead object
 
         Raises:
             PromptNotFoundError: If the prompt is not found
+            PermissionError: If user doesn't own the prompt
             IntegrityError: If a database integrity error occurs.
             PromptError: For other update errors
 
@@ -781,6 +787,15 @@ class PromptService:
                     raise PromptNotFoundError(f"Prompt '{name}' exists but is inactive")
 
                 raise PromptNotFoundError(f"Prompt not found: {name}")
+
+            # Check ownership if user_email provided
+            if user_email:
+                # First-Party
+                from mcpgateway.services.permission_service import PermissionService  # pylint: disable=import-outside-toplevel
+
+                permission_service = PermissionService(db)
+                if not await permission_service.check_resource_ownership(user_email, prompt):
+                    raise PermissionError("Only the owner can update this prompt")
 
             if prompt_update.name is not None:
                 prompt.name = prompt_update.name
@@ -832,6 +847,9 @@ class PromptService:
             prompt.team = self._get_team_name(db, prompt.team_id)
             return PromptRead.model_validate(self._convert_db_prompt(prompt))
 
+        except PermissionError:
+            db.rollback()
+            raise
         except IntegrityError as ie:
             db.rollback()
             logger.error(f"IntegrityErrors in group: {ie}")
@@ -844,7 +862,7 @@ class PromptService:
             db.rollback()
             raise PromptError(f"Failed to update prompt: {str(e)}")
 
-    async def toggle_prompt_status(self, db: Session, prompt_id: int, activate: bool) -> PromptRead:
+    async def toggle_prompt_status(self, db: Session, prompt_id: int, activate: bool, user_email: Optional[str] = None) -> PromptRead:
         """
         Toggle the activation status of a prompt.
 
@@ -852,6 +870,7 @@ class PromptService:
             db: Database session
             prompt_id: Prompt ID
             activate: True to activate, False to deactivate
+            user_email: Optional[str] The email of the user to check if the user has permission to modify.
 
         Returns:
             The updated PromptRead object
@@ -859,6 +878,7 @@ class PromptService:
         Raises:
             PromptNotFoundError: If the prompt is not found
             PromptError: For other errors
+            PermissionError: If user doesn't own the agent.
 
         Examples:
             >>> from mcpgateway.services.prompt_service import PromptService
@@ -882,6 +902,15 @@ class PromptService:
             prompt = db.get(DbPrompt, prompt_id)
             if not prompt:
                 raise PromptNotFoundError(f"Prompt not found: {prompt_id}")
+
+            if user_email:
+                # First-Party
+                from mcpgateway.services.permission_service import PermissionService  # pylint: disable=import-outside-toplevel
+
+                permission_service = PermissionService(db)
+                if not await permission_service.check_resource_ownership(user_email, prompt):
+                    raise PermissionError("Only the owner can activate the Prompt" if activate else "Only the owner can deactivate the Prompt")
+
             if prompt.is_active != activate:
                 prompt.is_active = activate
                 prompt.updated_at = datetime.now(timezone.utc)
@@ -894,6 +923,8 @@ class PromptService:
                 logger.info(f"Prompt {prompt.name} {'activated' if activate else 'deactivated'}")
             prompt.team = self._get_team_name(db, prompt.team_id)
             return PromptRead.model_validate(self._convert_db_prompt(prompt))
+        except PermissionError as e:
+            raise e
         except Exception as e:
             db.rollback()
             raise PromptError(f"Failed to toggle prompt status: {str(e)}")
@@ -941,16 +972,18 @@ class PromptService:
         prompt.team = self._get_team_name(db, prompt.team_id)
         return self._convert_db_prompt(prompt)
 
-    async def delete_prompt(self, db: Session, name: str) -> None:
+    async def delete_prompt(self, db: Session, name: str, user_email: Optional[str] = None) -> None:
         """
         Delete a prompt template.
 
         Args:
             db: Database session
             name: Name of prompt to delete
+            user_email: Email of user performing delete (for ownership check)
 
         Raises:
             PromptNotFoundError: If the prompt is not found
+            PermissionError: If user doesn't own the prompt
             PromptError: For other deletion errors
             Exception: For unexpected errors
 
@@ -974,11 +1007,24 @@ class PromptService:
             prompt = db.execute(select(DbPrompt).where(DbPrompt.name == name)).scalar_one_or_none()
             if not prompt:
                 raise PromptNotFoundError(f"Prompt not found: {name}")
+
+            # Check ownership if user_email provided
+            if user_email:
+                # First-Party
+                from mcpgateway.services.permission_service import PermissionService  # pylint: disable=import-outside-toplevel
+
+                permission_service = PermissionService(db)
+                if not await permission_service.check_resource_ownership(user_email, prompt):
+                    raise PermissionError("Only the owner can delete this prompt")
+
             prompt_info = {"id": prompt.id, "name": prompt.name}
             db.delete(prompt)
             db.commit()
             await self._notify_prompt_deleted(prompt_info)
             logger.info(f"Permanently deleted prompt: {name}")
+        except PermissionError:
+            db.rollback()
+            raise
         except Exception as e:
             db.rollback()
             if isinstance(e, PromptNotFoundError):

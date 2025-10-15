@@ -244,7 +244,7 @@ class SupportBundleService:
         # Try to collect psutil metrics if available
         try:
             # Third-Party
-            import psutil
+            import psutil  # pylint: disable=import-outside-toplevel
 
             info["system"] = {
                 "cpu_count": psutil.cpu_count(logical=True),
@@ -295,6 +295,9 @@ class SupportBundleService:
             "sso_google_client_secret",
             "sso_ibm_verify_client_secret",
             "sso_okta_client_secret",
+            "sso_keycloak_client_secret",
+            "sso_entra_client_secret",
+            "sso_generic_client_secret",
         }
         config = settings.model_dump(exclude=exclude_fields)
 
@@ -448,7 +451,7 @@ class SupportBundleService:
                     zf.writestr(f"logs/{log_name}", log_content)
 
             # Add README
-            readme = """# MCP Gateway Support Bundle
+            readme = f"""# MCP Gateway Support Bundle
 
 This bundle contains diagnostic information for troubleshooting MCP Gateway issues.
 
@@ -478,12 +481,10 @@ Extract the ZIP file and review the JSON files for diagnostic information.
 Pay special attention to logs/ for error messages and stack traces.
 
 ---
-Generated: {timestamp}
-Hostname: {hostname}
-Version: {version}
-""".format(
-                timestamp=self.timestamp.isoformat(), hostname=self.hostname, version=__version__
-            )
+Generated: {self.timestamp.isoformat()}
+Hostname: {self.hostname}
+Version: {__version__}
+"""
 
             zf.writestr("README.md", readme)
 
