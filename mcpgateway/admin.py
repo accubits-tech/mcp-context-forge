@@ -9922,6 +9922,8 @@ async def get_plugin_details(name: str, request: Request, db: Session = Depends(
 @admin_router.get("/mcp-registry/servers", response_model=CatalogListResponse)
 async def list_catalog_servers(
     _request: Request,
+    id: Optional[str] = None,
+    name: Optional[str] = None,
     category: Optional[str] = None,
     auth_type: Optional[str] = None,
     provider: Optional[str] = None,
@@ -9938,6 +9940,8 @@ async def list_catalog_servers(
 
     Args:
         _request: FastAPI request object
+        id: Filter by specific server ID
+        name: Search by server name
         category: Filter by category
         auth_type: Filter by authentication type
         provider: Filter by provider
@@ -9960,6 +9964,8 @@ async def list_catalog_servers(
         raise HTTPException(status_code=404, detail="Catalog feature is disabled")
 
     catalog_request = CatalogListRequest(
+        id=id,
+        name=name,
         category=category,
         auth_type=auth_type,
         provider=provider,
