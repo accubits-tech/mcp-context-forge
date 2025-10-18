@@ -1570,6 +1570,7 @@ class Tool(Base):
     request_type: Mapped[str] = mapped_column(String(20), default="SSE")
     headers: Mapped[Optional[Dict[str, str]]] = mapped_column(JSON)
     input_schema: Mapped[Dict[str, Any]] = mapped_column(JSON)
+    output_schema: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
     annotations: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, default=lambda: {})
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
@@ -1601,6 +1602,17 @@ class Tool(Base):
     custom_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=False)
     custom_name_slug: Mapped[Optional[str]] = mapped_column(String(255), nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Passthrough REST fields
+    base_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    path_template: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    query_mapping: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    header_mapping: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    timeout_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+    expose_passthrough: Mapped[bool] = mapped_column(Boolean, default=True)
+    allowlist: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    plugin_chain_pre: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    plugin_chain_post: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
 
     # Federation relationship with a local gateway
     gateway_id: Mapped[Optional[str]] = mapped_column(ForeignKey("gateways.id"))

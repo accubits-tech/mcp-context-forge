@@ -125,7 +125,7 @@
                 href="https://github.com/IBM/mcp-context-forge"
                 target="_blank"
                 class="text-indigo-600 dark:text-indigo-500 hover:underline"
-                >⭐ Star mcp-context-forge on GitHub</a
+                >⭐ GitHub</a
               >
               <span class="mx-2 text-gray-400">|</span>
               <button
@@ -394,7 +394,7 @@
       </script>
 
       <!-- Tabs -->
-      <div class="mb-8">
+      <div class="mt-8 mb-4">
         <div class="border-b border-gray-200">
           <nav class="-mb-px flex space-x-4 md:space-x-6 lg:space-x-8">
             <a
@@ -3332,6 +3332,17 @@
                   >
                     Add New Parameter
                   </button>
+                  <!-- Advanced: Add Passthrough Section -->
+                    <button
+                      type="button"
+                      id="add-passthrough-btn"
+                      class="mt-2 inline-flex justify-center py-1 px-2 border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+                    >
+                      Advanced: Add Passthrough
+                    </button>
+                    <fieldset id="passthrough-container" class="mt-2 border p-4 rounded-lg" style="display:none;">
+                      <!-- Passthrough fields will be dynamically added here -->
+                    </fieldset>
                 </div>
                 <div id="json-input-container" style="display: none">
                   <textarea
@@ -3340,6 +3351,21 @@
                     class="mt-1 block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300"
                   ></textarea>
                 </div>
+              </div>
+              <div>
+                <label
+                  class="block text-sm font-medium text-gray-700 dark:text-gray-400"
+                  >Output Schema (JSON)</label
+                >
+                <textarea
+                  name="output_schema"
+                  id="output-schema-editor"
+                  class="mt-1 block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300"
+                  placeholder="{&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {}}"
+                ></textarea>
+                <p class="mt-1 text-xs text-gray-500 dark:text-indigo-300">
+                  Optional JSON Schema for validating structured tool output. Leave empty if not needed.
+                </p>
               </div>
               <div>
                 <label
@@ -6781,6 +6807,21 @@ Hello &#123;&#123; name &#125;&#125;, welcome to &#123;&#123; company &#125;&#12
                         id="edit-tool-schema"
                         class="mt-1 block w-full rounded-md border border-gray-300 dark:border-gray-600 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300"
                       ></textarea>
+                    </div>
+                    <div>
+                      <label
+                        class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                        >Output Schema (JSON)</label
+                      >
+                      <textarea
+                        name="output_schema"
+                        id="edit-tool-output-schema"
+                        class="mt-1 block w-full rounded-md border border-gray-300 dark:border-gray-600 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300"
+                        placeholder="{&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {}}"
+                      ></textarea>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-indigo-300">
+                        Optional JSON Schema for validating structured tool output. Per MCP spec, servers should return structured results that conform to this schema.
+                      </p>
                     </div>
                     <div>
                       <label

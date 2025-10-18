@@ -2465,7 +2465,7 @@ async def admin_ui(
                 secure=getattr(settings, "secure_cookies", False),
                 samesite=getattr(settings, "cookie_samesite", "lax"),
                 max_age=settings.token_expiry * 60,  # Convert minutes to seconds
-                path="/",  # Make cookie available for all paths
+                path=settings.app_root_path or "/",  # Make cookie available for all paths
             )
             LOGGER.debug(f"Set comprehensive JWT token cookie for user: {admin_email}")
         except Exception as e:
@@ -2668,7 +2668,7 @@ async def admin_logout(request: Request) -> RedirectResponse:
     response = RedirectResponse(url=f"{root_path}/admin/login", status_code=303)
 
     # Clear JWT token cookie
-    response.delete_cookie("jwt_token", path="/", secure=True, httponly=True, samesite="lax")
+    response.delete_cookie("jwt_token", path=settings.app_root_path or "/", secure=True, httponly=True, samesite="lax")
 
     return response
 
@@ -4962,6 +4962,7 @@ async def admin_add_tool(
       - integrationType (mapped to integration_type; defaults to "MCP")
       - headers (JSON string)
       - input_schema (JSON string)
+      - output_schema (JSON string, optional)
       - jsonpath_filter (optional)
       - auth_type (optional)
       - auth_username (optional)
@@ -5097,6 +5098,7 @@ async def admin_add_tool(
     # Safely parse potential JSON strings from form
     headers_raw = form.get("headers")
     input_schema_raw = form.get("input_schema")
+    output_schema_raw = form.get("output_schema")
     annotations_raw = form.get("annotations")
     tool_data: dict[str, Any] = {
         "name": form.get("name"),
@@ -5107,6 +5109,7 @@ async def admin_add_tool(
         "integration_type": integration_type,
         "headers": json.loads(headers_raw if isinstance(headers_raw, str) and headers_raw else "{}"),
         "input_schema": json.loads(input_schema_raw if isinstance(input_schema_raw, str) and input_schema_raw else "{}"),
+        "output_schema": json.loads(output_schema_raw if isinstance(output_schema_raw, str) and output_schema_raw else "{}"),
         "annotations": json.loads(annotations_raw if isinstance(annotations_raw, str) and annotations_raw else "{}"),
         "jsonpath_filter": form.get("jsonpath_filter", ""),
         "auth_type": form.get("auth_type", ""),
@@ -5119,6 +5122,13 @@ async def admin_add_tool(
         "visibility": visibility,
         "team_id": team_id,
         "owner_email": user_email,
+        "query_mapping": json.loads(form.get("query_mapping") or "{}"),
+        "header_mapping": json.loads(form.get("header_mapping") or "{}"),
+        "timeout_ms": int(form.get("timeout_ms")) if form.get("timeout_ms") and form.get("timeout_ms").strip() else None,
+        "expose_passthrough": form.get("expose_passthrough", "true"),
+        "allowlist": json.loads(form.get("allowlist") or "[]"),
+        "plugin_chain_pre": json.loads(form.get("plugin_chain_pre") or "[]"),
+        "plugin_chain_post": json.loads(form.get("plugin_chain_post") or "[]"),
     }
     LOGGER.debug(f"Tool data built: {tool_data}")
     try:
@@ -5179,6 +5189,7 @@ async def admin_edit_tool(
       - integrationType (to be mapped to integration_type)
       - headers (as a JSON string)
       - input_schema (as a JSON string)
+      - output_schema (as a JSON string, optional)
       - jsonpathFilter (optional)
       - auth_type (optional, string: "basic", "bearer", or empty)
       - auth_username (optional, for basic auth)
@@ -5354,6 +5365,7 @@ async def admin_edit_tool(
 
     headers_raw2 = form.get("headers")
     input_schema_raw2 = form.get("input_schema")
+    output_schema_raw2 = form.get("output_schema")
     annotations_raw2 = form.get("annotations")
 
     tool_data: dict[str, Any] = {
@@ -5364,6 +5376,7 @@ async def admin_edit_tool(
         "description": form.get("description"),
         "headers": json.loads(headers_raw2 if isinstance(headers_raw2, str) and headers_raw2 else "{}"),
         "input_schema": json.loads(input_schema_raw2 if isinstance(input_schema_raw2, str) and input_schema_raw2 else "{}"),
+        "output_schema": json.loads(output_schema_raw2 if isinstance(output_schema_raw2, str) and output_schema_raw2 else "{}"),
         "annotations": json.loads(annotations_raw2 if isinstance(annotations_raw2, str) and annotations_raw2 else "{}"),
         "jsonpath_filter": form.get("jsonpathFilter", ""),
         "auth_type": form.get("auth_type", ""),
