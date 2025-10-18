@@ -5782,6 +5782,8 @@ class CatalogServerStatusResponse(BaseModel):
 class CatalogListRequest(BaseModel):
     """Request to list catalog servers."""
 
+    id: Optional[str] = Field(None, description="Filter by specific server ID")
+    name: Optional[str] = Field(None, description="Search by server name")
     category: Optional[str] = Field(None, description="Filter by category")
     auth_type: Optional[str] = Field(None, description="Filter by auth type")
     provider: Optional[str] = Field(None, description="Filter by provider")

@@ -129,6 +129,13 @@ class CatalogService:
         # Apply filters
         filtered = catalog_servers
 
+        if request.id:
+            filtered = [s for s in filtered if s.id == request.id]
+
+        if request.name:
+            name_lower = request.name.lower()
+            filtered = [s for s in filtered if name_lower in s.name.lower()]
+
         if request.category:
             filtered = [s for s in filtered if s.category == request.category]
 
