@@ -59,7 +59,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -3913,9 +3913,9 @@ async def register_gateway(
         return JSONResponse(content={"message": "Unexpected error"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@gateway_router.get("/{gateway_id}", response_model=GatewayRead)
+@gateway_router.get("/{gateway_id}")
 @require_permission("gateways.read")
-async def get_gateway(gateway_id: str, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> Union[GatewayRead, JSONResponse]:
+async def get_gateway(gateway_id: str, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> JSONResponse:
     """
     Retrieve a gateway by ID.
 
@@ -3925,10 +3925,24 @@ async def get_gateway(gateway_id: str, db: Session = Depends(get_db), user=Depen
         user: Authenticated user.
 
     Returns:
-        Gateway data.
+        Gateway data with associated tools list.
     """
     logger.debug(f"User '{user}' requested gateway {gateway_id}")
-    return await gateway_service.get_gateway(db, gateway_id)
+    gateway = await gateway_service.get_gateway(db, gateway_id)
+
+    # Query tools for this gateway
+    stmt = select(DbTool).where(DbTool.gateway_id == gateway_id)
+    result = db.execute(stmt)
+    tool_records = result.scalars().all()
+
+    # Convert to ToolRead objects using tool service for proper metrics and auth handling
+    tools = [tool_service._convert_tool_to_read(tool) for tool in tool_records]
+
+    # Add tools to response
+    gateway_dict = gateway.model_dump(mode='json', by_alias=True)
+    gateway_dict['tools'] = [tool.model_dump(mode='json', by_alias=True) for tool in tools]
+
+    return JSONResponse(content=gateway_dict)
 
 
 @gateway_router.put("/{gateway_id}", response_model=GatewayRead)

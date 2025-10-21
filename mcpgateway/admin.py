@@ -42,6 +42,7 @@ import httpx
 import jwt
 from pydantic import BaseModel, SecretStr, ValidationError
 from pydantic_core import ValidationError as CoreValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -5668,8 +5669,8 @@ async def admin_toggle_tool(
     return RedirectResponse(f"{root_path}/admin#tools", status_code=303)
 
 
-@admin_router.get("/gateways/{gateway_id}", response_model=GatewayRead)
-async def admin_get_gateway(gateway_id: str, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> Dict[str, Any]:
+@admin_router.get("/gateways/{gateway_id}")
+async def admin_get_gateway(gateway_id: str, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> JSONResponse:
     """Get gateway details for the admin UI.
 
     Args:
@@ -5748,7 +5749,20 @@ async def admin_get_gateway(gateway_id: str, db: Session = Depends(get_db), user
     LOGGER.debug(f"User {get_user_email(user)} requested details for gateway ID {gateway_id}")
     try:
         gateway = await gateway_service.get_gateway(db, gateway_id)
-        return gateway.model_dump(by_alias=True)
+
+        # Query tools for this gateway
+        stmt = select(DbTool).where(DbTool.gateway_id == gateway_id)
+        result = db.execute(stmt)
+        tool_records = result.scalars().all()
+
+        # Convert to ToolRead objects using tool service for proper metrics and auth handling
+        tools = [tool_service._convert_tool_to_read(tool) for tool in tool_records]
+
+        # Add tools to response
+        gateway_dict = gateway.model_dump(mode='json', by_alias=True)
+        gateway_dict['tools'] = [tool.model_dump(mode='json', by_alias=True) for tool in tools]
+
+        return JSONResponse(content=gateway_dict)
     except GatewayNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

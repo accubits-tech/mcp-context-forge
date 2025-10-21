@@ -2622,6 +2622,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             team_id=gateway.team_id,
             owner_email=gateway.owner_email,
             visibility="public",  # Federated tools should be public for discovery
+            # Explicit gateway association
+            gateway_id=gateway.id,
         )
 
     def _update_or_create_tools(self, db: Session, tools: List[Any], gateway: DbGateway, created_via: str) -> List[DbTool]:
