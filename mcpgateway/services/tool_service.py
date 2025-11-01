@@ -28,6 +28,7 @@ import uuid
 
 # Third-Party
 import httpx
+import jq
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -57,17 +58,65 @@ from mcpgateway.services.team_management_service import TeamManagementService
 from mcpgateway.utils.create_slug import slugify
 from mcpgateway.utils.display_name import generate_display_name
 from mcpgateway.utils.metrics_common import build_top_performers
+from mcpgateway.utils.pagination import decode_cursor, encode_cursor
 from mcpgateway.utils.passthrough_headers import get_passthrough_headers
 from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.services_auth import decode_auth
 from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
 
-# Local
-from ..config import extract_using_jq
-
 # Initialize logging service first
 logging_service = LoggingService()
 logger = logging_service.get_logger(__name__)
+
+
+def extract_using_jq(data, jq_filter=""):
+    """
+    Extracts data from a given input (string, dict, or list) using a jq filter string.
+
+    Args:
+        data (str, dict, list): The input JSON data. Can be a string, dict, or list.
+        jq_filter (str): The jq filter string to extract the desired data.
+
+    Returns:
+        The result of applying the jq filter to the input data.
+
+    Examples:
+        >>> extract_using_jq('{"a": 1, "b": 2}', '.a')
+        [1]
+        >>> extract_using_jq({'a': 1, 'b': 2}, '.b')
+        [2]
+        >>> extract_using_jq('[{"a": 1}, {"a": 2}]', '.[].a')
+        [1, 2]
+        >>> extract_using_jq('not a json', '.a')
+        ['Invalid JSON string provided.']
+        >>> extract_using_jq({'a': 1}, '')
+        {'a': 1}
+    """
+    if jq_filter == "":
+        return data
+    if isinstance(data, str):
+        # If the input is a string, parse it as JSON
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            return ["Invalid JSON string provided."]
+
+    elif not isinstance(data, (dict, list)):
+        # If the input is not a string, dict, or list, raise an error
+        return ["Input data must be a JSON string, dictionary, or list."]
+
+    # Apply the jq filter to the data
+    try:
+        # Pylint can't introspect C-extension modules, so it doesn't know that jq really does export an all() function.
+        # pylint: disable=c-extension-no-member
+        result = jq.all(jq_filter, data)  # Use `jq.all` to get all matches (returns a list)
+        if result == [None]:
+            result = "Error applying jsonpath filter"
+    except Exception as e:
+        message = "Error applying jsonpath filter: " + str(e)
+        return message
+
+    return result
 
 
 class ToolError(Exception):
@@ -562,22 +611,24 @@ class ToolService:
 
     async def list_tools(
         self, db: Session, include_inactive: bool = False, cursor: Optional[str] = None, tags: Optional[List[str]] = None, _request_headers: Optional[Dict[str, str]] = None
-    ) -> List[ToolRead]:
+    ) -> tuple[List[ToolRead], Optional[str]]:
         """
-        Retrieve a list of registered tools from the database.
+        Retrieve a list of registered tools from the database with pagination support.
 
         Args:
             db (Session): The SQLAlchemy database session.
             include_inactive (bool): If True, include inactive tools in the result.
                 Defaults to False.
-            cursor (Optional[str], optional): An opaque cursor token for pagination. Currently,
-                this parameter is ignored. Defaults to None.
+            cursor (Optional[str], optional): An opaque cursor token for pagination.
+                Opaque base64-encoded string containing last item's ID.
             tags (Optional[List[str]]): Filter tools by tags. If provided, only tools with at least one matching tag will be returned.
             _request_headers (Optional[Dict[str, str]], optional): Headers from the request to pass through.
                 Currently unused but kept for API consistency. Defaults to None.
 
         Returns:
-            List[ToolRead]: A list of registered tools represented as ToolRead objects.
+            tuple[List[ToolRead], Optional[str]]: Tuple containing:
+                - List of tools for current page
+                - Next cursor token if more results exist, None otherwise
 
         Examples:
             >>> from mcpgateway.services.tool_service import ToolService
@@ -588,13 +639,29 @@ class ToolService:
             >>> service._convert_tool_to_read = MagicMock(return_value=tool_read)
             >>> db.execute.return_value.scalars.return_value.all.return_value = [MagicMock()]
             >>> import asyncio
-            >>> result = asyncio.run(service.list_tools(db))
-            >>> isinstance(result, list)
+            >>> tools, next_cursor = asyncio.run(service.list_tools(db))
+            >>> isinstance(tools, list)
             True
         """
-        query = select(DbTool)
-        cursor = None  # Placeholder for pagination; ignore for now
-        logger.debug(f"Listing tools with include_inactive={include_inactive}, cursor={cursor}, tags={tags}")
+        page_size = settings.pagination_default_page_size
+        query = select(DbTool).order_by(DbTool.id)  # Consistent ordering for cursor pagination
+
+        # Decode cursor to get last_id if provided
+        last_id = None
+        if cursor:
+            try:
+                cursor_data = decode_cursor(cursor)
+                last_id = cursor_data.get("id")
+                logger.debug(f"Decoded cursor: last_id={last_id}")
+            except ValueError as e:
+                logger.warning(f"Invalid cursor, ignoring: {e}")
+
+        # Apply cursor filter (WHERE id > last_id)
+        if last_id:
+            query = query.where(DbTool.id > last_id)
+
+        logger.debug(f"Listing tools with include_inactive={include_inactive}, cursor={cursor}, tags={tags}, page_size={page_size}")
+
         if not include_inactive:
             query = query.where(DbTool.enabled)
 
@@ -602,13 +669,30 @@ class ToolService:
         if tags:
             query = query.where(json_contains_expr(db, DbTool.tags, tags, match_any=True))
 
+        # Fetch page_size + 1 to determine if there are more results
+        query = query.limit(page_size + 1)
         tools = db.execute(query).scalars().all()
+
+        # Check if there are more results
+        has_more = len(tools) > page_size
+        if has_more:
+            tools = tools[:page_size]  # Trim to page_size
+
+        # Convert to ToolRead objects
         result = []
         for t in tools:
             team_name = self._get_team_name(db, getattr(t, "team_id", None))
             t.team = team_name
             result.append(self._convert_tool_to_read(t))
-        return result
+
+        # Generate next_cursor if there are more results
+        next_cursor = None
+        if has_more and result:
+            last_tool = tools[-1]  # Get last DB object (not ToolRead)
+            next_cursor = encode_cursor({"id": last_tool.id})
+            logger.debug(f"Generated next_cursor for id={last_tool.id}")
+
+        return (result, next_cursor)
 
     async def list_server_tools(self, db: Session, server_id: str, include_inactive: bool = False, cursor: Optional[str] = None, _request_headers: Optional[Dict[str, str]] = None) -> List[ToolRead]:
         """
@@ -678,6 +762,9 @@ class ToolService:
 
         query = select(DbTool)
 
+        offset = 0
+        per_page = settings.pagination_default_page_size
+
         # Apply active/inactive filter
         if not include_inactive:
             query = query.where(DbTool.enabled.is_(True))
@@ -693,6 +780,8 @@ class ToolService:
             access_conditions.append(and_(DbTool.team_id == team_id, DbTool.owner_email == user_email))
 
             query = query.where(or_(*access_conditions))
+
+            query = query.offset(offset).limit(per_page)
         else:
             # Get user's accessible teams
             # Build access conditions following existing patterns
@@ -710,6 +799,8 @@ class ToolService:
             access_conditions.append(DbTool.visibility == "public")
 
             query = query.where(or_(*access_conditions))
+
+            query = query.offset(offset).limit(per_page)
 
         # Apply visibility filter if specified
         if visibility:

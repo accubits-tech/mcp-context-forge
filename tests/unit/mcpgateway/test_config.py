@@ -11,20 +11,17 @@ Author: Mihai Criveti
 # Standard
 import os
 from pathlib import Path
-from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
-# Third-Party
-from fastapi import HTTPException
+from pydantic import SecretStr
 
+# Third-Party
 # Third-party
 import pytest
 
 # First-Party
 from mcpgateway.config import (
-    extract_using_jq,
     get_settings,
-    jsonpath_modifier,
     Settings,
 )
 
@@ -55,7 +52,7 @@ def test_parse_federation_peers_json_and_csv():
 # --------------------------------------------------------------------------- #
 #                          database / CORS helpers                            #
 # --------------------------------------------------------------------------- #
-def test_database_settings_sqlite_and_non_sqlite(tmp_path: Path):
+def test_database_settings_sqlite_and_non_sqlite(tmp_path: Path) -> None:
     """connect_args differs for sqlite vs everything else."""
     # sqlite -> check_same_thread flag present
     db_file = tmp_path / "foo" / "bar.db"
@@ -68,7 +65,7 @@ def test_database_settings_sqlite_and_non_sqlite(tmp_path: Path):
     assert s_pg.database_settings["connect_args"] == {}
 
 
-def test_validate_database_creates_missing_parent(tmp_path: Path):
+def test_validate_database_creates_missing_parent(tmp_path: Path) -> None:
     db_file = tmp_path / "newdir" / "db.sqlite"
     url = f"sqlite:///{db_file}"
     s = Settings(database_url=url, _env_file=None)
@@ -104,65 +101,6 @@ def test_cors_settings_branches():
 
 
 # --------------------------------------------------------------------------- #
-#                               extract_using_jq                              #
-# --------------------------------------------------------------------------- #
-def test_extract_using_jq_happy_path():
-    data = {"a": 123}
-
-    with patch("mcpgateway.config.jq.all", return_value=[123]) as mock_jq:
-        out = extract_using_jq(data, ".a")
-        mock_jq.assert_called_once_with(".a", data)
-        assert out == [123]
-
-
-def test_extract_using_jq_short_circuits_and_errors():
-    # Empty filter returns data unmodified
-    orig = {"x": "y"}
-    assert extract_using_jq(orig) is orig
-
-    # Non-JSON string
-    assert extract_using_jq("this isn't json", ".foo") == ["Invalid JSON string provided."]
-
-    # Unsupported input type
-    assert extract_using_jq(42, ".foo") == ["Input data must be a JSON string, dictionary, or list."]
-
-
-# --------------------------------------------------------------------------- #
-#                               jsonpath_modifier                             #
-# --------------------------------------------------------------------------- #
-@pytest.fixture(scope="module")
-def sample_people() -> List[Dict[str, Any]]:
-    return [
-        {"name": "Ada", "id": 1},
-        {"name": "Bob", "id": 2},
-    ]
-
-
-def test_jsonpath_modifier_basic_match(sample_people):
-    # Pull out names directly
-    names = jsonpath_modifier(sample_people, "$[*].name")
-    assert names == ["Ada", "Bob"]
-
-    # Same query but with a mapping
-    mapped = jsonpath_modifier(sample_people, "$[*]", mappings={"n": "$.name"})
-    assert mapped == [{"n": "Ada"}, {"n": "Bob"}]
-
-
-def test_jsonpath_modifier_single_dict_collapse():
-    person = {"name": "Zoe", "id": 10}
-    out = jsonpath_modifier(person, "$")
-    assert out == person  # single-item dict collapses to dict, not list
-
-
-def test_jsonpath_modifier_invalid_expressions(sample_people):
-    with pytest.raises(HTTPException):
-        jsonpath_modifier(sample_people, "$[")  # invalid main expr
-
-    with pytest.raises(HTTPException):
-        jsonpath_modifier(sample_people, "$[*]", mappings={"bad": "$["})  # invalid mapping expr
-
-
-# --------------------------------------------------------------------------- #
 #                           get_settings LRU cache                            #
 # --------------------------------------------------------------------------- #
 @patch("mcpgateway.config.Settings")
@@ -186,11 +124,10 @@ def test_get_settings_is_lru_cached(mock_settings):
 #                       Keep the user-supplied baseline                       #
 # --------------------------------------------------------------------------- #
 def test_settings_default_values():
-
     dummy_env = {
         "JWT_SECRET_KEY": "x" * 32,  # required, at least 32 chars
         "AUTH_ENCRYPTION_SECRET": "dummy-secret",
-        "APP_DOMAIN": "http://localhost"
+        "APP_DOMAIN": "http://localhost",
     }
 
     with patch.dict(os.environ, dummy_env, clear=True):
@@ -201,7 +138,7 @@ def test_settings_default_values():
         assert settings.port == 4444
         assert settings.database_url == "sqlite:///./mcp.db"
         assert settings.basic_auth_user == "admin"
-        assert settings.basic_auth_password == "changeme"
+        assert settings.basic_auth_password == SecretStr("changeme")
         assert settings.auth_required is True
         assert settings.jwt_secret_key.get_secret_value() == "x" * 32
         assert settings.auth_encryption_secret.get_secret_value() == "dummy-secret"
@@ -222,3 +159,107 @@ def test_supports_transport_properties():
 
     s_ws = Settings(transport_type="ws")
     assert (s_ws.supports_http, s_ws.supports_websocket, s_ws.supports_sse) == (False, True, False)
+
+
+# --------------------------------------------------------------------------- #
+#                          Response Compression                               #
+# --------------------------------------------------------------------------- #
+def test_compression_default_values():
+    """Test that compression settings have correct defaults."""
+    s = Settings(_env_file=None)
+    assert s.compression_enabled is True
+    assert s.compression_minimum_size == 500
+    assert s.compression_gzip_level == 6
+    assert s.compression_brotli_quality == 4
+    assert s.compression_zstd_level == 3
+
+
+def test_compression_custom_values():
+    """Test that compression settings can be customized."""
+    s = Settings(
+        compression_enabled=False,
+        compression_minimum_size=1000,
+        compression_gzip_level=9,
+        compression_brotli_quality=11,
+        compression_zstd_level=22,
+        _env_file=None,
+    )
+    assert s.compression_enabled is False
+    assert s.compression_minimum_size == 1000
+    assert s.compression_gzip_level == 9
+    assert s.compression_brotli_quality == 11
+    assert s.compression_zstd_level == 22
+
+
+def test_compression_minimum_size_validation():
+    """Test that compression_minimum_size validates >= 0."""
+    # Valid: 0 is allowed (compress all responses)
+    s = Settings(compression_minimum_size=0, _env_file=None)
+    assert s.compression_minimum_size == 0
+
+    # Invalid: negative values should fail
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(compression_minimum_size=-1, _env_file=None)
+    assert "greater than or equal to 0" in str(exc_info.value).lower()
+
+
+def test_compression_gzip_level_validation():
+    """Test that gzip level validates 1-9 range."""
+    from pydantic import ValidationError
+
+    # Valid range
+    for level in [1, 6, 9]:
+        s = Settings(compression_gzip_level=level, _env_file=None)
+        assert s.compression_gzip_level == level
+
+    # Invalid: below range
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(compression_gzip_level=0, _env_file=None)
+    assert "greater than or equal to 1" in str(exc_info.value).lower()
+
+    # Invalid: above range
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(compression_gzip_level=10, _env_file=None)
+    assert "less than or equal to 9" in str(exc_info.value).lower()
+
+
+def test_compression_brotli_quality_validation():
+    """Test that brotli quality validates 0-11 range."""
+    from pydantic import ValidationError
+
+    # Valid range
+    for quality in [0, 4, 11]:
+        s = Settings(compression_brotli_quality=quality, _env_file=None)
+        assert s.compression_brotli_quality == quality
+
+    # Invalid: below range
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(compression_brotli_quality=-1, _env_file=None)
+    assert "greater than or equal to 0" in str(exc_info.value).lower()
+
+    # Invalid: above range
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(compression_brotli_quality=12, _env_file=None)
+    assert "less than or equal to 11" in str(exc_info.value).lower()
+
+
+def test_compression_zstd_level_validation():
+    """Test that zstd level validates 1-22 range."""
+    from pydantic import ValidationError
+
+    # Valid range
+    for level in [1, 3, 22]:
+        s = Settings(compression_zstd_level=level, _env_file=None)
+        assert s.compression_zstd_level == level
+
+    # Invalid: below range
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(compression_zstd_level=0, _env_file=None)
+    assert "greater than or equal to 1" in str(exc_info.value).lower()
+
+    # Invalid: above range
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(compression_zstd_level=23, _env_file=None)
+    assert "less than or equal to 22" in str(exc_info.value).lower()

@@ -86,24 +86,31 @@ class TestMCPTypes:
 
     def test_image_content(self):
         """Test ImageContent model."""
+        # ImageContent now uses base64-encoded string per MCP spec
+        import base64
+
+        binary_data = b"binary_image_data"
+        base64_data = base64.b64encode(binary_data).decode('utf-8')
+
         content = ImageContent(
             type="image",
-            data=b"binary_image_data",
+            data=base64_data,
             mime_type="image/png",
         )
         assert content.type == "image"
-        assert content.data == b"binary_image_data"
+        assert content.data == base64_data
         assert content.mime_type == "image/png"
 
         # Test validation errors
         with pytest.raises(ValidationError):
-            ImageContent(type="image", data=b"data")  # Missing mime_type
+            ImageContent(type="image", data="data")  # Missing mime_type
 
     def test_resource_content(self):
         """Test ResourceContent model."""
         # Text resource
         text_resource = ResourceContent(
             type="resource",
+            id="res123",
             uri="file:///example.txt",
             mime_type="text/plain",
             text="Example content",
@@ -117,6 +124,7 @@ class TestMCPTypes:
         # Binary resource
         binary_resource = ResourceContent(
             type="resource",
+            id="res123",
             uri="file:///example.bin",
             mime_type="application/octet-stream",
             blob=b"binary_data",
@@ -130,6 +138,7 @@ class TestMCPTypes:
         # Minimal required fields
         minimal = ResourceContent(
             type="resource",
+            id="res124",
             uri="file:///example",
         )
         assert minimal.type == "resource"
@@ -148,17 +157,23 @@ class TestMCPTypes:
         assert text_message.content.type == "text"
         assert text_message.content.text == "Hello, world!"
 
+        # ImageContent now uses base64-encoded string per MCP spec
+        import base64
+
+        binary_data = b"binary_image_data"
+        base64_data = base64.b64encode(binary_data).decode('utf-8')
+
         image_message = Message(
             role=Role.ASSISTANT,
             content=ImageContent(
                 type="image",
-                data=b"binary_image_data",
+                data=base64_data,
                 mime_type="image/png",
             ),
         )
         assert image_message.role == Role.ASSISTANT
         assert image_message.content.type == "image"
-        assert image_message.content.data == b"binary_image_data"
+        assert image_message.content.data == base64_data
 
     def test_prompt_argument(self):
         """Test PromptArgument model."""

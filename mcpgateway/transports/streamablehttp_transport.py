@@ -46,7 +46,6 @@ from mcp.server.lowlevel import Server
 from mcp.server.streamable_http import EventCallback, EventId, EventMessage, EventStore, StreamId
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import JSONRPCMessage
-from pydantic import AnyUrl
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
@@ -56,6 +55,8 @@ from starlette.types import Receive, Scope, Send
 # First-Party
 from mcpgateway.config import settings
 from mcpgateway.db import SessionLocal
+from mcpgateway.models import LogLevel
+from mcpgateway.services.completion_service import CompletionService
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.prompt_service import PromptService
 from mcpgateway.services.resource_service import ResourceService
@@ -66,10 +67,11 @@ from mcpgateway.utils.verify_credentials import verify_credentials
 logging_service = LoggingService()
 logger = logging_service.get_logger(__name__)
 
-# Initialize ToolService, PromptService and MCP Server
+# Initialize ToolService, PromptService, ResourceService, CompletionService and MCP Server
 tool_service: ToolService = ToolService()
 prompt_service: PromptService = PromptService()
 resource_service: ResourceService = ResourceService()
+completion_service: CompletionService = CompletionService()
 
 mcp_app: Server[Any] = Server("mcp-streamable-http")
 
@@ -425,7 +427,7 @@ async def list_tools() -> List[types.Tool]:
     else:
         try:
             async with get_db() as db:
-                tools = await tool_service.list_tools(db, False, None, None, request_headers)
+                tools, _ = await tool_service.list_tools(db, False, None, None, request_headers)
                 return [types.Tool(name=tool.name, description=tool.description, inputSchema=tool.input_schema, outputSchema=tool.output_schema, annotations=tool.annotations) for tool in tools]
         except Exception as e:
             logger.exception(f"Error listing tools:{e}")
@@ -463,7 +465,7 @@ async def list_prompts() -> List[types.Prompt]:
     else:
         try:
             async with get_db() as db:
-                prompts = await prompt_service.list_prompts(db, False, None, None)
+                prompts, _ = await prompt_service.list_prompts(db, False, None, None)
                 return [types.Prompt(name=prompt.name, description=prompt.description, arguments=prompt.arguments) for prompt in prompts]
         except Exception as e:
             logger.exception(f"Error listing prompts:{e}")
@@ -471,12 +473,12 @@ async def list_prompts() -> List[types.Prompt]:
 
 
 @mcp_app.get_prompt()
-async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> types.GetPromptResult:
+async def get_prompt(prompt_id: str, arguments: dict[str, str] | None = None) -> types.GetPromptResult:
     """
-    Retrieves a prompt by name, optionally substituting arguments.
+    Retrieves a prompt by ID, optionally substituting arguments.
 
     Args:
-        name (str): The name of the prompt to retrieve.
+        prompt_id (str): The ID of the prompt to retrieve.
         arguments (Optional[dict[str, str]]): Optional dictionary of arguments to substitute into the prompt.
 
     Returns:
@@ -489,24 +491,24 @@ async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> type
         >>> import inspect
         >>> sig = inspect.signature(get_prompt)
         >>> list(sig.parameters.keys())
-        ['name', 'arguments']
+        ['prompt_id', 'arguments']
         >>> sig.return_annotation.__name__
         'GetPromptResult'
     """
     try:
         async with get_db() as db:
             try:
-                result = await prompt_service.get_prompt(db=db, name=name, arguments=arguments)
+                result = await prompt_service.get_prompt(db=db, prompt_id=prompt_id, arguments=arguments)
             except Exception as e:
-                logger.exception(f"Error getting prompt '{name}': {e}")
+                logger.exception(f"Error getting prompt '{prompt_id}': {e}")
                 return []
             if not result or not result.messages:
-                logger.warning(f"No content returned by prompt: {name}")
+                logger.warning(f"No content returned by prompt: {prompt_id}")
                 return []
             message_dicts = [message.dict() for message in result.messages]
             return types.GetPromptResult(messages=message_dicts, description=result.description)
     except Exception as e:
-        logger.exception(f"Error getting prompt '{name}': {e}")
+        logger.exception(f"Error getting prompt '{prompt_id}': {e}")
         return []
 
 
@@ -540,7 +542,7 @@ async def list_resources() -> List[types.Resource]:
     else:
         try:
             async with get_db() as db:
-                resources = await resource_service.list_resources(db, False)
+                resources, _ = await resource_service.list_resources(db, False)
                 return [types.Resource(uri=resource.uri, name=resource.name, description=resource.description, mimeType=resource.mime_type) for resource in resources]
         except Exception as e:
             logger.exception(f"Error listing resources:{e}")
@@ -548,16 +550,16 @@ async def list_resources() -> List[types.Resource]:
 
 
 @mcp_app.read_resource()
-async def read_resource(uri: AnyUrl) -> Union[str, bytes]:
+async def read_resource(resource_id: str) -> Union[str, bytes]:
     """
-    Reads the content of a resource specified by its URI.
+    Reads the content of a resource specified by its ID.
 
     Args:
-        uri (AnyUrl): The URI of the resource to read.
+        resource_id (str): The ID of the resource to read.
 
     Returns:
-        Union[str, bytes]: The content of the resource, typically as text.
-        Returns an empty list on failure or if no content is found.
+        Union[str, bytes]: The content of the resource as text or binary data.
+        Returns empty string on failure or if no content is found.
 
     Logs exceptions if any errors occur during reading.
 
@@ -565,25 +567,138 @@ async def read_resource(uri: AnyUrl) -> Union[str, bytes]:
         >>> import inspect
         >>> sig = inspect.signature(read_resource)
         >>> list(sig.parameters.keys())
-        ['uri']
+        ['resource_id']
         >>> sig.return_annotation
         typing.Union[str, bytes]
     """
     try:
         async with get_db() as db:
             try:
-                result = await resource_service.read_resource(db=db, uri=str(uri))
+                result = await resource_service.read_resource(db=db, resource_id=resource_id)
             except Exception as e:
-                logger.exception(f"Error reading resource '{uri}': {e}")
-                return []
-            if not result or not result.text:
-                logger.warning(f"No content returned by resource: {uri}")
-                return []
+                logger.exception(f"Error reading resource '{resource_id}': {e}")
+                return ""
 
-            return result.text
+            # Return blob content if available (binary resources)
+            if result and result.blob:
+                return result.blob
+
+            # Return text content if available (text resources)
+            if result and result.text:
+                return result.text
+
+            # No content found
+            logger.warning(f"No content returned by resource: {resource_id}")
+            return ""
     except Exception as e:
-        logger.exception(f"Error reading resource '{uri}': {e}")
+        logger.exception(f"Error reading resource '{resource_id}': {e}")
+        return ""
+
+
+@mcp_app.list_resource_templates()
+async def list_resource_templates() -> List[types.ResourceTemplate]:
+    """
+    Lists all resource templates available to the MCP Server.
+
+    Returns:
+        List[types.ResourceTemplate]: A list of resource templates with their URIs and metadata.
+
+    Examples:
+        >>> import inspect
+        >>> sig = inspect.signature(list_resource_templates)
+        >>> list(sig.parameters.keys())
+        []
+        >>> sig.return_annotation.__origin__.__name__
+        'list'
+    """
+    try:
+        async with get_db() as db:
+            try:
+                resource_templates = await resource_service.list_resource_templates(db)
+                return resource_templates
+            except Exception as e:
+                logger.exception(f"Error listing resource templates: {e}")
+                return []
+    except Exception as e:
+        logger.exception(f"Error listing resource templates: {e}")
         return []
+
+
+@mcp_app.set_logging_level()
+async def set_logging_level(level: types.LoggingLevel) -> types.EmptyResult:
+    """
+    Sets the logging level for the MCP Server.
+
+    Args:
+        level (types.LoggingLevel): The desired logging level (debug, info, notice, warning, error, critical, alert, emergency).
+
+    Returns:
+        types.EmptyResult: An empty result indicating success.
+
+    Examples:
+        >>> import inspect
+        >>> sig = inspect.signature(set_logging_level)
+        >>> list(sig.parameters.keys())
+        ['level']
+    """
+    try:
+        # Convert MCP logging level to our LogLevel enum
+        level_map = {
+            "debug": LogLevel.DEBUG,
+            "info": LogLevel.INFO,
+            "notice": LogLevel.INFO,
+            "warning": LogLevel.WARNING,
+            "error": LogLevel.ERROR,
+            "critical": LogLevel.CRITICAL,
+            "alert": LogLevel.CRITICAL,
+            "emergency": LogLevel.CRITICAL,
+        }
+        log_level = level_map.get(level.lower(), LogLevel.INFO)
+        await logging_service.set_level(log_level)
+        return types.EmptyResult()
+    except Exception as e:
+        logger.exception(f"Error setting logging level: {e}")
+        return types.EmptyResult()
+
+
+@mcp_app.completion()
+async def complete(ref: Union[types.PromptReference, types.ResourceReference], argument: types.CompleteRequest) -> types.CompleteResult:
+    """
+    Provides argument completion suggestions for prompts or resources.
+
+    Args:
+        ref (Union[types.PromptReference, types.ResourceReference]): Reference to the prompt or resource.
+        argument (types.CompleteRequest): The completion request with partial argument value.
+
+    Returns:
+        types.CompleteResult: Completion suggestions.
+
+    Examples:
+        >>> import inspect
+        >>> sig = inspect.signature(complete)
+        >>> list(sig.parameters.keys())
+        ['ref', 'argument']
+    """
+    try:
+        async with get_db() as db:
+            try:
+                # Convert types to dict for completion service
+                params = {
+                    "ref": ref.model_dump() if hasattr(ref, "model_dump") else ref,
+                    "argument": argument.model_dump() if hasattr(argument, "model_dump") else argument,
+                }
+                result = await completion_service.handle_completion(db, params)
+
+                # Convert result to CompleteResult
+                if isinstance(result, dict):
+                    return types.CompleteResult(**result)
+                return result
+            except Exception as e:
+                logger.exception(f"Error handling completion: {e}")
+                return types.CompleteResult(completion=types.Completion(values=[], total=0, hasMore=False))
+    except Exception as e:
+        logger.exception(f"Error handling completion: {e}")
+        return types.CompleteResult(completion=types.Completion(values=[], total=0, hasMore=False))
 
 
 class SessionManagerWrapper:

@@ -4,20 +4,56 @@
 
 ---
 
-## [0.9.0] - 2025-10-18 - REST Passthrough, Multi-Tenancy Fixes & Platform Enhancements
+## [0.9.0] - 2025-11-04 [WIP] - REST Passthrough, Multi-Tenancy Fixes & Platform Enhancements
 
 ### Overview
 
-This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug Fixes**, and **Platform Enhancements** with **60+ issues resolved** and **50+ PRs merged**, bringing significant improvements across security, observability, and developer experience:
+This release delivers **REST API Passthrough Capabilities**, **API & UI Pagination**, **Multi-Tenancy Bug Fixes**, and **Platform Enhancements** with **60+ issues resolved** and **50+ PRs merged**, bringing significant improvements across security, observability, and developer experience:
 
+- **📄 REST API & UI Pagination** - Comprehensive pagination support for all admin endpoints with HTMX-based UI and performance testing up to 10K records
 - **🔌 REST Passthrough API Fields** - Comprehensive REST tool configuration with query/header mapping, timeouts, and plugin chains
 - **🔐 Multi-Tenancy & RBAC Fixes** - Critical bug fixes for team management, API tokens, and resource access control
 - **🛠️ Developer Experience** - Support bundle generation, LLM chat interface, system metrics, and performance testing
 - **🔒 Security Enhancements** - Plugin mTLS support, CSP headers, cookie scope fixes, and RBAC vulnerability patches
 - **🌐 Platform Support** - s390x architecture support, multiple StreamableHTTP content, and MCP tool output schema
 - **🧪 Quality & Testing** - Complete build pipeline verification, enhanced linting, mutation testing, and fuzzing
+- **⚡ Performance Optimizations** - Response compression middleware (Brotli, Zstd, GZip) reducing bandwidth by 30-70% + orjson JSON serialization providing 5-6x faster JSON encoding
+- **🦀 Rust Plugin Framework** - Optional Rust-accelerated plugins with 5-100x performance improvements
+- **💻 Admin UI** - Quality of life improvements for admins when managing MCP servers
 
 ### Added
+
+#### **📄 REST API and UI Pagination** (#1224, #1277)
+* **Paginated REST API Endpoints** - All admin API endpoints now support pagination with configurable page size
+  - `/admin/tools` endpoint returns paginated response with `data`, `pagination`, and `links` keys
+  - Maintains backward compatibility with legacy list format
+  - Configurable page size (1-500 items per page, default: 50)
+  - Total count and page metadata included in responses
+* **Database Indexes for Pagination** - New composite indexes for efficient paginated queries
+  - Indexes on `created_at` + `id` for tools, servers, resources, prompts, gateways
+  - Team-scoped indexes for multi-tenant pagination performance
+  - Auth events and API tokens indexed for audit log pagination
+* **UI Pagination with HTMX** - Seamless client-side pagination for admin UI
+  - New `/admin/tools/partial` endpoint for HTMX-based pagination
+  - Pagination controls with keyboard navigation support
+  - Tested with up to 10,000 tools for performance validation
+  - Tag filtering works within paginated results
+* **Pagination Configuration** - 11 new environment variables for fine-tuning pagination behavior
+  - `PAGINATION_DEFAULT_PAGE_SIZE` - Default items per page (default: 50)
+  - `PAGINATION_MAX_PAGE_SIZE` - Maximum allowed page size (default: 500)
+  - `PAGINATION_CURSOR_THRESHOLD` - Threshold for cursor-based pagination (default: 10000)
+  - `PAGINATION_CURSOR_ENABLED` - Enable cursor-based pagination (default: true)
+  - `PAGINATION_INCLUDE_LINKS` - Include navigation links in responses (default: true)
+  - Additional settings for sort order, caching, and offset limits
+* **Pagination Utilities** - New `mcpgateway/utils/pagination.py` module with reusable pagination helpers
+  - Offset-based pagination for simple use cases (<10K records)
+  - Cursor-based pagination for large datasets (>10K records)
+  - Automatic strategy selection based on result set size
+  - Navigation link generation with query parameter support
+* **Comprehensive Test Coverage** - 1,089+ lines of pagination tests
+  - Integration tests for paginated endpoints
+  - Unit tests for pagination utilities
+  - Performance validation with large datasets
 
 #### **🔌 REST Passthrough Configuration** (#746, #1273)
 * **Query & Header Mapping** - Configure dynamic query parameter and header mappings for REST tools
@@ -43,16 +79,18 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
   - API endpoint: `GET /admin/support-bundle/generate?log_lines=1000`
   - Admin UI: "Download Support Bundle" button in Diagnostics tab
   - Automatic sanitization of secrets (passwords, tokens, API keys)
-* **LLM Chat Interface** (#1202, #1200) - Built-in MCP client with LLM chat service for virtual servers
+* **LLM Chat Interface** (#1202, #1200, #1236) - Built-in MCP client with LLM chat service for virtual servers
   - Agent-enabled tool orchestration with MCP protocol integration
-  - Session consistency using Redis for persistent conversations
+  - **Redis-based session consistency** (#1236) for multi-worker distributed environments
+  - Concurrent user management with worker coordination and session isolation
+  - Prevents race conditions via Redis locks and TTLs
   - Direct testing of virtual servers and tools from the Admin UI
 * **System Statistics in Metrics** (#1228, #1232) - Comprehensive system monitoring in metrics page
   - CPU, memory, disk usage, and network statistics
   - Process information and resource consumption
   - System health indicators for production monitoring
 * **Performance Testing Framework** (#1203, #1204, #1226) - Load testing and benchmarking capabilities
-  - Production-scale load data generator for multi-tenant testing (#1225)
+  - Production-scale load data generator for multi-tenant testing (#1225, #1226)
   - Benchmark MCP server for performance analysis (#1219, #1220, #1221)
   - Fixed TokenUsageLog SQLite bug in load testing framework
 * **Metrics Export Enhancement** (#1218) - Export all metrics data for external analysis and integration
@@ -63,7 +101,20 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 * **Keycloak Integration** (#1217, #1216, #1109) - Full Keycloak support with application/x-www-form-urlencoded
 * **OAuth Timeout Configuration** (#1201) - Configurable `OAUTH_DEFAULT_TIMEOUT` for OAuth providers
 
-#### **🔌 Plugin Framework Enhancements** (#1196, #1198, #1137, #1240)
+#### **🔌 Plugin Framework Enhancements** (#1196, #1198, #1137, #1240, #1289)
+* **🦀 Rust Plugin Framework** (#1289, #1249) - Optional Rust-accelerated plugins with automatic Python fallback
+  - Complete PyO3-based framework for building high-performance plugins
+  - **PII Filter (Rust)**: 5-100x faster than Python implementation with identical functionality
+    - Bulk detection: ~100x faster (Python: 2287ms → Rust: 22ms)
+    - Single pattern: ~5-10x faster across all PII types
+    - Memory efficient with Rust's ownership model
+  - **Auto-Detection**: Automatically selects Rust or Python implementation at runtime
+  - **UI Integration**: Plugin catalog displays implementation type (🦀 Rust / 🐍 Python)
+  - **Comprehensive Testing**: Unit tests, integration tests, differential tests, and benchmarks
+  - **CI/CD Pipeline**: Automated builds, tests, and publishing for Rust plugins
+  - **Multi-Platform Builds**: Linux (x86_64, aarch64), macOS (universal2), Windows (x86_64)
+  - **Zero Breaking Changes**: Pure Python fallback when Rust not available
+  - Optional installation: `pip install mcp-contextforge-gateway[rust]`
 * **Plugin Client-Server mTLS Support** (#1196) - Mutual TLS authentication for external plugins
 * **Complete OPA Plugin Hooks** (#1198, #1137) - All missing hooks implemented in OPA plugin
 * **Plugin Linters & Quality** (#1240) - Comprehensive linting for all plugins with automated fixes
@@ -83,6 +134,43 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 * **SSO Tutorial Updates** (#277) - Comprehensive GitHub SSO integration tutorial
 * **Environment Variable Documentation** (#1215) - Updated and clarified environment variable settings
 * **Documentation Formatting Fixes** (#1214) - Fixed newlines and formatting across documentation
+
+#### **⚡ Performance Optimizations** (#1298, #1292, #1294)
+* **Response Compression Middleware** (#1298, #1292) - Automatic compression reducing bandwidth by 30-70%
+  - **Multi-Algorithm Support**: Brotli, Zstd, and GZip compression with automatic negotiation
+  - **Bandwidth Reduction**: 30-70% smaller responses for text-based content (JSON, HTML, CSS, JS)
+  - **Algorithm Priority**: Brotli (best compression) > Zstd (fastest) > GZip (universal fallback)
+  - **Smart Compression**: Only compresses responses >500 bytes to avoid overhead
+  - **Optimal Settings**: Balanced compression levels for CPU/bandwidth trade-off
+    - Brotli quality 4 (0-11 scale) for best compression ratio
+    - Zstd level 3 (1-22 scale) for fastest compression
+    - GZip level 6 (1-9 scale) for balanced performance
+  - **Cache-Friendly**: Adds `Vary: Accept-Encoding` header for proper cache behavior
+  - **Zero Client Changes**: Transparent to API clients, browsers handle decompression automatically
+  - **Browser Support**: Brotli supported by 96%+ of browsers, GZip universal fallback
+  - **Configurable**: Environment variables for enabling/disabling and tuning compression levels
+    - `COMPRESSION_ENABLED` - Enable/disable compression (default: true)
+    - `COMPRESSION_MINIMUM_SIZE` - Minimum response size to compress (default: 500 bytes)
+    - `COMPRESSION_GZIP_LEVEL` - GZip compression level (default: 6)
+    - `COMPRESSION_BROTLI_QUALITY` - Brotli quality level (default: 4)
+    - `COMPRESSION_ZSTD_LEVEL` - Zstd compression level (default: 3)
+
+* **orjson JSON Serialization** (#1294) - High-performance JSON encoding/decoding with 5-6x performance improvement
+  - **Performance Gains**: 5-6x faster serialization, 1.5-2x faster deserialization vs stdlib json
+  - **Compact Output**: 7% smaller JSON payloads for reduced bandwidth usage
+  - **Rust Implementation**: Fast, correct JSON library implemented in Rust (RFC 8259 compliant)
+  - **Native Type Support**: datetime, UUID, numpy arrays, Pydantic models handled natively
+  - **Zero Configuration**: Drop-in replacement for stdlib json, fully transparent to clients
+  - **Production Ready**: Used by major companies (Reddit, Stripe) for high-throughput APIs
+  - **Benchmark Script**: `scripts/benchmark_json_serialization.py` for performance validation
+  - **API Benefits**: 15-30% higher throughput, 10-20% lower CPU usage, 20-40% faster response times
+  - **Options**: OPT_NON_STR_KEYS (integer dict keys), OPT_SERIALIZE_NUMPY (numpy arrays)
+  - **Implementation**: `mcpgateway/utils/orjson_response.py` configured as default FastAPI response class
+  - **Test Coverage**: 29 comprehensive unit tests with 100% code coverage
+
+#### **💻 Admin UI enhancements** (#1336)
+* **Inspectable auth passwords, tokens and headers** (#1336) - Admins can now view and verify passwords, tokens and custom headers they set when creating or editing MCP servers.
+
 
 ### Fixed
 
@@ -127,6 +215,20 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 * **Bandit Security Scan** (#1244) - Fixed all bandit security warnings
 * **Test Warnings & Mypy Issues** (#1268) - Fixed test warnings and mypy type issues
 
+#### **🧪 Test Reliability & Quality Improvements** (#1281, #1283, #1284, #1291)
+* **Gateway Test Stability** (#1281) - Fixed gateway test failures and eliminated warnings
+  - Integrated pytest-httpx for cleaner HTTP mocking (eliminated manual mock complexity)
+  - Eliminated RuntimeWarnings from improper async context manager mocking
+  - Added url-normalize library for consistent URL normalization
+  - Reduced test file complexity by 388 lines (942 → 554 lines)
+  - Consolidated validation tests into parameterized test cases
+* **Logger Test Reliability** (#1283, #1284) - Resolved intermittent logger capture failures
+  - Scoped logger configuration to specific loggers to prevent inter-test conflicts (#1283)
+  - Fixed email verification logic error in auth.py (email_verified_at vs is_email_verified) (#1283)
+  - Fixed caplog logger name specification for reliable debug message capture (#1284)
+  - Added proper type hints and improved type safety across test suite
+* **Prompt Test Fixes** (#1291) - Fixed test failures and prompt-related test issues
+
 #### **🐳 Container & Deployment Fixes**
 * **Gateway Registration on MacOS** (#625) - Fixed gateway registration and tool invocation on MacOS
 * **Non-root Container Users** (#1231) - Added non-root user to scratch Go containers
@@ -134,7 +236,23 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 
 ### Changed
 
-#### **📊 Database Schema** (#1273)
+#### **🗄️ Database Schema & Multi-Tenancy Enhancements** (#1246, #1273)
+
+**Scoped Uniqueness for Multi-Tenant Resources** (#1246):
+* **Enforced team-scoped uniqueness constraints** for improved multi-tenancy isolation
+  - Prompts: unique within `(team_id, owner_email, name)` - prevents naming conflicts across teams
+  - Resources: unique within `(team_id, owner_email, uri)` - ensures URI uniqueness per team/owner
+  - A2A Agents: unique within `(team_id, owner_email, slug)` - team-scoped agent identifiers
+  - Dropped legacy single-column unique constraints (name, uri) for multi-tenant compatibility
+* **ID-Based Resource Endpoints** (#1184) - All prompt and resource endpoints now use unique IDs for lookup
+  - Prevents naming conflicts across teams and owners
+  - Enhanced API security and consistency
+  - Migration compatible with SQLite, MySQL, and PostgreSQL
+* **Enhanced Prompt Editing** (#1180) - Prompt edit form now correctly includes team_id in form data
+* **Plugin Hook Updates** - PromptPrehookPayload and PromptPosthookPayload now use prompt_id instead of name
+* **Resource Content Schema** - ResourceContent now includes id field for unique identification
+
+**REST Passthrough Configuration** (#1273):
 * **New Tool Columns** - Added 9 new columns to tools table via Alembic migration `8a2934be50c0`:
   - `base_url` - Base URL for REST passthrough
   - `path_template` - Path template for URL construction
@@ -156,10 +274,16 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 * **OAUTH_DEFAULT_TIMEOUT** - New configuration for OAuth provider timeouts
 * **Environment Variables** - Comprehensive cleanup and documentation updates
 
-#### **🧹 Code Quality Improvements** (#1233)
-* **CONTRIBUTING.md Cleanup** - Simplified contribution guidelines
-* **Lint-smart Makefile Fix** - Fixed syntax error in lint-smart target
-* **Plugin Linting** - Comprehensive linting across all plugins with automated fixes
+#### **🧹 Code Quality & Developer Experience Improvements** (#1271, #1233)
+* **Consolidated Linting Configuration** (#1271) - Single source of truth for all Python linting tools
+  - Migrated ruff and interrogate configs from separate files into pyproject.toml
+  - Enhanced ruff with import sorting checks (I) and docstring presence checks (D1)
+  - Unified pre-commit hooks to match CI/CD pipeline enforcement
+  - Reduced configuration sprawl: removed `.ruff.toml` and `.interrogaterc`
+  - Better IDE integration with comprehensive real-time linting
+* **CONTRIBUTING.md Cleanup** (#1233) - Simplified contribution guidelines
+* **Lint-smart Makefile Fix** (#1233) - Fixed syntax error in lint-smart target
+* **Plugin Linting** (#1240) - Comprehensive linting across all plugins with automated fixes
 * **Deprecation Removal** - Removed all deprecated Pydantic v1 patterns
 
 ### Security
@@ -195,6 +319,10 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 - Closes #969 - Backend Multi-Tenancy Issues - Critical bugs and missing features
 - Closes #959 - Unable to Re-add Team Member Due to Unique Constraint
 - Closes #958 - Incomplete Visibility Implementation
+- Closes #945 - Scoped uniqueness for prompts, resources, and A2A agents
+- Closes #1180 - Prompt editing to include team_id in form data
+- Closes #1184 - Prompt and resource endpoints to use unique IDs instead of name/URI
+- Closes #1222 - Already addressed as part of #945
 - Closes #1248 - RBAC Vulnerability: Unauthorized Access to Resource Status Toggling
 - Closes #1209 - Finalize RBAC/ABAC implementation for Ownership Checks on Public Resources
 
@@ -224,6 +352,9 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 - Closes #1219 - Benchmark MCP Server for Load Testing and Performance Analysis
 - Closes #1203 - Performance Testing & Benchmarking Framework
 
+**Code Quality & Developer Experience:**
+- Closes #1271 - Consolidated linting configuration in pyproject.toml
+
 **Plugin Framework:**
 - Closes #1196 - Plugin client server mTLS support
 - Closes #1137 - Add missing hooks to OPA plugin
@@ -233,6 +364,9 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 - Closes #1258 - MCP Tool outputSchema Field is Stripped During Discovery
 - Closes #1188 - Allow multiple StreamableHTTP content
 - Closes #1138 - Support for container builds for s390x
+
+**Performance Optimizations:**
+- Closes #1294 - orjson JSON Serialization for 5-6x faster JSON encoding/decoding
 
 **Bug Fixes:**
 - Closes #1098 - Unable to see request payload being sent
@@ -252,12 +386,13 @@ This release delivers **REST API Passthrough Capabilities**, **Multi-Tenancy Bug
 
 ---
 
-## [0.8.0] - 2025-10-07 - Advanced OAuth, Plugin Ecosystem & MCP Registry
+## [0.8.0] - 2025-10-07 - Advanced OAuth, Plugin Ecosystem, MCP Registry & gRPC Protocol Translation
 
 ### Overview
 
-This release focuses on **Advanced OAuth Integration, Plugin Ecosystem & MCP Registry** with **50+ issues resolved** and **47 PRs merged**, bringing significant improvements across authentication, plugin framework, and developer experience:
+This release focuses on **Advanced OAuth Integration, Plugin Ecosystem, MCP Registry & gRPC Protocol Translation** with **50+ issues resolved** and **47+ PRs merged**, bringing significant improvements across authentication, plugin framework, gRPC integration, and developer experience:
 
+- **🔌 gRPC-to-MCP Protocol Translation** - Zero-configuration gRPC service discovery, automatic protocol translation, TLS/mTLS support
 - **🔐 Advanced OAuth Features** - Password Grant Flow, Dynamic Client Registration (DCR), PKCE support, token refresh
 - **🔌 Plugin Ecosystem Expansion** - 15+ new plugins, plugin management UI/API, comprehensive plugin documentation
 - **📦 MCP Server Registry** - Local catalog of MCP servers, improved server discovery and registration
@@ -266,6 +401,106 @@ This release focuses on **Advanced OAuth Integration, Plugin Ecosystem & MCP Reg
 - **🛠️ Developer Experience** - Dynamic environment variables for STDIO servers, improved OAuth2 gateway editing
 
 ### Added
+
+#### **🔌 gRPC-to-MCP Protocol Translation** (#1171, #1172) [EXPERIMENTAL - OPT-IN]
+
+!!! warning "Experimental Feature - Disabled by Default"
+    gRPC support is an experimental opt-in feature that requires:
+
+    1. **Installation**: `pip install mcp-contextforge-gateway[grpc]`
+    2. **Enablement**: `MCPGATEWAY_GRPC_ENABLED=true` in environment
+
+    The feature is disabled by default and requires explicit activation. All gRPC dependencies are optional and not installed with the base package.
+
+* **Automatic Service Discovery** - Zero-configuration gRPC service integration via Server Reflection Protocol
+  - Discovers all services and methods automatically from gRPC servers
+  - Parses FileDescriptorProto for complete method signatures and message types
+  - Stores discovered schemas in database for fast lookups
+  - Handles partial discovery failures gracefully
+
+* **Protocol Translation Layer** - Bidirectional conversion between Protobuf and JSON
+  - **GrpcEndpoint Class** (`translate_grpc.py`, 214 lines) - Core protocol translation
+  - Dynamic JSON ↔ Protobuf message conversion using descriptor pool
+  - 18 Protobuf type mappings to JSON Schema for MCP tool definitions
+  - Support for nested messages, repeated fields, and complex types
+  - Message factory for dynamic Protobuf message creation
+
+* **Method Invocation Support**
+  - **Unary RPCs** - Request-response method invocation with full JSON/Protobuf conversion
+  - **Server-Streaming RPCs** - Incremental JSON responses via async generators
+  - Dynamic gRPC channel creation (insecure and TLS)
+  - Proper error handling and gRPC status code propagation
+
+* **Security & TLS/mTLS Support**
+  - Secure gRPC connections with custom client certificates
+  - Certificate-based mutual authentication (mTLS)
+  - Fallback to system CA certificates when custom certs not provided
+  - TLS validation before marking services as reachable
+
+* **Service Management Layer** - Complete CRUD operations for gRPC services
+  - **GrpcService Class** (`services/grpc_service.py`, 222 lines)
+  - Service registration with automatic reflection
+  - Team-based access control and visibility settings
+  - Enable/disable services without deletion
+  - Re-trigger service discovery on demand
+
+* **Database Schema** - New `grpc_services` table with 30+ columns
+  - Cross-database compatible (SQLite, MySQL, PostgreSQL)
+  - Service metadata, discovered schemas, and configuration
+  - Team scoping with foreign key to `email_teams`
+  - Audit metadata (created_by, modified_by, IP tracking)
+  - Alembic migration `3c89a45f32e5_add_grpc_services_table.py`
+
+* **REST API Endpoints** - 8 new endpoints in `admin.py`
+  - `POST /grpc` - Register new gRPC service
+  - `GET /grpc` - List all gRPC services with team filtering
+  - `GET /grpc/{id}` - Get service details
+  - `PUT /grpc/{id}` - Update service configuration
+  - `POST /grpc/{id}/toggle` - Enable/disable service
+  - `POST /grpc/{id}/delete` - Delete service
+  - `POST /grpc/{id}/reflect` - Re-trigger service discovery
+  - `GET /grpc/{id}/methods` - List discovered methods
+
+* **Admin UI Integration** - New "gRPC Services" tab
+  - Visual service registration form with TLS configuration
+  - Service list with status indicators (enabled, reachable)
+  - Service details modal showing discovered methods
+  - Inline actions (enable/disable, delete, reflect, view methods)
+  - Real-time connection status and metadata display
+
+* **CLI Integration** - Standalone gRPC-to-SSE server mode
+  - `python3 -m mcpgateway.translate --grpc <target> --port 9000`
+  - TLS arguments: `--tls-cert`, `--tls-key`
+  - Custom metadata headers: `--grpc-metadata "key=value"`
+  - Graceful shutdown handling
+
+* **Comprehensive Testing** - 40 unit tests with edge case coverage
+  - `test_translate_grpc.py` (360+ lines, 23 tests)
+  - `test_grpc_service.py` (370+ lines, 17 tests)
+  - Protocol translation tests, service discovery tests, method invocation tests
+  - Error scenario tests
+  - Coverage: 49% translate_grpc, 65% grpc_service
+
+* **Complete Documentation**
+  - `docs/docs/using/grpc-services.md` (500+ lines) - Complete user guide
+  - Updated `docs/docs/overview/features.md` - gRPC feature section
+  - Updated `docs/docs/using/mcpgateway-translate.md` - CLI examples
+  - Updated `.env.example` - gRPC configuration variables
+
+* **Configuration** - Feature flag and environment variables
+  - `MCPGATEWAY_GRPC_ENABLED=false` (default) - Feature disabled by default
+  - `MCPGATEWAY_GRPC_ENABLED=true` - Enable gRPC features (requires `[grpc]` extras)
+  - Optional dependency group: `mcp-contextforge-gateway[grpc]`
+  - Backward compatible - opt-in feature, no breaking changes
+  - Conditional imports - gracefully handles missing grpcio packages
+  - UI tab and API endpoints hidden/disabled when feature is off
+
+* **Performance Benefits**
+  - **1.25-1.6x faster** method invocation compared to REST (Protobuf binary vs JSON)
+  - **3-10x smaller** payloads with Protobuf binary encoding
+  - **20-100x faster** serialization compared to JSON
+  - **Type safety** - Strong typing prevents runtime schema mismatches
+  - **Zero configuration** - Automatic service discovery eliminates manual schema definition
 
 #### **🔐 Advanced OAuth & Authentication** (#1168, #1158)
 * **OAuth Password Grant Flow** - Complete implementation of OAuth 2.0 Password Grant Flow for programmatic authentication
@@ -354,6 +589,19 @@ This release focuses on **Advanced OAuth Integration, Plugin Ecosystem & MCP Reg
 * **Tool Limit Removal** (#1141) - Temporarily removed limit for tools until pagination is properly implemented
 * **Team Request UI** (#1022) - Fixed "Join Request" button showing no pending requests
 
+#### **🔌 gRPC Improvements & Fixes**
+* **Made gRPC Opt-In** (#1172) - Feature-flagged gRPC support for stability
+  - Moved grpcio packages to optional `[grpc]` dependency group
+  - Default `MCPGATEWAY_GRPC_ENABLED=false` (must be explicitly enabled)
+  - Conditional imports - no errors if grpcio packages not installed
+  - Tests automatically skipped when packages unavailable
+  - UI tab and API endpoints hidden when feature disabled
+  - Install with: `pip install mcp-contextforge-gateway[grpc]`
+* **Database Migration Compatibility** - Cross-database integer defaults
+  - Fixed `server_default` values in Alembic migration to use `sa.text()`
+  - Ensures compatibility across SQLite, MySQL, and PostgreSQL
+  - Prevents potential migration failures with string literals
+
 ### Changed
 
 #### **📦 Configuration & Validation** (#1110)
@@ -364,6 +612,23 @@ This release focuses on **Advanced OAuth Integration, Plugin Ecosystem & MCP Reg
 * **Multi-Arch Support** - Expanded multi-architecture support for OPA and other components
 * **Helm Chart Improvements** (#1105) - Fixed "Too many redirects" issue in Helm deployments
 
+#### **🔌 gRPC Dependency Updates**
+* **Dependency Updates** - Resolved version conflicts for gRPC compatibility
+  - **Made optional**: Moved all grpcio packages to `[grpc]` extras group
+  - Constrained `grpcio>=1.62.0,<1.68.0` for protobuf 4.x compatibility
+  - Constrained `grpcio-reflection>=1.62.0,<1.68.0`
+  - Constrained `grpcio-tools>=1.62.0,<1.68.0`
+  - Updated `protobuf>=4.25.0` (removed `<5.0` constraint)
+  - Updated `semgrep>=1.99.0` (was `>=1.139.0`) for jsonschema compatibility
+  - Binary wheels preferred automatically (no manual flags needed)
+  - All dependencies resolve without conflicts
+
+* **Code Quality Improvements**
+  - Fixed Bandit security issue (try/except/pass with proper logging)
+  - Achieved Pylint 10.00/10 rating with appropriate suppressions
+  - Fixed JavaScript linting in admin.js (quote style, formatting)
+  - Increased async test timeout for CI environment stability (150ms → 200ms)
+
 ### Security
 
 * OAuth DCR with PKCE support for enhanced authentication security
@@ -372,6 +637,7 @@ This release focuses on **Advanced OAuth Integration, Plugin Ecosystem & MCP Reg
 * Secure cookie warnings for development environments
 * SQL and HTML sanitization plugins for injection prevention
 * Multi-layer security with circuit breaker and watchdog plugins
+* gRPC TLS/mTLS support for secure microservice communication
 
 ### Infrastructure
 
@@ -379,6 +645,7 @@ This release focuses on **Advanced OAuth Integration, Plugin Ecosystem & MCP Reg
 * Enhanced plugin framework with management API/UI
 * Local MCP server catalog for better registry management
 * Dynamic environment variable support for STDIO servers
+* gRPC-to-MCP protocol translation layer for enterprise microservices
 
 ### Documentation
 
@@ -387,8 +654,12 @@ This release focuses on **Advanced OAuth Integration, Plugin Ecosystem & MCP Reg
 * Scale and performance documentation
 * OAuth integration tutorials (Password Grant, DCR, PKCE)
 * MCP server catalog documentation
+* Complete gRPC integration guide with examples
 
 ### Issues Closed
+
+**gRPC Integration:**
+- Closes #1171 - [EPIC]: Complete gRPC-to-MCP Protocol Translation
 
 **OAuth & Authentication:**
 - Closes #1048 - Login issue with HTTP requiring SECURE_COOKIES=false

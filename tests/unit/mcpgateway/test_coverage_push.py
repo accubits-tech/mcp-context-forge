@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 # Third-Party
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 import pytest
 
 # First-Party
@@ -28,22 +29,22 @@ def client():
 def test_require_api_key_scenarios():
     """Test require_api_key function comprehensively."""
     # Test with auth disabled
-    with patch('mcpgateway.main.settings') as mock_settings:
+    with patch("mcpgateway.main.settings") as mock_settings:
         mock_settings.auth_required = False
         require_api_key("any:key")  # Should not raise
 
     # Test with auth enabled and correct key
-    with patch('mcpgateway.main.settings') as mock_settings:
+    with patch("mcpgateway.main.settings") as mock_settings:
         mock_settings.auth_required = True
         mock_settings.basic_auth_user = "admin"
-        mock_settings.basic_auth_password = "secret"
+        mock_settings.basic_auth_password = SecretStr("secret")
         require_api_key("admin:secret")  # Should not raise
 
     # Test with auth enabled and incorrect key
-    with patch('mcpgateway.main.settings') as mock_settings:
+    with patch("mcpgateway.main.settings") as mock_settings:
         mock_settings.auth_required = True
         mock_settings.basic_auth_user = "admin"
-        mock_settings.basic_auth_password = "secret"
+        mock_settings.basic_auth_password = SecretStr("secret")
 
         with pytest.raises(HTTPException):
             require_api_key("wrong:key")
@@ -53,7 +54,7 @@ def test_app_basic_properties():
     """Test basic app properties."""
     assert app.title is not None
     assert app.version is not None
-    assert hasattr(app, 'routes')
+    assert hasattr(app, "routes")
 
 
 def test_error_handlers():
@@ -130,7 +131,7 @@ def test_database_dependency():
 
     # Test function exists and is generator
     db_gen = get_db()
-    assert hasattr(db_gen, '__next__')
+    assert hasattr(db_gen, "__next__")
 
 
 def test_cors_settings():
@@ -147,7 +148,7 @@ def test_template_and_static_setup():
     from mcpgateway.main import templates
 
     assert templates is not None
-    assert hasattr(app.state, 'templates')
+    assert hasattr(app.state, "templates")
 
 
 def test_feature_flags():

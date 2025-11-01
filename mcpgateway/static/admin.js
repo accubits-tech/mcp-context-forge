@@ -2554,6 +2554,7 @@ async function editTool(toolId) {
 /**
  * SECURE: View A2A Agents function with safe display
  */
+
 async function viewAgent(agentId) {
     try {
         console.log(`Viewing agent ID: ${agentId}`);
@@ -2577,9 +2578,9 @@ async function viewAgent(agentId) {
             const fields = [
                 { label: "Name", value: agent.name },
                 { label: "Slug", value: agent.slug },
-                { label: "Endpoint URL", value: agent.endpoint_url },
-                { label: "Agent Type", value: agent.agent_type },
-                { label: "Protocol Version", value: agent.protocol_version },
+                { label: "Endpoint URL", value: agent.endpointUrl },
+                { label: "Agent Type", value: agent.agentType },
+                { label: "Protocol Version", value: agent.protocolVersion },
                 { label: "Description", value: agent.description || "N/A" },
                 { label: "Visibility", value: agent.visibility || "private" },
             ];
@@ -2760,11 +2761,347 @@ async function viewAgent(agentId) {
         }
 
         openModal("agent-modal");
+        const modal = document.getElementById("agent-modal");
+        if (modal && modal.classList.contains("hidden")) {
+            console.warn("Modal was still hidden — forcing visible.");
+            modal.classList.remove("hidden");
+        }
+
         console.log("✓ Agent details loaded successfully");
     } catch (error) {
         console.error("Error fetching agent details:", error);
         const errorMessage = handleFetchError(error, "load agent details");
         showErrorMessage(errorMessage);
+    }
+}
+
+/**
+ * SECURE: Edit A2A Agent function
+ */
+
+async function editA2AAgent(agentId) {
+    try {
+        console.log(`Editing A2A Agent ID: ${agentId}`);
+
+        const response = await fetchWithTimeout(
+            `${window.ROOT_PATH}/admin/a2a/${agentId}`,
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const agent = await response.json();
+
+        console.log("Agent Details: " + JSON.stringify(agent, null, 2));
+
+        // for (const [key, value] of Object.entries(agent)) {
+        //       console.log(`${key}:`, value);
+        //     }
+
+        const isInactiveCheckedBool = isInactiveChecked("a2a-agents");
+        const editForm = safeGetElement("edit-a2a-agent-form");
+        let hiddenField = safeGetElement("edit-a2a-agents-show-inactive");
+        if (!hiddenField) {
+            hiddenField = document.createElement("input");
+            hiddenField.type = "hidden";
+            hiddenField.name = "is_inactivate_checked";
+            hiddenField.id = "edit-a2a-agents-show-inactive";
+
+            if (editForm) {
+                editForm.appendChild(hiddenField);
+            }
+        }
+        hiddenField.value = isInactiveCheckedBool;
+
+        // Set form action and populate fields with validation
+
+        if (editForm) {
+            editForm.action = `${window.ROOT_PATH}/admin/a2a/${agentId}/edit`;
+            editForm.method = "POST"; // ensure method is POST
+        }
+
+        const nameValidation = validateInputName(agent.name, "a2a_agent");
+        const urlValidation = validateUrl(agent.endpointUrl);
+
+        const nameField = safeGetElement("a2a-agent-name-edit");
+        const urlField = safeGetElement("a2a-agent-endpoint-url-edit");
+        const descField = safeGetElement("a2a-agent-description-edit");
+        const agentType = safeGetElement("a2a-agent-type-edit");
+
+        agentType.value = agent.agentType;
+
+        console.log("Agent Type: ", agent.agentType);
+
+        if (nameField && nameValidation.valid) {
+            nameField.value = nameValidation.value;
+        }
+        if (urlField && urlValidation.valid) {
+            urlField.value = urlValidation.value;
+        }
+        if (descField) {
+            descField.value = agent.description || "";
+        }
+
+        // Set tags field
+        const tagsField = safeGetElement("a2a-agent-tags-edit");
+        if (tagsField) {
+            tagsField.value = agent.tags ? agent.tags.join(", ") : "";
+        }
+
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        if (teamId) {
+            const hiddenInput = document.createElement("input");
+            hiddenInput.type = "hidden";
+            hiddenInput.name = "team_id";
+            hiddenInput.value = teamId;
+            editForm.appendChild(hiddenInput);
+        }
+
+        // ✅ Prefill visibility radios (consistent with server)
+        const visibility = agent.visibility
+            ? agent.visibility.toLowerCase()
+            : null;
+
+        const publicRadio = safeGetElement("a2a-visibility-public-edit");
+        const teamRadio = safeGetElement("a2a-visibility-team-edit");
+        const privateRadio = safeGetElement("a2a-visibility-private-edit");
+
+        // Clear all first
+        if (publicRadio) {
+            publicRadio.checked = false;
+        }
+        if (teamRadio) {
+            teamRadio.checked = false;
+        }
+        if (privateRadio) {
+            privateRadio.checked = false;
+        }
+
+        if (visibility) {
+            // Check visibility and set the corresponding radio button
+            if (visibility === "public" && publicRadio) {
+                publicRadio.checked = true;
+            } else if (visibility === "team" && teamRadio) {
+                teamRadio.checked = true;
+            } else if (visibility === "private" && privateRadio) {
+                privateRadio.checked = true;
+            }
+        }
+
+        const authTypeField = safeGetElement("auth-type-a2a-edit");
+
+        if (authTypeField) {
+            authTypeField.value = agent.authType || "";
+        }
+
+        toggleA2AAuthFields(agent.authType || "");
+
+        // Auth containers
+        const authBasicSection = safeGetElement("auth-basic-fields-a2a-edit");
+        const authBearerSection = safeGetElement("auth-bearer-fields-a2a-edit");
+        const authHeadersSection = safeGetElement(
+            "auth-headers-fields-a2a-edit",
+        );
+        const authOAuthSection = safeGetElement("auth-oauth-fields-a2a-edit");
+
+        // Individual fields
+        const authUsernameField = safeGetElement(
+            "auth-basic-fields-a2a-edit",
+        )?.querySelector("input[name='auth_username']");
+        const authPasswordField = safeGetElement(
+            "auth-basic-fields-a2a-edit",
+        )?.querySelector("input[name='auth_password']");
+
+        const authTokenField = safeGetElement(
+            "auth-bearer-fields-a2a-edit",
+        )?.querySelector("input[name='auth_token']");
+
+        const authHeaderKeyField = safeGetElement(
+            "auth-headers-fields-a2a-edit",
+        )?.querySelector("input[name='auth_header_key']");
+        const authHeaderValueField = safeGetElement(
+            "auth-headers-fields-a2a-edit",
+        )?.querySelector("input[name='auth_header_value']");
+
+        // OAuth fields
+        const oauthGrantTypeField = safeGetElement("oauth-grant-type-a2a-edit");
+        const oauthClientIdField = safeGetElement("oauth-client-id-a2a-edit");
+        const oauthClientSecretField = safeGetElement(
+            "oauth-client-secret-a2a-edit",
+        );
+        const oauthTokenUrlField = safeGetElement("oauth-token-url-a2a-edit");
+        const oauthAuthUrlField = safeGetElement(
+            "oauth-authorization-url-a2a-edit",
+        );
+        const oauthRedirectUriField = safeGetElement(
+            "oauth-redirect-uri-a2a-edit",
+        );
+        const oauthScopesField = safeGetElement("oauth-scopes-a2a-edit");
+        const oauthAuthCodeFields = safeGetElement(
+            "oauth-auth-code-fields-a2a-edit",
+        );
+
+        // Hide all auth sections first
+        if (authBasicSection) {
+            authBasicSection.style.display = "none";
+        }
+        if (authBearerSection) {
+            authBearerSection.style.display = "none";
+        }
+        if (authHeadersSection) {
+            authHeadersSection.style.display = "none";
+        }
+        if (authOAuthSection) {
+            authOAuthSection.style.display = "none";
+        }
+
+        switch (agent.authType) {
+            case "basic":
+                if (authBasicSection) {
+                    authBasicSection.style.display = "block";
+                    if (authUsernameField) {
+                        authUsernameField.value = agent.authUsername || "";
+                    }
+                    if (authPasswordField) {
+                        authPasswordField.value = "*****"; // mask password
+                    }
+                }
+                break;
+            case "bearer":
+                if (authBearerSection) {
+                    authBearerSection.style.display = "block";
+                    if (authTokenField) {
+                        authTokenField.value = agent.authValue || ""; // show full token
+                    }
+                }
+                break;
+            case "authheaders":
+                if (authHeadersSection) {
+                    authHeadersSection.style.display = "block";
+                    if (authHeaderKeyField) {
+                        authHeaderKeyField.value = agent.authHeaderKey || "";
+                    }
+                    if (authHeaderValueField) {
+                        authHeaderValueField.value = "*****"; // mask header value
+                    }
+                }
+                break;
+            case "oauth":
+                if (authOAuthSection) {
+                    authOAuthSection.style.display = "block";
+                }
+                // Populate OAuth fields if available
+                if (agent.oauthConfig) {
+                    const config = agent.oauthConfig;
+                    if (oauthGrantTypeField && config.grant_type) {
+                        oauthGrantTypeField.value = config.grant_type;
+                        // Show/hide authorization code fields based on grant type
+                        if (oauthAuthCodeFields) {
+                            oauthAuthCodeFields.style.display =
+                                config.grant_type === "authorization_code"
+                                    ? "block"
+                                    : "none";
+                        }
+                    }
+                    if (oauthClientIdField && config.client_id) {
+                        oauthClientIdField.value = config.client_id;
+                    }
+                    if (oauthClientSecretField) {
+                        oauthClientSecretField.value = ""; // Don't populate secret for security
+                    }
+                    if (oauthTokenUrlField && config.token_url) {
+                        oauthTokenUrlField.value = config.token_url;
+                    }
+                    if (oauthAuthUrlField && config.authorization_url) {
+                        oauthAuthUrlField.value = config.authorization_url;
+                    }
+                    if (oauthRedirectUriField && config.redirect_uri) {
+                        oauthRedirectUriField.value = config.redirect_uri;
+                    }
+                    if (
+                        oauthScopesField &&
+                        config.scopes &&
+                        Array.isArray(config.scopes)
+                    ) {
+                        oauthScopesField.value = config.scopes.join(" ");
+                    }
+                }
+                break;
+            case "":
+            default:
+                // No auth – keep everything hidden
+                break;
+        }
+
+        // **Capabilities & Config (ensure valid dicts)**
+        safeSetValue(
+            "a2a-agent-capabilities-edit",
+            JSON.stringify(agent.capabilities || {}),
+        );
+        safeSetValue(
+            "a2a-agent-config-edit",
+            JSON.stringify(agent.config || {}),
+        );
+
+        // Set form action to the new POST endpoint
+
+        // Handle passthrough headers
+        const passthroughHeadersField = safeGetElement(
+            "edit-a2a-agent-passthrough-headers",
+        );
+        if (passthroughHeadersField) {
+            if (
+                agent.passthroughHeaders &&
+                Array.isArray(agent.passthroughHeaders)
+            ) {
+                passthroughHeadersField.value =
+                    agent.passthroughHeaders.join(", ");
+            } else {
+                passthroughHeadersField.value = "";
+            }
+        }
+
+        openModal("a2a-edit-modal");
+        console.log("✓ A2A Agent edit modal loaded successfully");
+    } catch (err) {
+        console.error("Error loading A2A agent:", err);
+        const errorMessage = handleFetchError(
+            err,
+            "load A2A Agent for editing",
+        );
+        showErrorMessage(errorMessage);
+    }
+}
+
+function safeSetValue(id, val) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.value = val;
+    }
+}
+
+function toggleA2AAuthFields(authType) {
+    const sections = [
+        "auth-basic-fields-a2a-edit",
+        "auth-bearer-fields-a2a-edit",
+        "auth-headers-fields-a2a-edit",
+        "auth-oauth-fields-a2a-edit",
+    ];
+    sections.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.display = "none";
+        }
+    });
+    if (authType) {
+        const el = document.getElementById(`auth-${authType}-fields-a2a-edit`);
+        if (el) {
+            el.style.display = "block";
+        }
     }
 }
 
@@ -3452,12 +3789,12 @@ async function viewPrompt(promptName) {
 /**
  * SECURE: Edit Prompt function with validation
  */
-async function editPrompt(promptName) {
+async function editPrompt(promptId) {
     try {
-        console.log(`Editing prompt: ${promptName}`);
+        console.log(`Editing prompt: ${promptId}`);
 
         const response = await fetchWithTimeout(
-            `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptName)}`,
+            `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptId)}`,
         );
 
         if (!response.ok) {
@@ -3513,7 +3850,22 @@ async function editPrompt(promptName) {
         // Set form action and populate fields with validation
         const editForm = safeGetElement("edit-prompt-form");
         if (editForm) {
-            editForm.action = `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptName)}/edit`;
+            editForm.action = `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptId)}/edit`;
+            // Add or update hidden team_id input if present in URL
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+            if (teamId) {
+                let teamInput = safeGetElement("edit-prompt-team-id");
+                if (!teamInput) {
+                    teamInput = document.createElement("input");
+                    teamInput.type = "hidden";
+                    teamInput.name = "team_id";
+                    teamInput.id = "edit-prompt-team-id";
+                    editForm.appendChild(teamInput);
+                }
+                teamInput.value = teamId;
+            }
         }
 
         // Validate prompt name
@@ -3798,6 +4150,8 @@ async function editGateway(gatewayId) {
         }
 
         const gateway = await response.json();
+
+        console.log("Gateway Details: " + JSON.stringify(gateway, null, 2));
 
         const isInactiveCheckedBool = isInactiveChecked("gateways");
         let hiddenField = safeGetElement("edit-gateway-show-inactive");
@@ -4210,7 +4564,10 @@ async function viewServer(serverId) {
                 const toolsList = document.createElement("div");
                 toolsList.className = "mt-1 space-y-1";
 
-                server.associatedTools.forEach((toolId) => {
+                const maxToShow = 3;
+                const toolsToShow = server.associatedTools.slice(0, maxToShow);
+
+                toolsToShow.forEach((toolId) => {
                     const toolItem = document.createElement("div");
                     toolItem.className = "flex items-center space-x-2";
 
@@ -4231,6 +4588,22 @@ async function viewServer(serverId) {
                     toolItem.appendChild(toolIdSpan);
                     toolsList.appendChild(toolItem);
                 });
+
+                // If more than maxToShow, add a summary badge
+                if (server.associatedTools.length > maxToShow) {
+                    const moreItem = document.createElement("div");
+                    moreItem.className = "flex items-center space-x-2";
+
+                    const moreBadge = document.createElement("span");
+                    moreBadge.className =
+                        "inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full cursor-pointer dark:bg-green-900 dark:text-green-200";
+                    moreBadge.title = "Total tools associated";
+                    const remaining = server.associatedTools.length - maxToShow;
+                    moreBadge.textContent = `+${remaining} more`;
+
+                    moreItem.appendChild(moreBadge);
+                    toolsList.appendChild(moreItem);
+                }
 
                 toolsLabel.appendChild(toolsList);
                 toolsSection.appendChild(toolsLabel);
@@ -4253,7 +4626,13 @@ async function viewServer(serverId) {
                 const resourcesList = document.createElement("div");
                 resourcesList.className = "mt-1 space-y-1";
 
-                server.associatedResources.forEach((resourceId) => {
+                const maxToShow = 3;
+                const resourcesToShow = server.associatedResources.slice(
+                    0,
+                    maxToShow,
+                );
+
+                resourcesToShow.forEach((resourceId) => {
                     const resourceItem = document.createElement("div");
                     resourceItem.className = "flex items-center space-x-2";
 
@@ -4276,6 +4655,23 @@ async function viewServer(serverId) {
                     resourcesList.appendChild(resourceItem);
                 });
 
+                // If more than maxToShow, add a summary badge
+                if (server.associatedResources.length > maxToShow) {
+                    const moreItem = document.createElement("div");
+                    moreItem.className = "flex items-center space-x-2";
+
+                    const moreBadge = document.createElement("span");
+                    moreBadge.className =
+                        "inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full cursor-pointer dark:bg-blue-900 dark:text-blue-200";
+                    moreBadge.title = "Total resources associated";
+                    const remaining =
+                        server.associatedResources.length - maxToShow;
+                    moreBadge.textContent = `+${remaining} more`;
+
+                    moreItem.appendChild(moreBadge);
+                    resourcesList.appendChild(moreItem);
+                }
+
                 resourcesLabel.appendChild(resourcesList);
                 resourcesSection.appendChild(resourcesLabel);
                 associatedDiv.appendChild(resourcesSection);
@@ -4297,7 +4693,13 @@ async function viewServer(serverId) {
                 const promptsList = document.createElement("div");
                 promptsList.className = "mt-1 space-y-1";
 
-                server.associatedPrompts.forEach((promptId) => {
+                const maxToShow = 3;
+                const promptsToShow = server.associatedPrompts.slice(
+                    0,
+                    maxToShow,
+                );
+
+                promptsToShow.forEach((promptId) => {
                     const promptItem = document.createElement("div");
                     promptItem.className = "flex items-center space-x-2";
 
@@ -4318,6 +4720,23 @@ async function viewServer(serverId) {
                     promptItem.appendChild(promptIdSpan);
                     promptsList.appendChild(promptItem);
                 });
+
+                // If more than maxToShow, add a summary badge
+                if (server.associatedPrompts.length > maxToShow) {
+                    const moreItem = document.createElement("div");
+                    moreItem.className = "flex items-center space-x-2";
+
+                    const moreBadge = document.createElement("span");
+                    moreBadge.className =
+                        "inline-block bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full cursor-pointer dark:bg-purple-900 dark:text-purple-200";
+                    moreBadge.title = "Total prompts associated";
+                    const remaining =
+                        server.associatedPrompts.length - maxToShow;
+                    moreBadge.textContent = `+${remaining} more`;
+
+                    moreItem.appendChild(moreBadge);
+                    promptsList.appendChild(moreItem);
+                }
 
                 promptsLabel.appendChild(promptsList);
                 promptsSection.appendChild(promptsLabel);
@@ -4584,6 +5003,15 @@ async function editServer(serverId) {
         // Store server data for modal population
         window.currentEditingServer = server;
 
+        // Set associated tools data attribute on the container for reference by initToolSelect
+        const editToolsContainer = document.getElementById("edit-server-tools");
+        if (editToolsContainer && server.associatedTools) {
+            editToolsContainer.setAttribute(
+                "data-server-tools",
+                JSON.stringify(server.associatedTools),
+            );
+        }
+
         openModal("server-edit-modal");
 
         // Use multiple approaches to ensure checkboxes get set
@@ -4593,24 +5021,22 @@ async function editServer(serverId) {
 
         // Set associated items after modal is opened
         setTimeout(() => {
-            console.log("Setting associated items for server:", server.id);
-            console.log("Associated tools:", server.associatedTools);
-            console.log("Associated resources:", server.associatedResources);
-            console.log("Associated prompts:", server.associatedPrompts);
-
             // Set associated tools checkboxes
             const toolCheckboxes = document.querySelectorAll(
                 'input[name="associatedTools"]',
             );
-            console.log("Found", toolCheckboxes.length, "tool checkboxes");
 
             toolCheckboxes.forEach((checkbox) => {
-                const isChecked =
-                    server.associatedTools &&
-                    server.associatedTools.includes(checkbox.value);
-                console.log(
-                    `Tool ${checkbox.value}: ${isChecked ? "CHECKED" : "unchecked"}`,
-                );
+                let isChecked = false;
+                if (server.associatedTools && window.toolMapping) {
+                    // Get the tool name for this checkbox UUID
+                    const toolName = window.toolMapping[checkbox.value];
+
+                    // Check if this tool name is in the associated tools array
+                    isChecked =
+                        toolName && server.associatedTools.includes(toolName);
+                }
+
                 checkbox.checked = isChecked;
             });
 
@@ -4618,20 +5044,12 @@ async function editServer(serverId) {
             const resourceCheckboxes = document.querySelectorAll(
                 'input[name="associatedResources"]',
             );
-            console.log(
-                "Found",
-                resourceCheckboxes.length,
-                "resource checkboxes",
-            );
 
             resourceCheckboxes.forEach((checkbox) => {
                 const checkboxValue = parseInt(checkbox.value);
                 const isChecked =
                     server.associatedResources &&
                     server.associatedResources.includes(checkboxValue);
-                console.log(
-                    `Resource ${checkboxValue}: ${isChecked ? "CHECKED" : "unchecked"}`,
-                );
                 checkbox.checked = isChecked;
             });
 
@@ -4639,16 +5057,12 @@ async function editServer(serverId) {
             const promptCheckboxes = document.querySelectorAll(
                 'input[name="associatedPrompts"]',
             );
-            console.log("Found", promptCheckboxes.length, "prompt checkboxes");
 
             promptCheckboxes.forEach((checkbox) => {
                 const checkboxValue = parseInt(checkbox.value);
                 const isChecked =
                     server.associatedPrompts &&
                     server.associatedPrompts.includes(checkboxValue);
-                console.log(
-                    `Prompt ${checkboxValue}: ${isChecked ? "CHECKED" : "unchecked"}`,
-                );
                 checkbox.checked = isChecked;
             });
 
@@ -4782,6 +5196,169 @@ function setEditServerAssociations(server) {
             }
         });
     }, 50);
+}
+
+// ===================================================================
+// HTMX HANDLERS for dynamic content loading
+// ===================================================================
+
+// Set up HTMX handler for auto-checking newly loaded tools when Select All is active or Edit Server mode
+if (window.htmx && !window._toolsHtmxHandlerAttached) {
+    window._toolsHtmxHandlerAttached = true;
+
+    window.htmx.on("htmx:afterSettle", function (evt) {
+        // Only handle tool pagination requests
+        if (
+            evt.detail.pathInfo &&
+            evt.detail.pathInfo.requestPath &&
+            evt.detail.pathInfo.requestPath.includes("/admin/tools/partial")
+        ) {
+            // Use a slight delay to ensure DOM is fully updated
+            setTimeout(() => {
+                // Find which container actually triggered the request by checking the target
+                let container = null;
+                const target = evt.detail.target;
+
+                // Check if the target itself is the edit server tools container (most common case for infinite scroll)
+                if (target && target.id === "edit-server-tools") {
+                    container = target;
+                }
+                // Or if target is the associated tools container (for add server)
+                else if (target && target.id === "associatedTools") {
+                    container = target;
+                }
+                // Otherwise try to find the container using closest
+                else if (target) {
+                    container =
+                        target.closest("#associatedTools") ||
+                        target.closest("#edit-server-tools");
+                }
+
+                // Fallback logic if container still not found
+                if (!container) {
+                    // Check which modal/dialog is currently open to determine the correct container
+                    const editModal =
+                        document.getElementById("server-edit-modal");
+                    const isEditModalOpen =
+                        editModal && !editModal.classList.contains("hidden");
+
+                    if (isEditModalOpen) {
+                        container =
+                            document.getElementById("edit-server-tools");
+                    } else {
+                        container = document.getElementById("associatedTools");
+                    }
+                }
+
+                // Final safety check - use direct lookup if still not found
+                if (!container) {
+                    const addServerContainer =
+                        document.getElementById("associatedTools");
+                    const editServerContainer =
+                        document.getElementById("edit-server-tools");
+
+                    // Check if edit server container has the server tools data attribute set
+                    if (
+                        editServerContainer &&
+                        editServerContainer.getAttribute("data-server-tools")
+                    ) {
+                        container = editServerContainer;
+                    } else if (
+                        addServerContainer &&
+                        addServerContainer.offsetParent !== null
+                    ) {
+                        container = addServerContainer;
+                    } else if (
+                        editServerContainer &&
+                        editServerContainer.offsetParent !== null
+                    ) {
+                        container = editServerContainer;
+                    } else {
+                        // Last resort: just pick one that exists
+                        container = addServerContainer || editServerContainer;
+                    }
+                }
+
+                if (container) {
+                    // Update tool mapping for newly loaded tools
+                    const newCheckboxes = container.querySelectorAll(
+                        "input[data-auto-check=true]",
+                    );
+
+                    if (!window.toolMapping) {
+                        window.toolMapping = {};
+                    }
+
+                    newCheckboxes.forEach((cb) => {
+                        const toolId = cb.value;
+                        const toolName = cb.getAttribute("data-tool-name");
+                        if (toolId && toolName) {
+                            window.toolMapping[toolId] = toolName;
+                        }
+                    });
+
+                    const selectAllInput = container.querySelector(
+                        'input[name="selectAllTools"]',
+                    );
+
+                    // Check if Select All is active
+                    if (selectAllInput && selectAllInput.value === "true") {
+                        newCheckboxes.forEach((cb) => {
+                            cb.checked = true;
+                            cb.removeAttribute("data-auto-check");
+                        });
+
+                        if (newCheckboxes.length > 0) {
+                            const event = new Event("change", {
+                                bubbles: true,
+                            });
+                            container.dispatchEvent(event);
+                        }
+                    }
+                    // Check if we're in Edit Server mode and need to pre-select tools
+                    else if (container.id === "edit-server-tools") {
+                        // Try to get server tools from data attribute (primary source)
+                        let serverTools = null;
+                        const dataAttr =
+                            container.getAttribute("data-server-tools");
+
+                        if (dataAttr) {
+                            try {
+                                serverTools = JSON.parse(dataAttr);
+                            } catch (e) {
+                                console.error(
+                                    "Failed to parse data-server-tools:",
+                                    e,
+                                );
+                            }
+                        }
+
+                        if (serverTools && serverTools.length > 0) {
+                            newCheckboxes.forEach((cb) => {
+                                const toolId = cb.value;
+                                const toolName =
+                                    cb.getAttribute("data-tool-name"); // Use the data attribute directly
+                                if (toolId && toolName) {
+                                    // Check if this tool name exists in server associated tools
+                                    if (serverTools.includes(toolName)) {
+                                        cb.checked = true;
+                                    }
+                                }
+                                cb.removeAttribute("data-auto-check");
+                            });
+
+                            // Trigger an update to display the correct count based on server.associatedTools
+                            // This will make sure the pill counters reflect the total associated tools count
+                            const event = new Event("change", {
+                                bubbles: true,
+                            });
+                            container.dispatchEvent(event);
+                        }
+                    }
+                }
+            }, 10); // Small delay to ensure DOM is updated
+        }
+    });
 }
 
 // ===================================================================
@@ -5619,24 +6196,100 @@ function initToolSelect(
         return;
     }
 
-    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
     const pillClasses =
-        "inline-block px-3 py-1 text-xs font-semibold text-indigo-700 bg-indigo-100 rounded-full shadow";
+        "inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full dark:bg-green-900 dark:text-green-200";
 
     function update() {
         try {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             const checked = Array.from(checkboxes).filter((cb) => cb.checked);
-            const count = checked.length;
 
-            // Rebuild pills safely
+            // Check if "Select All" mode is active
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllTools"]',
+            );
+            const allIdsInput = container.querySelector(
+                'input[name="allToolIds"]',
+            );
+
+            // Check if this is the edit server tools container
+            const isEditServerMode = selectId === "edit-server-tools";
+            let serverTools = null;
+
+            if (isEditServerMode) {
+                const dataAttr = container.getAttribute("data-server-tools");
+                if (dataAttr) {
+                    try {
+                        serverTools = JSON.parse(dataAttr);
+                    } catch (e) {
+                        console.error("Error parsing data-server-tools:", e);
+                    }
+                }
+            }
+
+            let count = checked.length;
+
+            // If Select All mode is active, use the count from allToolIds
+            if (
+                selectAllInput &&
+                selectAllInput.value === "true" &&
+                allIdsInput
+            ) {
+                try {
+                    const allIds = JSON.parse(allIdsInput.value);
+                    count = allIds.length;
+                } catch (e) {
+                    console.error("Error parsing allToolIds:", e);
+                }
+            }
+            // If in edit server mode and we have server tools data, use that count
+            else if (
+                isEditServerMode &&
+                serverTools &&
+                Array.isArray(serverTools)
+            ) {
+                count = serverTools.length;
+            }
+
+            // Rebuild pills safely - show first 3, then summarize the rest
             pillsBox.innerHTML = "";
-            checked.forEach((cb) => {
+            const maxPillsToShow = 3;
+
+            // In edit server mode, we want to show the server tools rather than just currently checked ones
+            let pillsToDisplay = checked;
+            if (
+                isEditServerMode &&
+                serverTools &&
+                Array.isArray(serverTools) &&
+                window.toolMapping
+            ) {
+                // Create a list of tools that exist both in serverTools and currently loaded tools
+                const allLoadedTools = Array.from(checkboxes);
+                pillsToDisplay = allLoadedTools.filter((checkbox) => {
+                    const toolName = window.toolMapping[checkbox.value];
+                    return toolName && serverTools.includes(toolName);
+                });
+            }
+
+            pillsToDisplay.slice(0, maxPillsToShow).forEach((cb) => {
                 const span = document.createElement("span");
                 span.className = pillClasses;
                 span.textContent =
                     cb.nextElementSibling?.textContent?.trim() || "Unnamed";
                 pillsBox.appendChild(span);
             });
+
+            // If more than maxPillsToShow, show a summary pill
+            if (count > maxPillsToShow) {
+                const span = document.createElement("span");
+                span.className = pillClasses + " cursor-pointer";
+                span.title = "Click to see all selected tools";
+                const remaining = count - maxPillsToShow;
+                span.textContent = `+${remaining} more`;
+                pillsBox.appendChild(span);
+            }
 
             // Warning when > max
             if (count > max) {
@@ -5649,22 +6302,199 @@ function initToolSelect(
         }
     }
 
-    if (clearBtn) {
-        clearBtn.addEventListener("click", () => {
+    // Remove old event listeners by cloning and replacing (preserving ID)
+    if (clearBtn && !clearBtn.dataset.listenerAttached) {
+        clearBtn.dataset.listenerAttached = "true";
+        const newClearBtn = clearBtn.cloneNode(true);
+        newClearBtn.dataset.listenerAttached = "true";
+        clearBtn.parentNode.replaceChild(newClearBtn, clearBtn);
+
+        newClearBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             checkboxes.forEach((cb) => (cb.checked = false));
+
+            // Clear the "select all" flag
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllTools"]',
+            );
+            if (selectAllInput) {
+                selectAllInput.remove();
+            }
+            const allIdsInput = container.querySelector(
+                'input[name="allToolIds"]',
+            );
+            if (allIdsInput) {
+                allIdsInput.remove();
+            }
+
             update();
         });
     }
 
-    if (selectBtn) {
-        selectBtn.addEventListener("click", () => {
-            checkboxes.forEach((cb) => (cb.checked = true));
-            update();
+    if (selectBtn && !selectBtn.dataset.listenerAttached) {
+        selectBtn.dataset.listenerAttached = "true";
+        const newSelectBtn = selectBtn.cloneNode(true);
+        newSelectBtn.dataset.listenerAttached = "true";
+        selectBtn.parentNode.replaceChild(newSelectBtn, selectBtn);
+
+        newSelectBtn.addEventListener("click", async () => {
+            // Disable button and show loading state
+            const originalText = newSelectBtn.textContent;
+            newSelectBtn.disabled = true;
+            newSelectBtn.textContent = "Selecting all tools...";
+
+            try {
+                // Fetch all tool IDs from the server
+                const response = await fetch(
+                    `${window.ROOT_PATH}/admin/tools/ids`,
+                );
+                if (!response.ok) {
+                    throw new Error("Failed to fetch tool IDs");
+                }
+
+                const data = await response.json();
+                const allToolIds = data.tool_ids || [];
+
+                // Check all currently loaded checkboxes
+                const loadedCheckboxes = container.querySelectorAll(
+                    'input[type="checkbox"]',
+                );
+                loadedCheckboxes.forEach((cb) => (cb.checked = true));
+
+                // Add a hidden input to indicate "select all" mode
+                // Remove any existing one first
+                let selectAllInput = container.querySelector(
+                    'input[name="selectAllTools"]',
+                );
+                if (!selectAllInput) {
+                    selectAllInput = document.createElement("input");
+                    selectAllInput.type = "hidden";
+                    selectAllInput.name = "selectAllTools";
+                    container.appendChild(selectAllInput);
+                }
+                selectAllInput.value = "true";
+
+                // Also store the IDs as a JSON array for the backend
+                let allIdsInput = container.querySelector(
+                    'input[name="allToolIds"]',
+                );
+                if (!allIdsInput) {
+                    allIdsInput = document.createElement("input");
+                    allIdsInput.type = "hidden";
+                    allIdsInput.name = "allToolIds";
+                    container.appendChild(allIdsInput);
+                }
+                allIdsInput.value = JSON.stringify(allToolIds);
+
+                update();
+
+                newSelectBtn.textContent = `✓ All ${allToolIds.length} tools selected`;
+                setTimeout(() => {
+                    newSelectBtn.textContent = originalText;
+                }, 2000);
+            } catch (error) {
+                console.error("Error in Select All:", error);
+                alert("Failed to select all tools. Please try again.");
+                newSelectBtn.disabled = false;
+                newSelectBtn.textContent = originalText;
+            } finally {
+                newSelectBtn.disabled = false;
+            }
         });
     }
 
     update(); // Initial render
-    checkboxes.forEach((cb) => cb.addEventListener("change", update));
+
+    // Attach change listeners to checkboxes (using delegation for dynamic content)
+    if (!container.dataset.changeListenerAttached) {
+        container.dataset.changeListenerAttached = "true";
+        container.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") {
+                // Check if we're in "Select All" mode
+                const selectAllInput = container.querySelector(
+                    'input[name="selectAllTools"]',
+                );
+                const allIdsInput = container.querySelector(
+                    'input[name="allToolIds"]',
+                );
+
+                if (
+                    selectAllInput &&
+                    selectAllInput.value === "true" &&
+                    allIdsInput
+                ) {
+                    // User is manually checking/unchecking after Select All
+                    // Update the allToolIds array to reflect the change
+                    try {
+                        let allIds = JSON.parse(allIdsInput.value);
+                        const toolId = e.target.value;
+
+                        if (e.target.checked) {
+                            // Add the ID if it's not already there
+                            if (!allIds.includes(toolId)) {
+                                allIds.push(toolId);
+                            }
+                        } else {
+                            // Remove the ID from the array
+                            allIds = allIds.filter((id) => id !== toolId);
+                        }
+
+                        // Update the hidden field
+                        allIdsInput.value = JSON.stringify(allIds);
+                    } catch (error) {
+                        console.error("Error updating allToolIds:", error);
+                    }
+                }
+                // Check if we're in edit server mode
+                else if (selectId === "edit-server-tools") {
+                    // In edit server mode, update the server tools data based on checkbox state
+                    const dataAttr =
+                        container.getAttribute("data-server-tools");
+                    let serverTools = [];
+
+                    if (dataAttr) {
+                        try {
+                            serverTools = JSON.parse(dataAttr);
+                        } catch (e) {
+                            console.error(
+                                "Error parsing data-server-tools:",
+                                e,
+                            );
+                        }
+                    }
+
+                    // Get the tool name from toolMapping to update serverTools array
+                    const toolId = e.target.value;
+                    const toolName =
+                        window.toolMapping && window.toolMapping[toolId];
+
+                    if (toolName) {
+                        if (e.target.checked) {
+                            // Add tool name to server tools if not already there
+                            if (!serverTools.includes(toolName)) {
+                                serverTools.push(toolName);
+                            }
+                        } else {
+                            // Remove tool name from server tools
+                            serverTools = serverTools.filter(
+                                (name) => name !== toolName,
+                            );
+                        }
+
+                        // Update the data attribute
+                        container.setAttribute(
+                            "data-server-tools",
+                            JSON.stringify(serverTools),
+                        );
+                    }
+                }
+
+                update();
+            }
+        });
+    }
 }
 
 function initResourceSelect(
@@ -5688,24 +6518,38 @@ function initResourceSelect(
         return;
     }
 
-    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
     const pillClasses =
         "inline-block px-3 py-1 text-xs font-semibold text-blue-700 bg-blue-100 rounded-full shadow dark:text-blue-300 dark:bg-blue-900";
 
     function update() {
         try {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             const checked = Array.from(checkboxes).filter((cb) => cb.checked);
             const count = checked.length;
 
-            // Rebuild pills safely
+            // Rebuild pills safely - show first 3, then summarize the rest
             pillsBox.innerHTML = "";
-            checked.forEach((cb) => {
+            const maxPillsToShow = 3;
+
+            checked.slice(0, maxPillsToShow).forEach((cb) => {
                 const span = document.createElement("span");
                 span.className = pillClasses;
                 span.textContent =
                     cb.nextElementSibling?.textContent?.trim() || "Unnamed";
                 pillsBox.appendChild(span);
             });
+
+            // If more than maxPillsToShow, show a summary pill
+            if (count > maxPillsToShow) {
+                const span = document.createElement("span");
+                span.className = pillClasses + " cursor-pointer";
+                span.title = "Click to see all selected resources";
+                const remaining = count - maxPillsToShow;
+                span.textContent = `+${remaining} more`;
+                pillsBox.appendChild(span);
+            }
 
             // Warning when > max
             if (count > max) {
@@ -5718,22 +6562,48 @@ function initResourceSelect(
         }
     }
 
-    if (clearBtn) {
-        clearBtn.addEventListener("click", () => {
+    // Remove old event listeners by cloning and replacing (preserving ID)
+    if (clearBtn && !clearBtn.dataset.listenerAttached) {
+        clearBtn.dataset.listenerAttached = "true";
+        const newClearBtn = clearBtn.cloneNode(true);
+        newClearBtn.dataset.listenerAttached = "true";
+        clearBtn.parentNode.replaceChild(newClearBtn, clearBtn);
+
+        newClearBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             checkboxes.forEach((cb) => (cb.checked = false));
             update();
         });
     }
 
-    if (selectBtn) {
-        selectBtn.addEventListener("click", () => {
+    if (selectBtn && !selectBtn.dataset.listenerAttached) {
+        selectBtn.dataset.listenerAttached = "true";
+        const newSelectBtn = selectBtn.cloneNode(true);
+        newSelectBtn.dataset.listenerAttached = "true";
+        selectBtn.parentNode.replaceChild(newSelectBtn, selectBtn);
+
+        newSelectBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             checkboxes.forEach((cb) => (cb.checked = true));
             update();
         });
     }
 
     update(); // Initial render
-    checkboxes.forEach((cb) => cb.addEventListener("change", update));
+
+    // Attach change listeners using delegation for dynamic content
+    if (!container.dataset.changeListenerAttached) {
+        container.dataset.changeListenerAttached = "true";
+        container.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") {
+                update();
+            }
+        });
+    }
 }
 
 function initPromptSelect(
@@ -5757,24 +6627,38 @@ function initPromptSelect(
         return;
     }
 
-    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
     const pillClasses =
         "inline-block px-3 py-1 text-xs font-semibold text-purple-700 bg-purple-100 rounded-full shadow dark:text-purple-300 dark:bg-purple-900";
 
     function update() {
         try {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             const checked = Array.from(checkboxes).filter((cb) => cb.checked);
             const count = checked.length;
 
-            // Rebuild pills safely
+            // Rebuild pills safely - show first 3, then summarize the rest
             pillsBox.innerHTML = "";
-            checked.forEach((cb) => {
+            const maxPillsToShow = 3;
+
+            checked.slice(0, maxPillsToShow).forEach((cb) => {
                 const span = document.createElement("span");
                 span.className = pillClasses;
                 span.textContent =
                     cb.nextElementSibling?.textContent?.trim() || "Unnamed";
                 pillsBox.appendChild(span);
             });
+
+            // If more than maxPillsToShow, show a summary pill
+            if (count > maxPillsToShow) {
+                const span = document.createElement("span");
+                span.className = pillClasses + " cursor-pointer";
+                span.title = "Click to see all selected prompts";
+                const remaining = count - maxPillsToShow;
+                span.textContent = `+${remaining} more`;
+                pillsBox.appendChild(span);
+            }
 
             // Warning when > max
             if (count > max) {
@@ -5787,22 +6671,48 @@ function initPromptSelect(
         }
     }
 
-    if (clearBtn) {
-        clearBtn.addEventListener("click", () => {
+    // Remove old event listeners by cloning and replacing (preserving ID)
+    if (clearBtn && !clearBtn.dataset.listenerAttached) {
+        clearBtn.dataset.listenerAttached = "true";
+        const newClearBtn = clearBtn.cloneNode(true);
+        newClearBtn.dataset.listenerAttached = "true";
+        clearBtn.parentNode.replaceChild(newClearBtn, clearBtn);
+
+        newClearBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             checkboxes.forEach((cb) => (cb.checked = false));
             update();
         });
     }
 
-    if (selectBtn) {
-        selectBtn.addEventListener("click", () => {
+    if (selectBtn && !selectBtn.dataset.listenerAttached) {
+        selectBtn.dataset.listenerAttached = "true";
+        const newSelectBtn = selectBtn.cloneNode(true);
+        newSelectBtn.dataset.listenerAttached = "true";
+        selectBtn.parentNode.replaceChild(newSelectBtn, selectBtn);
+
+        newSelectBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             checkboxes.forEach((cb) => (cb.checked = true));
             update();
         });
     }
 
     update(); // Initial render
-    checkboxes.forEach((cb) => cb.addEventListener("change", update));
+
+    // Attach change listeners using delegation for dynamic content
+    if (!container.dataset.changeListenerAttached) {
+        container.dataset.changeListenerAttached = "true";
+        container.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") {
+                update();
+            }
+        });
+    }
 }
 
 // ===================================================================
@@ -6591,19 +7501,18 @@ const promptTestState = {
 /**
  * Test a prompt by opening the prompt test modal
  */
-async function testPrompt(promptName) {
+async function testPrompt(promptId) {
     try {
-        console.log(`Testing prompt: ${promptName}`);
+        console.log(`Testing prompt ID: ${promptId}`);
 
         // Debouncing to prevent rapid clicking
         const now = Date.now();
-        const lastRequest =
-            promptTestState.lastRequestTime.get(promptName) || 0;
+        const lastRequest = promptTestState.lastRequestTime.get(promptId) || 0;
         const timeSinceLastRequest = now - lastRequest;
         const debounceDelay = 1000;
 
         if (timeSinceLastRequest < debounceDelay) {
-            console.log(`Prompt ${promptName} test request debounced`);
+            console.log(`Prompt ${promptId} test request debounced`);
             return;
         }
 
@@ -6615,7 +7524,7 @@ async function testPrompt(promptName) {
 
         // Update button state
         const testButton = document.querySelector(
-            `[onclick*="testPrompt('${promptName}')"]`,
+            `[onclick*="testPrompt('${promptId}')"]`,
         );
         if (testButton) {
             if (testButton.disabled) {
@@ -6630,8 +7539,8 @@ async function testPrompt(promptName) {
         }
 
         // Record request time and mark as active
-        promptTestState.lastRequestTime.set(promptName, now);
-        promptTestState.activeRequests.add(promptName);
+        promptTestState.lastRequestTime.set(promptId, now);
+        promptTestState.activeRequests.add(promptId);
 
         // Fetch prompt details
         const controller = new AbortController();
@@ -6640,7 +7549,7 @@ async function testPrompt(promptName) {
         try {
             // Fetch prompt details from the prompts endpoint (view mode)
             const response = await fetch(
-                `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptName)}`,
+                `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptId)}`,
                 {
                     method: "GET",
                     headers: {
@@ -6667,7 +7576,7 @@ async function testPrompt(promptName) {
             const descElement = safeGetElement("prompt-test-modal-description");
 
             if (titleElement) {
-                titleElement.textContent = `Test Prompt: ${prompt.name || promptName}`;
+                titleElement.textContent = `Test Prompt: ${prompt.name || promptId}`;
             }
             if (descElement) {
                 if (prompt.description) {
@@ -6704,7 +7613,7 @@ async function testPrompt(promptName) {
     } finally {
         // Always restore button state
         const testButton = document.querySelector(
-            `[onclick*="testPrompt('${promptName}')"]`,
+            `[onclick*="testPrompt('${promptId}')"]`,
         );
         if (testButton) {
             testButton.disabled = false;
@@ -6713,7 +7622,7 @@ async function testPrompt(promptName) {
         }
 
         // Clean up state
-        promptTestState.activeRequests.delete(promptName);
+        promptTestState.activeRequests.delete(promptId);
     }
 }
 
@@ -7849,7 +8758,6 @@ async function handleGatewayFormSubmit(e) {
 
             const queryString = searchParams.toString();
             const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#gateways`;
-
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -8009,7 +8917,13 @@ async function handlePromptFormSubmit(e) {
 async function handleEditPromptFormSubmit(e) {
     e.preventDefault();
     const form = e.target;
+
     const formData = new FormData(form);
+    // Add team_id from URL if present (like handleEditToolFormSubmit)
+    const teamId = new URL(window.location.href).searchParams.get("team_id");
+    if (teamId) {
+        formData.set("team_id", teamId);
+    }
 
     try {
         // Validate inputs
@@ -8139,6 +9053,7 @@ async function handleServerFormSubmit(e) {
 // Handle Add A2A Form Submit
 async function handleA2AFormSubmit(e) {
     e.preventDefault();
+
     const form = e.target;
     const formData = new FormData(form);
     const status = safeGetElement("a2aFormError");
@@ -8147,7 +9062,6 @@ async function handleA2AFormSubmit(e) {
     try {
         // Basic validation
         const name = formData.get("name");
-
         const nameValidation = validateInputName(name, "A2A Agent");
         if (!nameValidation.valid) {
             throw new Error(nameValidation.error);
@@ -8161,30 +9075,85 @@ async function handleA2AFormSubmit(e) {
             status.classList.remove("error-status");
         }
 
-        // Append visibility (radio buttons)
+        const isInactiveCheckedBool = isInactiveChecked("a2a-agents");
+        formData.append("is_inactive_checked", isInactiveCheckedBool);
+        // Process passthrough headers - convert comma-separated string to array
+        const passthroughHeadersString = formData.get("passthrough_headers");
+        if (passthroughHeadersString && passthroughHeadersString.trim()) {
+            // Split by comma and clean up each header name
+            const passthroughHeaders = passthroughHeadersString
+                .split(",")
+                .map((header) => header.trim())
+                .filter((header) => header.length > 0);
+
+            // Validate each header name
+            for (const headerName of passthroughHeaders) {
+                if (!HEADER_NAME_REGEX.test(headerName)) {
+                    showErrorMessage(
+                        `Invalid passthrough header name: "${headerName}". Only letters, numbers, and hyphens are allowed.`,
+                    );
+                    return;
+                }
+            }
+
+            // Remove the original string and add as JSON array
+            formData.delete("passthrough_headers");
+            formData.append(
+                "passthrough_headers",
+                JSON.stringify(passthroughHeaders),
+            );
+        }
+
+        // Handle auth_headers JSON field
+        const authHeadersJson = formData.get("auth_headers");
+        if (authHeadersJson) {
+            try {
+                const authHeaders = JSON.parse(authHeadersJson);
+                if (Array.isArray(authHeaders) && authHeaders.length > 0) {
+                    // Remove the JSON string and add as parsed data for backend processing
+                    formData.delete("auth_headers");
+                    formData.append(
+                        "auth_headers",
+                        JSON.stringify(authHeaders),
+                    );
+                }
+            } catch (e) {
+                console.error("Invalid auth_headers JSON:", e);
+            }
+        }
+
+        const authType = formData.get("auth_type");
+        if (authType !== "oauth") {
+            formData.set("oauth_grant_type", "");
+        }
 
         // ✅ Ensure visibility is captured from checked radio button
-
         // formData.set("visibility", visibility);
         formData.append("visibility", formData.get("visibility"));
-
         const teamId = new URL(window.location.href).searchParams.get(
             "team_id",
         );
         teamId && formData.append("team_id", teamId);
 
         // Submit to backend
+        // specifically log agentType only
+        console.log("agentType:", formData.get("agentType"));
+
         const response = await fetch(`${window.ROOT_PATH}/admin/a2a`, {
             method: "POST",
             body: formData,
         });
 
         const result = await response.json();
+
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add A2A Agent.");
         } else {
             // Success redirect
             const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
             if (teamId) {
                 searchParams.set("team_id", teamId);
             }
@@ -8356,6 +9325,8 @@ async function handleEditToolFormSubmit(event) {
         showErrorMessage(error.message);
     }
 }
+
+// Handle Gateway Edit Form
 async function handleEditGatewayFormSubmit(e) {
     e.preventDefault();
     const form = e.target;
@@ -8439,6 +9410,104 @@ async function handleEditGatewayFormSubmit(e) {
         }
         const queryString = searchParams.toString();
         const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#gateways`;
+        window.location.href = redirectUrl;
+    } catch (error) {
+        console.error("Error:", error);
+        showErrorMessage(error.message);
+    }
+}
+
+// Handle A2A Agent Edit Form
+async function handleEditA2AAgentFormSubmit(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+
+    console.log("Edit A2A Agent Form Details: ");
+    console.log(
+        JSON.stringify(Object.fromEntries(formData.entries()), null, 2),
+    );
+
+    try {
+        // Validate form inputs
+        const name = formData.get("name");
+        const url = formData.get("endpoint_url");
+        console.log("Original A2A URL: ", url);
+        const nameValidation = validateInputName(name, "a2a_agent");
+        const urlValidation = validateUrl(url);
+
+        if (!nameValidation.valid) {
+            throw new Error(nameValidation.error);
+        }
+
+        if (!urlValidation.valid) {
+            throw new Error(urlValidation.error);
+        }
+
+        // Handle passthrough headers
+        const passthroughHeadersString =
+            formData.get("passthrough_headers") || "";
+        const passthroughHeaders = passthroughHeadersString
+            .split(",")
+            .map((header) => header.trim())
+            .filter((header) => header.length > 0);
+
+        // Validate each header name
+        for (const headerName of passthroughHeaders) {
+            if (headerName && !HEADER_NAME_REGEX.test(headerName)) {
+                showErrorMessage(
+                    `Invalid passthrough header name: "${headerName}". Only letters, numbers, and hyphens are allowed.`,
+                );
+                return;
+            }
+        }
+
+        formData.append(
+            "passthrough_headers",
+            JSON.stringify(passthroughHeaders),
+        );
+
+        // Handle OAuth configuration
+        // NOTE: OAuth config assembly is now handled by the backend (mcpgateway/admin.py)
+        // The backend assembles individual form fields into oauth_config with proper field names
+        // and supports DCR (Dynamic Client Registration) when client_id/client_secret are empty
+        //
+        // Leaving this commented for reference:
+        // const authType = formData.get("auth_type");
+        // if (authType === "oauth") {
+        //     ... backend handles this now ...
+        // }
+
+        const authType = formData.get("auth_type");
+        if (authType !== "oauth") {
+            formData.set("oauth_grant_type", "");
+        }
+
+        const isInactiveCheckedBool = isInactiveChecked("a2a-agents");
+        formData.append("is_inactive_checked", isInactiveCheckedBool);
+        // Submit via fetch
+        const response = await fetch(form.action, {
+            method: "POST",
+            body: formData,
+        });
+        const result = await response.json();
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to edit a2a agent");
+        }
+        // Only redirect on success
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        const searchParams = new URLSearchParams();
+        if (isInactiveCheckedBool) {
+            searchParams.set("include_inactive", "true");
+        }
+        if (teamId) {
+            searchParams.set("team_id", teamId);
+        }
+        const queryString = searchParams.toString();
+        const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#a2a-agents`;
         window.location.href = redirectUrl;
     } catch (error) {
         console.error("Error:", error);
@@ -8976,6 +10045,7 @@ function initializeCodeMirrorEditors() {
 function initializeToolSelects() {
     console.log("Initializing tool selects...");
 
+    // Add Server form
     initToolSelect(
         "associatedTools",
         "selectedToolsPills",
@@ -8984,6 +10054,26 @@ function initializeToolSelects() {
         "selectAllToolsBtn",
         "clearAllToolsBtn",
     );
+
+    initResourceSelect(
+        "associatedResources",
+        "selectedResourcesPills",
+        "selectedResourcesWarning",
+        10,
+        "selectAllResourcesBtn",
+        "clearAllResourcesBtn",
+    );
+
+    initPromptSelect(
+        "associatedPrompts",
+        "selectedPromptsPills",
+        "selectedPromptsWarning",
+        8,
+        "selectAllPromptsBtn",
+        "clearAllPromptsBtn",
+    );
+
+    // Edit Server form
     initToolSelect(
         "edit-server-tools",
         "selectedEditToolsPills",
@@ -9015,14 +10105,16 @@ function initializeToolSelects() {
 }
 
 function initializeEventListeners() {
-    console.log("Setting up event listeners...");
+    console.log("🎯 Setting up event listeners...");
 
     setupTabNavigation();
     setupHTMXHooks();
+    console.log("✅ HTMX hooks registered");
     setupAuthenticationToggles();
     setupFormHandlers();
     setupSchemaModeHandlers();
     setupIntegrationTypeHandlers();
+    console.log("✅ All event listeners initialized");
 }
 
 function setupTabNavigation() {
@@ -9081,12 +10173,27 @@ function setupAuthenticationToggles() {
             bearerId: "auth-bearer-fields",
             headersId: "auth-headers-fields",
         },
+
+        // Gateway Add Form auth fields
+
         {
             id: "auth-type-gw",
             basicId: "auth-basic-fields-gw",
             bearerId: "auth-bearer-fields-gw",
             headersId: "auth-headers-fields-gw",
         },
+
+        // A2A Add Form auth fields
+
+        {
+            id: "auth-type-a2a",
+            basicId: "auth-basic-fields-a2a",
+            bearerId: "auth-bearer-fields-a2a",
+            headersId: "auth-headers-fields-a2a",
+        },
+
+        // Gateway Edit Form auth fields
+
         {
             id: "auth-type-gw-edit",
             basicId: "auth-basic-fields-gw-edit",
@@ -9094,6 +10201,17 @@ function setupAuthenticationToggles() {
             headersId: "auth-headers-fields-gw-edit",
             oauthId: "auth-oauth-fields-gw-edit",
         },
+
+        // A2A Edit Form auth fields
+
+        {
+            id: "auth-type-a2a-edit",
+            basicId: "auth-basic-fields-a2a-edit",
+            bearerId: "auth-bearer-fields-a2a-edit",
+            headersId: "auth-headers-fields-a2a-edit",
+            oauthId: "auth-oauth-fields-a2a-edit",
+        },
+
         {
             id: "edit-auth-type",
             basicId: "edit-auth-basic-fields",
@@ -9131,8 +10249,29 @@ function setupFormHandlers() {
             authTypeField.addEventListener("change", handleAuthTypeChange);
         }
 
-        // Add OAuth grant type change handler
+        // Add OAuth grant type change handler for Gateway
         const oauthGrantTypeField = safeGetElement("oauth-grant-type-gw");
+        if (oauthGrantTypeField) {
+            oauthGrantTypeField.addEventListener(
+                "change",
+                handleOAuthGrantTypeChange,
+            );
+        }
+    }
+
+    // Add A2A Form
+    const a2aForm = safeGetElement("add-a2a-form");
+
+    if (a2aForm) {
+        a2aForm.addEventListener("submit", handleA2AFormSubmit);
+
+        // Add OAuth authentication type change handler
+        const authTypeField = safeGetElement("auth-type-a2a");
+        if (authTypeField) {
+            authTypeField.addEventListener("change", handleAuthTypeChange);
+        }
+
+        const oauthGrantTypeField = safeGetElement("oauth-grant-type-a2a");
         if (oauthGrantTypeField) {
             oauthGrantTypeField.addEventListener(
                 "change",
@@ -9162,6 +10301,8 @@ function setupFormHandlers() {
     }
 
     // Add OAuth grant type change handler for Edit Gateway modal
+    // Checkpoint commented
+    /*
     const editOAuthGrantTypeField = safeGetElement("oauth-grant-type-gw-edit");
     if (editOAuthGrantTypeField) {
         editOAuthGrantTypeField.addEventListener(
@@ -9169,6 +10310,17 @@ function setupFormHandlers() {
             handleEditOAuthGrantTypeChange,
         );
     }
+
+    */
+
+    // Checkpoint Started
+    ["oauth-grant-type-gw-edit", "oauth-grant-type-a2a-edit"].forEach((id) => {
+        const field = safeGetElement(id);
+        if (field) {
+            field.addEventListener("change", handleEditOAuthGrantTypeChange);
+        }
+    });
+    // Checkpoint Ended
 
     const toolForm = safeGetElement("add-tool-form");
     if (toolForm) {
@@ -9193,12 +10345,6 @@ function setupFormHandlers() {
     const serverForm = safeGetElement("add-server-form");
     if (serverForm) {
         serverForm.addEventListener("submit", handleServerFormSubmit);
-    }
-
-    // Add A2A Form
-    const a2aForm = safeGetElement("add-a2a-form");
-    if (a2aForm) {
-        a2aForm.addEventListener("submit", handleA2AFormSubmit);
     }
 
     const editServerForm = safeGetElement("edit-server-form");
@@ -9241,6 +10387,19 @@ function setupFormHandlers() {
         });
     }
 
+    const editA2AAgentForm = safeGetElement("edit-a2a-agent-form");
+    if (editA2AAgentForm) {
+        editA2AAgentForm.addEventListener(
+            "submit",
+            handleEditA2AAgentFormSubmit,
+        );
+        editA2AAgentForm.addEventListener("click", () => {
+            if (getComputedStyle(editA2AAgentForm).display !== "none") {
+                refreshEditors();
+            }
+        });
+    }
+
     // Setup search functionality for selectors
     setupSelectorSearch();
 }
@@ -9249,17 +10408,22 @@ function setupFormHandlers() {
  * Setup search functionality for multi-select dropdowns
  */
 function setupSelectorSearch() {
-    // Tools search
+    // Tools search - server-side search
     const searchTools = safeGetElement("searchTools", true);
     if (searchTools) {
+        let searchTimeout;
         searchTools.addEventListener("input", function () {
-            filterSelectorItems(
-                this.value,
-                "#associatedTools",
-                ".tool-item",
-                "noToolsMessage",
-                "searchQuery",
-            );
+            const searchTerm = this.value;
+
+            // Clear previous timeout
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+            }
+
+            // Debounce search to avoid too many API calls
+            searchTimeout = setTimeout(() => {
+                serverSideToolSearch(searchTerm);
+            }, 300);
         });
     }
 
@@ -9392,24 +10556,26 @@ window.filterServerTable = filterServerTable;
 
 function handleAuthTypeChange() {
     const authType = this.value;
-    const basicFields = safeGetElement("auth-basic-fields-gw");
-    const bearerFields = safeGetElement("auth-bearer-fields-gw");
-    const headersFields = safeGetElement("auth-headers-fields-gw");
-    const oauthFields = safeGetElement("auth-oauth-fields-gw");
+
+    // Detect form type based on the element ID
+    // e.g., "auth-type-a2a" or "auth-type-gw"
+    const isA2A = this.id.includes("a2a");
+    const prefix = isA2A ? "a2a" : "gw";
+
+    // Select the correct field groups dynamically
+    const basicFields = safeGetElement(`auth-basic-fields-${prefix}`);
+    const bearerFields = safeGetElement(`auth-bearer-fields-${prefix}`);
+    const headersFields = safeGetElement(`auth-headers-fields-${prefix}`);
+    const oauthFields = safeGetElement(`auth-oauth-fields-${prefix}`);
 
     // Hide all auth sections first
-    if (basicFields) {
-        basicFields.style.display = "none";
-    }
-    if (bearerFields) {
-        bearerFields.style.display = "none";
-    }
-    if (headersFields) {
-        headersFields.style.display = "none";
-    }
-    if (oauthFields) {
-        oauthFields.style.display = "none";
-    }
+    [basicFields, bearerFields, headersFields, oauthFields].forEach(
+        (section) => {
+            if (section) {
+                section.style.display = "none";
+            }
+        },
+    );
 
     // Show the appropriate section
     switch (authType) {
@@ -9434,53 +10600,55 @@ function handleAuthTypeChange() {
             }
             break;
         default:
-            // No auth - keep everything hidden
+            // "none" or unknown type — keep everything hidden
             break;
     }
 }
 
 function handleOAuthGrantTypeChange() {
     const grantType = this.value;
-    const authCodeFields = safeGetElement("oauth-auth-code-fields-gw");
-    const usernameField = safeGetElement("oauth-username-field-gw");
-    const passwordField = safeGetElement("oauth-password-field-gw");
 
+    // Detect form type (a2a or gw) from the triggering element ID
+    const isA2A = this.id.includes("a2a");
+    const prefix = isA2A ? "a2a" : "gw";
+
+    // Select the correct fields dynamically based on prefix
+    const authCodeFields = safeGetElement(`oauth-auth-code-fields-${prefix}`);
+    const usernameField = safeGetElement(`oauth-username-field-${prefix}`);
+    const passwordField = safeGetElement(`oauth-password-field-${prefix}`);
+
+    // Handle Authorization Code flow
     if (authCodeFields) {
         if (grantType === "authorization_code") {
             authCodeFields.style.display = "block";
 
-            // Make authorization code specific fields required
+            // Make URL fields required
             const requiredFields =
                 authCodeFields.querySelectorAll('input[type="url"]');
-            requiredFields.forEach((field) => {
-                field.required = true;
-            });
+            requiredFields.forEach((field) => (field.required = true));
 
-            // Show additional validation for required fields
             console.log(
-                "Authorization Code flow selected - additional fields are now required",
+                `(${prefix.toUpperCase()}) Authorization Code flow selected - fields are now required`,
             );
         } else {
             authCodeFields.style.display = "none";
 
-            // Remove required validation for hidden fields
+            // Remove required validation
             const requiredFields =
                 authCodeFields.querySelectorAll('input[type="url"]');
-            requiredFields.forEach((field) => {
-                field.required = false;
-            });
+            requiredFields.forEach((field) => (field.required = false));
         }
     }
 
-    // Handle password grant type fields
+    // Handle Password Grant flow
     if (usernameField && passwordField) {
+        const usernameInput = safeGetElement(`oauth-username-${prefix}`);
+        const passwordInput = safeGetElement(`oauth-password-${prefix}`);
+
         if (grantType === "password") {
             usernameField.style.display = "block";
             passwordField.style.display = "block";
 
-            // Make username and password required for password grant
-            const usernameInput = safeGetElement("oauth-username-gw");
-            const passwordInput = safeGetElement("oauth-password-gw");
             if (usernameInput) {
                 usernameInput.required = true;
             }
@@ -9489,15 +10657,12 @@ function handleOAuthGrantTypeChange() {
             }
 
             console.log(
-                "Password grant flow selected - username and password are now required",
+                `(${prefix.toUpperCase()}) Password grant flow selected - username and password are now required`,
             );
         } else {
             usernameField.style.display = "none";
             passwordField.style.display = "none";
 
-            // Remove required validation for hidden fields
-            const usernameInput = safeGetElement("oauth-username-gw");
-            const passwordInput = safeGetElement("oauth-password-gw");
             if (usernameInput) {
                 usernameInput.required = false;
             }
@@ -9510,46 +10675,39 @@ function handleOAuthGrantTypeChange() {
 
 function handleEditOAuthGrantTypeChange() {
     const grantType = this.value;
-    const authCodeFields = safeGetElement("oauth-auth-code-fields-gw-edit");
-    const usernameField = safeGetElement("oauth-username-field-edit");
-    const passwordField = safeGetElement("oauth-password-field-edit");
 
+    // Detect prefix dynamically (supports both gw-edit and a2a-edit)
+    const id = this.id || "";
+    const prefix = id.includes("a2a") ? "a2a-edit" : "gw-edit";
+
+    const authCodeFields = safeGetElement(`oauth-auth-code-fields-${prefix}`);
+    const usernameField = safeGetElement(`oauth-username-field-${prefix}`);
+    const passwordField = safeGetElement(`oauth-password-field-${prefix}`);
+
+    // === Handle Authorization Code grant ===
     if (authCodeFields) {
+        const urlInputs = authCodeFields.querySelectorAll('input[type="url"]');
         if (grantType === "authorization_code") {
             authCodeFields.style.display = "block";
-
-            // Make authorization code specific fields required
-            const requiredFields =
-                authCodeFields.querySelectorAll('input[type="url"]');
-            requiredFields.forEach((field) => {
-                field.required = true;
-            });
-
-            // Show additional validation for required fields
+            urlInputs.forEach((field) => (field.required = true));
             console.log(
-                "Authorization Code flow selected - additional fields are now required",
+                `Authorization Code flow selected (${prefix}) - additional fields are now required`,
             );
         } else {
             authCodeFields.style.display = "none";
-
-            // Remove required validation for hidden fields
-            const requiredFields =
-                authCodeFields.querySelectorAll('input[type="url"]');
-            requiredFields.forEach((field) => {
-                field.required = false;
-            });
+            urlInputs.forEach((field) => (field.required = false));
         }
     }
 
-    // Handle password grant type fields
+    // === Handle Password grant ===
     if (usernameField && passwordField) {
+        const usernameInput = safeGetElement(`oauth-username-${prefix}`);
+        const passwordInput = safeGetElement(`oauth-password-${prefix}`);
+
         if (grantType === "password") {
             usernameField.style.display = "block";
             passwordField.style.display = "block";
 
-            // Make username and password required for password grant
-            const usernameInput = safeGetElement("oauth-username-gw-edit");
-            const passwordInput = safeGetElement("oauth-password-gw-edit");
             if (usernameInput) {
                 usernameInput.required = true;
             }
@@ -9558,15 +10716,12 @@ function handleEditOAuthGrantTypeChange() {
             }
 
             console.log(
-                "Password grant flow selected - username and password are now required",
+                `Password grant flow selected (${prefix}) - username and password are now required`,
             );
         } else {
             usernameField.style.display = "none";
             passwordField.style.display = "none";
 
-            // Remove required validation for hidden fields
-            const usernameInput = safeGetElement("oauth-username-gw-edit");
-            const passwordInput = safeGetElement("oauth-password-gw-edit");
             if (usernameInput) {
                 usernameInput.required = false;
             }
@@ -9713,6 +10868,7 @@ window.editGateway = editGateway;
 window.viewServer = viewServer;
 window.editServer = editServer;
 window.viewAgent = viewAgent;
+window.editA2AAgent = editA2AAgent;
 window.runToolTest = runToolTest;
 window.testPrompt = testPrompt;
 window.runPromptTest = runPromptTest;
@@ -10184,8 +11340,16 @@ function filterEntitiesByTags(entityType, tagsInput) {
         .split(",")
         .map((tag) => tag.trim().toLowerCase())
         .filter((tag) => tag);
-    const tableSelector = `#${entityType}-panel tbody tr`;
-    const rows = document.querySelectorAll(tableSelector);
+
+    let rows;
+    if (entityType === "a2a-agents") {
+        const panel = document.querySelector(`#${entityType}-panel`);
+        rows = panel.querySelectorAll(".border.rounded-lg.p-4");
+        // 👆 adjust selector if your agent cards have different class names
+    } else {
+        const tableSelector = `#${entityType}-panel tbody tr`;
+        rows = document.querySelectorAll(tableSelector);
+    }
 
     let visibleCount = 0;
 
@@ -10199,10 +11363,32 @@ function filterEntitiesByTags(entityType, tagsInput) {
 
         // Extract tags from this row using specific tag selectors (not status badges)
         const rowTags = new Set();
-        const tagElements = row.querySelectorAll(`
+
+        /*
+        const tagElements_ver1 = row.querySelectorAll(`
             span.inline-flex.items-center.px-2.py-0\\.5.rounded.text-xs.font-medium.bg-blue-100.text-blue-800,
             span.inline-block.bg-blue-100.text-blue-800.text-xs.px-2.py-1.rounded-full
         `);
+
+        const tagElements_ver2 = row.querySelectorAll(`
+            span.inline-flex.items-center.px-2\\.5.py-0\\.5.rounded-full.text-xs.font-medium.bg-blue-100.text-blue-800,
+            span.inline-flex.items-center.px-2\\.5.py-0\\.5.rounded-full.text-xs.font-medium.bg-gray-100.text-gray-700,
+            span.inline-flex.items-center.px-2.py-1.rounded.text-xs.bg-gray-100.text-gray-700,
+            span.inline-block.bg-blue-100.text-blue-800.text-xs.px-2.py-1.rounded-full
+        `);
+        */
+
+        const tagElements = row.querySelectorAll(`
+            /* Gateways */
+            span.inline-block.bg-blue-100.text-blue-800.text-xs.px-2.py-1.rounded-full,
+            /* A2A Agents */
+            span.inline-flex.items-center.px-2.py-1.rounded.text-xs.bg-gray-100.text-gray-700,
+            /* Prompts & Resources */
+            span.inline-flex.items-center.px-2.py-0\\.5.rounded.text-xs.font-medium.bg-blue-100.text-blue-800,
+            /* Gray tags for A2A agent metadata */
+            span.inline-flex.items-center.px-2\\.5.py-0\\.5.rounded-full.text-xs.font-medium.bg-gray-100.text-gray-700
+        `);
+
         tagElements.forEach((tagEl) => {
             const tagText = tagEl.textContent.trim().toLowerCase();
             // Filter out any remaining non-tag content
@@ -10302,6 +11488,7 @@ function initializeTagFiltering() {
         "prompts",
         "servers",
         "gateways",
+        "a2a-agents",
     ];
 
     entityTypes.forEach((entityType) => {
@@ -10338,6 +11525,35 @@ window.updateAvailableTags = updateAvailableTags;
 // ===================================================================
 
 /**
+ * Toggle masking for sensitive text inputs (passwords, tokens, headers)
+ * @param {HTMLElement|string} inputOrId - Target input element or its ID
+ * @param {HTMLElement} button - Button triggering the toggle
+ */
+function toggleInputMask(inputOrId, button) {
+    const input =
+        typeof inputOrId === "string"
+            ? document.getElementById(inputOrId)
+            : inputOrId;
+
+    if (!input || !button) {
+        return;
+    }
+
+    const revealing = input.type === "password";
+    input.type = revealing ? "text" : "password";
+
+    const label = input.getAttribute("data-sensitive-label") || "value";
+    button.textContent = revealing ? "Hide" : "Show";
+    button.setAttribute("aria-pressed", revealing ? "true" : "false");
+    button.setAttribute(
+        "aria-label",
+        `${revealing ? "Hide" : "Show"} ${label}`.trim(),
+    );
+}
+
+window.toggleInputMask = toggleInputMask;
+
+/**
  * Global counter for unique header IDs
  */
 let headerCounter = 0;
@@ -10354,6 +11570,7 @@ function addAuthHeader(containerId) {
     }
 
     const headerId = `auth-header-${++headerCounter}`;
+    const valueInputId = `${headerId}-value`;
 
     const headerRow = document.createElement("div");
     headerRow.className = "flex items-center space-x-2";
@@ -10369,12 +11586,25 @@ function addAuthHeader(containerId) {
             />
         </div>
         <div class="flex-1">
-            <input
-                type="password"
-                placeholder="Header Value"
-                class="auth-header-value block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300 text-sm"
-                oninput="updateAuthHeadersJSON('${containerId}')"
-            />
+            <div class="relative">
+                <input
+                    type="password"
+                    id="${valueInputId}"
+                    placeholder="Header Value"
+                    data-sensitive-label="header value"
+                    class="auth-header-value block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300 text-sm pr-16"
+                    oninput="updateAuthHeadersJSON('${containerId}')"
+                />
+                <button
+                    type="button"
+                    class="absolute inset-y-0 right-0 flex items-center px-2 text-xs font-medium text-indigo-600 hover:text-indigo-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:text-indigo-300"
+                    onclick="toggleInputMask('${valueInputId}', this)"
+                    aria-pressed="false"
+                    aria-label="Show header value"
+                >
+                    Show
+                </button>
+            </div>
         </div>
         <button
             type="button"
@@ -10479,10 +11709,14 @@ function updateAuthHeadersJSON(containerId) {
         jsonInput = document.getElementById("auth-headers-json");
     } else if (containerId === "auth-headers-container-gw") {
         jsonInput = document.getElementById("auth-headers-json-gw");
+    } else if (containerId === "auth-headers-container-a2a") {
+        jsonInput = document.getElementById("auth-headers-json-a2a");
     } else if (containerId === "edit-auth-headers-container") {
         jsonInput = document.getElementById("edit-auth-headers-json");
     } else if (containerId === "auth-headers-container-gw-edit") {
         jsonInput = document.getElementById("auth-headers-json-gw-edit");
+    } else if (containerId === "auth-headers-container-a2a-edit") {
+        jsonInput = document.getElementById("auth-headers-json-a2a-edit");
     }
 
     // Warn about duplicate keys in console
@@ -11700,6 +12934,9 @@ function displayTokensList(tokens) {
         const expiresText = token.expires_at
             ? new Date(token.expires_at).toLocaleDateString()
             : "Never";
+        const createdText = token.created_at
+            ? new Date(token.created_at).toLocaleDateString()
+            : "Never";
         const lastUsedText = token.last_used
             ? new Date(token.last_used).toLocaleDateString()
             : "Never";
@@ -11718,7 +12955,7 @@ function displayTokensList(tokens) {
                         ${token.description ? `<p class="text-sm text-gray-600 dark:text-gray-400 mt-1">${escapeHtml(token.description)}</p>` : ""}
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3 text-sm text-gray-500 dark:text-gray-400">
                             <div>
-                                <span class="font-medium">Created:</span> ${new Date(token.createdAt).toLocaleDateString()}
+                                <span class="font-medium">Created:</span> ${createdText}
                             </div>
                             <div>
                                 <span class="font-medium">Expires:</span> ${expiresText}
@@ -14486,6 +15723,65 @@ window.submitApiKeyForm = function (event) {
         });
 };
 
+// gRPC Services Functions
+
+/**
+ * Toggle visibility of TLS certificate/key fields based on TLS checkbox
+ */
+window.toggleGrpcTlsFields = function () {
+    const tlsEnabled =
+        document.getElementById("grpc-tls-enabled")?.checked || false;
+    const certField = document.getElementById("grpc-tls-cert-field");
+    const keyField = document.getElementById("grpc-tls-key-field");
+
+    if (tlsEnabled) {
+        certField?.classList.remove("hidden");
+        keyField?.classList.remove("hidden");
+    } else {
+        certField?.classList.add("hidden");
+        keyField?.classList.add("hidden");
+    }
+};
+
+/**
+ * View gRPC service methods in a modal or alert
+ * @param {string} serviceId - The gRPC service ID
+ */
+window.viewGrpcMethods = function (serviceId) {
+    const rootPath = window.ROOT_PATH || "";
+
+    fetch(`${rootPath}/grpc/${serviceId}/methods`, {
+        method: "GET",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + (getCookie("jwt_token") || ""),
+        },
+    })
+        .then((response) => response.json())
+        .then((data) => {
+            if (data.methods && data.methods.length > 0) {
+                let methodsList = "gRPC Methods:\n\n";
+                data.methods.forEach((method) => {
+                    methodsList += `${method.full_name}\n`;
+                    methodsList += `  Input: ${method.input_type || "N/A"}\n`;
+                    methodsList += `  Output: ${method.output_type || "N/A"}\n`;
+                    if (method.client_streaming || method.server_streaming) {
+                        methodsList += `  Streaming: ${method.client_streaming ? "Client" : ""} ${method.server_streaming ? "Server" : ""}\n`;
+                    }
+                    methodsList += "\n";
+                });
+                alert(methodsList);
+            } else {
+                alert(
+                    "No methods discovered for this service. Try re-reflecting the service.",
+                );
+            }
+        })
+        .catch((error) => {
+            alert("Error fetching methods: " + error);
+        });
+};
+
 // Helper function to get cookie if not already defined
 if (typeof window.getCookie === "undefined") {
     window.getCookie = function (name) {
@@ -14764,6 +16060,7 @@ function handleLLMProviderChange() {
     const openaiFields = document.getElementById("openai-fields");
     const anthropicFields = document.getElementById("anthropic-fields");
     const awsBedrockFields = document.getElementById("aws-bedrock-fields");
+    const watsonxFields = document.getElementById("watsonx-fields");
     const ollamaFields = document.getElementById("ollama-fields");
 
     // Hide all fields first
@@ -14771,6 +16068,7 @@ function handleLLMProviderChange() {
     openaiFields.classList.add("hidden");
     anthropicFields.classList.add("hidden");
     awsBedrockFields.classList.add("hidden");
+    watsonxFields.classList.add("hidden");
     ollamaFields.classList.add("hidden");
 
     // Show relevant fields
@@ -14782,6 +16080,8 @@ function handleLLMProviderChange() {
         anthropicFields.classList.remove("hidden");
     } else if (provider === "aws_bedrock") {
         awsBedrockFields.classList.remove("hidden");
+    } else if (provider === "watsonx") {
+        watsonxFields.classList.remove("hidden");
     } else if (provider === "ollama") {
         ollamaFields.classList.remove("hidden");
     }
@@ -15098,6 +16398,47 @@ function buildLLMConfig(provider) {
         if (maxTokens) {
             config.config.max_tokens = parseInt(maxTokens, 10);
         }
+    } else if (provider === "watsonx") {
+        const apiKey = document.getElementById("watsonx-api-key").value.trim();
+        const url = document.getElementById("watsonx-url").value.trim();
+        const projectId = document
+            .getElementById("watsonx-project-id")
+            .value.trim();
+        const modelId = document
+            .getElementById("watsonx-model-id")
+            .value.trim();
+        const temperature = document
+            .getElementById("watsonx-temperature")
+            .value.trim();
+        const maxNewTokens = document
+            .getElementById("watsonx-max-new-tokens")
+            .value.trim();
+        const decodingMethod = document
+            .getElementById("watsonx-decoding-method")
+            .value.trim();
+
+        // Only include non-empty values
+        if (apiKey) {
+            config.config.apikey = apiKey;
+        }
+        if (url) {
+            config.config.url = url;
+        }
+        if (projectId) {
+            config.config.projectid = projectId;
+        }
+        if (modelId) {
+            config.config.modelid = modelId;
+        }
+        if (temperature) {
+            config.config.temperature = parseFloat(temperature);
+        }
+        if (maxNewTokens) {
+            config.config.maxnewtokens = parseInt(maxNewTokens, 10);
+        }
+        if (decodingMethod) {
+            config.config.decodingmethod = decodingMethod;
+        }
     } else if (provider === "ollama") {
         const model = document.getElementById("ollama-model").value.trim();
         const baseUrl = document.getElementById("ollama-base-url").value.trim();
@@ -15144,6 +16485,12 @@ ANTHROPIC_MAX_TOKENS=4096`,
 AWS_BEDROCK_REGION=us-east-1
 AWS_ACCESS_KEY_ID=<optional>
 AWS_SECRET_ACCESS_KEY=<optional>`,
+
+        watsonx: `WATSONX_APIKEY=apikey
+WATSONX_URL=https://us-south.ml.cloud.ibm.com
+WATSONX_PROJECT_ID=project-id
+WATSONX_MODEL_ID=ibm/granite-13b-chat-v2
+WATSONX_TEMPERATURE=0.7`,
 
         ollama: `OLLAMA_MODEL=llama3
 OLLAMA_BASE_URL=http://localhost:11434`,
@@ -16269,6 +17616,150 @@ function initializeChatInputResize() {
             });
         }
     }
+}
+/**
+ * Perform server-side search for tools and update the tool list
+ */
+async function serverSideToolSearch(searchTerm) {
+    const container = document.getElementById("associatedTools");
+    const noResultsMessage = safeGetElement("noToolsMessage", true);
+    const searchQuerySpan = safeGetElement("searchQuery", true);
+
+    if (!container) {
+        console.error("associatedTools container not found");
+        return;
+    }
+
+    // Show loading state
+    container.innerHTML = `
+        <div class="text-center py-4">
+            <svg class="animate-spin h-5 w-5 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-2 text-sm text-gray-500">Searching tools...</p>
+        </div>
+    `;
+
+    if (searchTerm.trim() === "") {
+        // If search term is empty, reload the default tool list
+        try {
+            const response = await fetch(
+                `${window.ROOT_PATH}/admin/tools/partial?page=1&per_page=50&render=selector`,
+            );
+            if (response.ok) {
+                const html = await response.text();
+                container.innerHTML = html;
+
+                // Hide no results message
+                if (noResultsMessage) {
+                    noResultsMessage.style.display = "none";
+                }
+
+                // Update tool mapping if needed
+                updateToolMapping(container);
+            } else {
+                container.innerHTML =
+                    '<div class="text-center py-4 text-red-600">Failed to load tools</div>';
+            }
+        } catch (error) {
+            console.error("Error loading tools:", error);
+            container.innerHTML =
+                '<div class="text-center py-4 text-red-600">Error loading tools</div>';
+        }
+        return;
+    }
+
+    try {
+        // Call the new search API
+        const response = await fetch(
+            `${window.ROOT_PATH}/admin/tools/search?q=${encodeURIComponent(searchTerm)}&limit=100`,
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.tools && data.tools.length > 0) {
+            // Create HTML for search results
+            let searchResultsHtml = "";
+            data.tools.forEach((tool) => {
+                // Create a label element similar to the ones in tools_selector_items.html
+                // Use the same name priority as the template: displayName or customName or original_name
+                const displayName =
+                    tool.display_name ||
+                    tool.custom_name ||
+                    tool.name ||
+                    tool.id;
+
+                searchResultsHtml += `
+                    <label
+                        class="flex items-center space-x-3 text-gray-700 dark:text-gray-300 mb-2 cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900 rounded-md p-1 tool-item"
+                        data-tool-id="${escapeHtml(tool.id)}"
+                    >
+                        <input
+                            type="checkbox"
+                            name="associatedTools"
+                            value="${escapeHtml(tool.id)}"
+                            data-tool-name="${escapeHtml(displayName)}"
+                            class="tool-checkbox form-checkbox h-5 w-5 text-indigo-600 dark:bg-gray-800 dark:border-gray-600"
+                        />
+                        <span class="select-none">${escapeHtml(displayName)}</span>
+                    </label>
+                `;
+            });
+
+            container.innerHTML = searchResultsHtml;
+
+            // Update tool mapping with search results
+            updateToolMapping(container);
+
+            // Hide no results message
+            if (noResultsMessage) {
+                noResultsMessage.style.display = "none";
+            }
+        } else {
+            // Show no results message
+            container.innerHTML = "";
+            if (noResultsMessage) {
+                if (searchQuerySpan) {
+                    searchQuerySpan.textContent = searchTerm;
+                }
+                noResultsMessage.style.display = "block";
+            }
+        }
+    } catch (error) {
+        console.error("Error searching tools:", error);
+        container.innerHTML =
+            '<div class="text-center py-4 text-red-600">Error searching tools</div>';
+
+        // Hide no results message in case of error
+        if (noResultsMessage) {
+            noResultsMessage.style.display = "none";
+        }
+    }
+}
+
+/**
+ * Update the tool mapping with tools in the given container
+ */
+function updateToolMapping(container) {
+    if (!window.toolMapping) {
+        window.toolMapping = {};
+    }
+
+    const checkboxes = container.querySelectorAll(
+        'input[name="associatedTools"]',
+    );
+    checkboxes.forEach((checkbox) => {
+        const toolId = checkbox.value;
+        const toolName = checkbox.getAttribute("data-tool-name");
+        if (toolId && toolName) {
+            window.toolMapping[toolId] = toolName;
+        }
+    });
 }
 
 // Add CSS for streaming indicator animation
