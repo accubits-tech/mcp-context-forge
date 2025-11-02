@@ -43,11 +43,7 @@ import httpx
 import jwt
 from pydantic import BaseModel, SecretStr, ValidationError
 from pydantic_core import ValidationError as CoreValidationError
-<<<<<<< HEAD
-from sqlalchemy import select
-=======
 from sqlalchemy import and_, func, or_, select
->>>>>>> upstream/main
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.functions import coalesce
