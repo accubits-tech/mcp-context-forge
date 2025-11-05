@@ -6474,3 +6474,97 @@ class PaginationParams(BaseModel):
     cursor: Optional[str] = Field(None, description="Cursor for cursor-based pagination")
     sort_by: Optional[str] = Field("created_at", description="Sort field")
     sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$", description="Sort order")
+
+
+# --- OAuth JSON API Schemas ---
+
+
+class OAuthInitiateRequest(BaseModelWithConfigDict):
+    """Request schema for initiating OAuth flow with JSON response.
+
+    Attributes:
+        gateway_id: The ID or slug of the gateway to authenticate with
+
+    Examples:
+        >>> request = OAuthInitiateRequest(gateway_id="github-orgA")
+        >>> request.gateway_id
+        'github-orgA'
+    """
+
+    gateway_id: str = Field(..., description="Gateway ID or slug to authenticate with")
+
+
+class OAuthInitiateResponse(BaseModelWithConfigDict):
+    """Response schema for OAuth initiation endpoint.
+
+    Attributes:
+        authorization_url: The OAuth provider's authorization URL to redirect user to
+        state: The state parameter for CSRF protection (to be included in callback)
+        expires_in: Number of seconds until the state expires (typically 300)
+        gateway_id: The gateway ID that was requested
+
+    Examples:
+        >>> response = OAuthInitiateResponse(
+        ...     authorization_url="https://github.com/login/oauth/authorize?client_id=...",
+        ...     state="hmac_signed_state_value",
+        ...     expires_in=300,
+        ...     gateway_id="github-orgA"
+        ... )
+        >>> response.expires_in
+        300
+    """
+
+    authorization_url: str = Field(..., description="OAuth provider authorization URL")
+    state: str = Field(..., description="State parameter for CSRF protection")
+    expires_in: int = Field(..., description="State expiration time in seconds")
+    gateway_id: str = Field(..., description="Gateway ID")
+
+
+class OAuthCallbackRequest(BaseModelWithConfigDict):
+    """Request schema for OAuth callback endpoint.
+
+    Attributes:
+        code: The authorization code from the OAuth provider
+        state: The state parameter from the authorization request
+
+    Examples:
+        >>> request = OAuthCallbackRequest(
+        ...     code="oauth_authorization_code_123",
+        ...     state="hmac_signed_state_value"
+        ... )
+        >>> request.code
+        'oauth_authorization_code_123'
+    """
+
+    code: str = Field(..., description="Authorization code from OAuth provider")
+    state: str = Field(..., description="State parameter from authorization request")
+
+
+class OAuthCallbackResponse(BaseModelWithConfigDict):
+    """Response schema for OAuth callback endpoint.
+
+    Attributes:
+        success: Whether the OAuth flow completed successfully
+        gateway_id: The gateway that was authenticated
+        user_id: The user ID (email) who completed authentication
+        expires_at: ISO 8601 timestamp when the access token expires
+        message: Human-readable status message
+
+    Examples:
+        >>> from datetime import datetime, timezone
+        >>> response = OAuthCallbackResponse(
+        ...     success=True,
+        ...     gateway_id="github-orgA",
+        ...     user_id="user@example.com",
+        ...     expires_at="2025-11-05T12:00:00+00:00",
+        ...     message="OAuth authentication successful"
+        ... )
+        >>> response.success
+        True
+    """
+
+    success: bool = Field(..., description="Whether OAuth flow completed successfully")
+    gateway_id: str = Field(..., description="Gateway ID that was authenticated")
+    user_id: str = Field(..., description="User ID (email) who completed authentication")
+    expires_at: Optional[str] = Field(None, description="ISO 8601 timestamp when access token expires")
+    message: str = Field(..., description="Status message")

@@ -684,3 +684,246 @@ async def delete_registered_client(client_id: str, current_user: EmailUserRespon
         logger.error(f"Failed to delete registered client {client_id}: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete registered client: {str(e)}")
+
+
+# --- JSON API Endpoints for OAuth ---
+
+
+@oauth_router.post("/api/initiate", response_model=Dict[str, Any])
+async def initiate_oauth_json(gateway_id: str, current_user: EmailUserResponse = Depends(get_current_user_with_permissions), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Initiates the OAuth 2.0 Authorization Code flow and returns JSON with authorization URL.
+
+    This endpoint is a JSON-based alternative to the redirect-based /oauth/authorize/{gateway_id}.
+    It performs the same OAuth flow initialization but returns the authorization URL in JSON format
+    instead of redirecting the user. This allows client applications to handle the redirect themselves.
+
+    **Phase 1.4: DCR Integration**
+    If the gateway has an issuer but no client_id, and DCR is enabled, this endpoint will
+    automatically register the gateway as an OAuth client with the Authorization Server
+    using Dynamic Client Registration (RFC 7591).
+
+    Args:
+        gateway_id: The unique identifier of the gateway to authorize.
+        current_user: The authenticated user initiating the OAuth flow.
+        db: The database session dependency.
+
+    Returns:
+        JSON object containing:
+        - authorization_url: The OAuth provider's authorization URL
+        - state: The state parameter for CSRF protection
+        - expires_in: Number of seconds until the state expires (typically 300)
+        - gateway_id: The gateway ID that was requested
+
+    Raises:
+        HTTPException: If the gateway is not found, not configured for OAuth, or not using
+            the Authorization Code flow. If an unexpected error occurs during the initiation process.
+
+    Examples:
+        >>> import asyncio
+        >>> asyncio.iscoroutinefunction(initiate_oauth_json)
+        True
+    """
+    # First-Party
+    from mcpgateway.schemas import OAuthInitiateResponse
+
+    try:
+        # Get gateway configuration
+        gateway = db.execute(select(Gateway).where(Gateway.id == gateway_id)).scalar_one_or_none()
+
+        if not gateway:
+            raise HTTPException(status_code=404, detail="Gateway not found")
+
+        if not gateway.oauth_config:
+            raise HTTPException(status_code=400, detail="Gateway is not configured for OAuth")
+
+        if gateway.oauth_config.get("grant_type") != "authorization_code":
+            raise HTTPException(status_code=400, detail="Gateway is not configured for Authorization Code flow")
+
+        oauth_config = gateway.oauth_config.copy()  # Work with a copy to avoid mutating the original
+
+        # Phase 1.4: Auto-trigger DCR if credentials are missing
+        issuer = oauth_config.get("issuer")
+        client_id = oauth_config.get("client_id")
+
+        if issuer and not client_id:
+            if settings.dcr_enabled and settings.dcr_auto_register_on_missing_credentials:
+                logger.info(f"Gateway {gateway_id} has issuer but no client_id. Attempting DCR...")
+
+                try:
+                    dcr_service = DcrService()
+
+                    registered_client = await dcr_service.get_or_register_client(
+                        gateway_id=gateway_id,
+                        gateway_name=gateway.name,
+                        issuer=issuer,
+                        redirect_uri=oauth_config.get("redirect_uri"),
+                        scopes=oauth_config.get("scopes", settings.dcr_default_scopes),
+                        db=db,
+                    )
+
+                    logger.info(f"✅ DCR successful for gateway {gateway_id}: client_id={registered_client.client_id}")
+
+                    # Decrypt the client secret for use in OAuth flow
+                    decrypted_secret = None
+                    if registered_client.client_secret_encrypted:
+                        # First-Party
+                        from mcpgateway.utils.oauth_encryption import get_oauth_encryption
+
+                        encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                        decrypted_secret = encryption.decrypt_secret(registered_client.client_secret_encrypted)
+
+                    # Update oauth_config with registered credentials
+                    oauth_config["client_id"] = registered_client.client_id
+                    if decrypted_secret:
+                        oauth_config["client_secret"] = decrypted_secret
+
+                    # Discover AS metadata to get authorization/token endpoints
+                    if not oauth_config.get("authorization_url") or not oauth_config.get("token_url"):
+                        metadata = await dcr_service.discover_as_metadata(issuer)
+                        oauth_config["authorization_url"] = metadata.get("authorization_endpoint")
+                        oauth_config["token_url"] = metadata.get("token_endpoint")
+                        logger.info(f"Discovered OAuth endpoints for {issuer}")
+
+                    # Update gateway's oauth_config and auth_type in database
+                    gateway.oauth_config = oauth_config
+                    gateway.auth_type = "oauth"
+                    db.commit()
+
+                    logger.info(f"Updated gateway {gateway_id} with DCR credentials and auth_type=oauth")
+
+                except DcrError as dcr_err:
+                    logger.error(f"DCR failed for gateway {gateway_id}: {dcr_err}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Dynamic Client Registration failed: {str(dcr_err)}. Please configure client_id and client_secret manually or check your OAuth server supports RFC 7591.",
+                    )
+                except Exception as dcr_ex:
+                    logger.error(f"Unexpected error during DCR for gateway {gateway_id}: {dcr_ex}")
+                    raise HTTPException(status_code=500, detail=f"Failed to register OAuth client: {str(dcr_ex)}")
+            else:
+                logger.warning(f"Gateway {gateway_id} has issuer but no client_id, and DCR auto-registration is disabled")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Gateway OAuth configuration is incomplete. Please provide client_id and client_secret, or enable DCR (Dynamic Client Registration) by setting MCPGATEWAY_DCR_ENABLED=true and MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS=true",
+                )
+
+        # Validate required fields for OAuth flow
+        if not oauth_config.get("client_id"):
+            raise HTTPException(status_code=400, detail="OAuth configuration missing client_id")
+
+        # Initiate OAuth flow with user context (includes PKCE)
+        oauth_manager = OAuthManager(token_storage=TokenStorageService(db))
+        auth_data = await oauth_manager.initiate_authorization_code_flow(gateway_id, oauth_config, app_user_email=current_user.get("email"))
+
+        logger.info(f"Initiated OAuth flow (JSON API) for gateway {gateway_id} by user {current_user.get('email')}")
+
+        # Return JSON response with authorization URL instead of redirecting
+        return OAuthInitiateResponse(authorization_url=auth_data["authorization_url"], state=auth_data["state"], expires_in=auth_data.get("expires_in", 300), gateway_id=gateway_id).model_dump()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to initiate OAuth flow (JSON API): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to initiate OAuth flow: {str(e)}")
+
+
+@oauth_router.post("/api/callback", response_model=Dict[str, Any])
+async def oauth_callback_json(code: str, state: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Handle the OAuth callback and complete the authorization process, returning JSON response.
+
+    This endpoint is a JSON-based alternative to the HTML-based /oauth/callback.
+    It allows client applications to programmatically handle OAuth callbacks by accepting
+    the authorization code and state parameters that were received from the OAuth provider,
+    and returns a JSON response with the authentication status.
+
+    This is useful when your application receives the OAuth callback and needs to forward
+    the parameters to the MCP Gateway for token exchange and storage.
+
+    Args:
+        code: The authorization code returned by the OAuth provider.
+        state: The state parameter for CSRF protection, which encodes the gateway ID.
+        db: The database session dependency.
+
+    Returns:
+        JSON object containing:
+        - success: Whether the OAuth flow completed successfully
+        - gateway_id: The gateway that was authenticated
+        - user_id: The user ID (email) who completed authentication
+        - expires_at: ISO 8601 timestamp when the access token expires
+        - message: Human-readable status message
+
+    Raises:
+        HTTPException: If state validation fails, gateway not found, or token exchange fails.
+
+    Examples:
+        >>> import asyncio
+        >>> asyncio.iscoroutinefunction(oauth_callback_json)
+        True
+    """
+    # First-Party
+    from mcpgateway.schemas import OAuthCallbackResponse
+
+    try:
+        # Extract gateway_id from state parameter
+        # Standard
+        import base64
+        import json
+
+        try:
+            # Decode state (base64url encoded JSON with HMAC signature)
+            state_raw = base64.urlsafe_b64decode(state.encode())
+            if len(state_raw) <= 32:
+                raise HTTPException(status_code=400, detail="Invalid state parameter: too short")
+
+            # Split payload and signature (last 32 bytes)
+            payload_bytes = state_raw[:-32]
+
+            try:
+                state_data = json.loads(payload_bytes.decode())
+            except Exception as decode_exc:
+                raise HTTPException(status_code=400, detail=f"Failed to parse state payload: {decode_exc}")
+
+            gateway_id = state_data.get("gateway_id")
+            if not gateway_id:
+                raise HTTPException(status_code=400, detail="No gateway_id in state parameter")
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Fallback to legacy format (gateway_id_random)
+            logger.warning(f"Failed to decode state as JSON, trying legacy format: {e}")
+            if "_" not in state:
+                raise HTTPException(status_code=400, detail="Invalid state parameter format")
+            gateway_id = state.split("_")[0]
+
+        # Get gateway configuration
+        gateway = db.execute(select(Gateway).where(Gateway.id == gateway_id)).scalar_one_or_none()
+
+        if not gateway:
+            raise HTTPException(status_code=404, detail="Gateway not found")
+
+        if not gateway.oauth_config:
+            raise HTTPException(status_code=400, detail="Gateway has no OAuth configuration")
+
+        # Complete OAuth flow
+        oauth_manager = OAuthManager(token_storage=TokenStorageService(db))
+        result = await oauth_manager.complete_authorization_code_flow(gateway_id, code, state, gateway.oauth_config)
+
+        logger.info(f"Completed OAuth flow (JSON API) for gateway {gateway_id}, user {result.get('user_id')}")
+
+        # Return JSON response with authentication status
+        return OAuthCallbackResponse(
+            success=True,
+            gateway_id=gateway_id,
+            user_id=result.get("user_id", "unknown"),
+            expires_at=result.get("expires_at"),
+            message="OAuth authentication successful",
+        ).model_dump()
+
+    except HTTPException:
+        raise
+    except OAuthError as oauth_err:
+        logger.error(f"OAuth error in callback (JSON API): {oauth_err}")
+        raise HTTPException(status_code=400, detail=str(oauth_err))
+    except Exception as e:
+        logger.error(f"Failed to complete OAuth callback (JSON API): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")

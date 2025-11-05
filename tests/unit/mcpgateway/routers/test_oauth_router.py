@@ -478,3 +478,183 @@ class TestOAuthRouter:
             # Assert
             assert result["success"] is True
             assert "Successfully fetched and created 0 tools" in result["message"]
+
+    # --- Tests for JSON API Endpoints ---
+
+    @pytest.mark.asyncio
+    async def test_initiate_oauth_json_success(self, mock_db, mock_gateway, mock_current_user):
+        """Test successful OAuth flow initiation with JSON response."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        auth_data = {
+            "authorization_url": "https://oauth.example.com/authorize?client_id=test_client&response_type=code&state=gateway123_abc123",
+            "state": "gateway123_abc123",
+            "expires_in": 300,
+        }
+
+        with patch("mcpgateway.routers.oauth_router.OAuthManager") as mock_oauth_manager_class:
+            mock_oauth_manager = Mock()
+            mock_oauth_manager.initiate_authorization_code_flow = AsyncMock(return_value=auth_data)
+            mock_oauth_manager_class.return_value = mock_oauth_manager
+
+            with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+                mock_token_storage = Mock()
+                mock_token_storage_class.return_value = mock_token_storage
+
+                # First-Party
+                from mcpgateway.routers.oauth_router import initiate_oauth_json
+
+                # Execute
+                result = await initiate_oauth_json("gateway123", mock_current_user, mock_db)
+
+                # Assert
+                assert result["authorization_url"] == auth_data["authorization_url"]
+                assert result["state"] == auth_data["state"]
+                assert result["expires_in"] == 300
+                assert result["gateway_id"] == "gateway123"
+
+    @pytest.mark.asyncio
+    async def test_initiate_oauth_json_gateway_not_found(self, mock_db, mock_current_user):
+        """Test JSON OAuth initiation with non-existent gateway."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        # First-Party
+        from mcpgateway.routers.oauth_router import initiate_oauth_json
+
+        # Execute & Assert
+        with pytest.raises(HTTPException) as exc_info:
+            await initiate_oauth_json("nonexistent", mock_current_user, mock_db)
+
+        assert exc_info.value.status_code == 404
+        assert "Gateway not found" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_initiate_oauth_json_no_oauth_config(self, mock_db, mock_current_user):
+        """Test JSON OAuth initiation with gateway missing OAuth config."""
+        # Setup
+        mock_gateway = Mock(spec=Gateway)
+        mock_gateway.oauth_config = None
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        # First-Party
+        from mcpgateway.routers.oauth_router import initiate_oauth_json
+
+        # Execute & Assert
+        with pytest.raises(HTTPException) as exc_info:
+            await initiate_oauth_json("gateway123", mock_current_user, mock_db)
+
+        assert exc_info.value.status_code == 400
+        assert "not configured for OAuth" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_oauth_callback_json_success(self, mock_db, mock_gateway):
+        """Test successful OAuth callback with JSON response."""
+        # Standard
+        import base64
+        import json
+
+        # Setup
+        state_data = {"gateway_id": "gateway123", "user_id": "test@example.com"}
+        payload = json.dumps(state_data).encode()
+        signature = b"0" * 32  # Mock signature
+        state_encoded = base64.urlsafe_b64encode(payload + signature).decode()
+
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        result_data = {"user_id": "test@example.com", "expires_at": "2025-11-05T12:00:00+00:00"}
+
+        with patch("mcpgateway.routers.oauth_router.OAuthManager") as mock_oauth_manager_class:
+            mock_oauth_manager = Mock()
+            mock_oauth_manager.complete_authorization_code_flow = AsyncMock(return_value=result_data)
+            mock_oauth_manager_class.return_value = mock_oauth_manager
+
+            with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+                mock_token_storage = Mock()
+                mock_token_storage_class.return_value = mock_token_storage
+
+                # First-Party
+                from mcpgateway.routers.oauth_router import oauth_callback_json
+
+                # Execute
+                result = await oauth_callback_json("auth_code_123", state_encoded, mock_db)
+
+                # Assert
+                assert result["success"] is True
+                assert result["gateway_id"] == "gateway123"
+                assert result["user_id"] == "test@example.com"
+                assert result["expires_at"] == "2025-11-05T12:00:00+00:00"
+                assert "successful" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_oauth_callback_json_invalid_state(self, mock_db):
+        """Test JSON OAuth callback with invalid state parameter."""
+        # First-Party
+        from mcpgateway.routers.oauth_router import oauth_callback_json
+
+        # Execute & Assert - state too short
+        with pytest.raises(HTTPException) as exc_info:
+            await oauth_callback_json("auth_code_123", "invalid", mock_db)
+
+        assert exc_info.value.status_code == 400
+        assert "state" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
+    async def test_oauth_callback_json_gateway_not_found(self, mock_db):
+        """Test JSON OAuth callback with non-existent gateway."""
+        # Standard
+        import base64
+        import json
+
+        # Setup
+        state_data = {"gateway_id": "nonexistent", "user_id": "test@example.com"}
+        payload = json.dumps(state_data).encode()
+        signature = b"0" * 32
+        state_encoded = base64.urlsafe_b64encode(payload + signature).decode()
+
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        # First-Party
+        from mcpgateway.routers.oauth_router import oauth_callback_json
+
+        # Execute & Assert
+        with pytest.raises(HTTPException) as exc_info:
+            await oauth_callback_json("auth_code_123", state_encoded, mock_db)
+
+        assert exc_info.value.status_code == 404
+        assert "Gateway not found" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_oauth_callback_json_oauth_error(self, mock_db, mock_gateway):
+        """Test JSON OAuth callback when OAuth manager raises error."""
+        # Standard
+        import base64
+        import json
+
+        # Setup
+        state_data = {"gateway_id": "gateway123", "user_id": "test@example.com"}
+        payload = json.dumps(state_data).encode()
+        signature = b"0" * 32
+        state_encoded = base64.urlsafe_b64encode(payload + signature).decode()
+
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        with patch("mcpgateway.routers.oauth_router.OAuthManager") as mock_oauth_manager_class:
+            mock_oauth_manager = Mock()
+            mock_oauth_manager.complete_authorization_code_flow = AsyncMock(side_effect=OAuthError("Invalid authorization code"))
+            mock_oauth_manager_class.return_value = mock_oauth_manager
+
+            with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+                mock_token_storage = Mock()
+                mock_token_storage_class.return_value = mock_token_storage
+
+                # First-Party
+                from mcpgateway.routers.oauth_router import oauth_callback_json
+
+                # Execute & Assert
+                with pytest.raises(HTTPException) as exc_info:
+                    await oauth_callback_json("auth_code_123", state_encoded, mock_db)
+
+                assert exc_info.value.status_code == 400
+                assert "Invalid authorization code" in str(exc_info.value.detail)
