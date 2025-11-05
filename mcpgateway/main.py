@@ -4051,7 +4051,7 @@ async def register_gateway(
         if isinstance(ex, GatewayNameConflictError):
             return JSONResponse(content={"message": "Gateway name already exists"}, status_code=status.HTTP_409_CONFLICT)
         if isinstance(ex, GatewayUrlConflictError):
-            return JSONResponse(content={"message": "Gateway URL already exists"}, status_code=status.HTTP_409_CONFLICT)
+            return JSONResponse(content={"message": str(ex)}, status_code=status.HTTP_409_CONFLICT)
         if isinstance(ex, RuntimeError):
             return JSONResponse(content={"message": "Error during execution"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         if isinstance(ex, ValidationError):
@@ -4087,8 +4087,8 @@ async def get_gateway(gateway_id: str, db: Session = Depends(get_db), user=Depen
     tools = [tool_service._convert_tool_to_read(tool) for tool in tool_records]
 
     # Add tools to response
-    gateway_dict = gateway.model_dump(mode='json', by_alias=True)
-    gateway_dict['tools'] = [tool.model_dump(mode='json', by_alias=True) for tool in tools]
+    gateway_dict = gateway.model_dump(mode="json", by_alias=True)
+    gateway_dict["tools"] = [tool.model_dump(mode="json", by_alias=True) for tool in tools]
 
     return JSONResponse(content=gateway_dict)
 
@@ -4143,7 +4143,7 @@ async def update_gateway(
         if isinstance(ex, GatewayNameConflictError):
             return JSONResponse(content={"message": "Gateway name already exists"}, status_code=status.HTTP_409_CONFLICT)
         if isinstance(ex, GatewayUrlConflictError):
-            return JSONResponse(content={"message": "Gateway URL already exists"}, status_code=status.HTTP_409_CONFLICT)
+            return JSONResponse(content={"message": str(ex)}, status_code=status.HTTP_409_CONFLICT)
         if isinstance(ex, RuntimeError):
             return JSONResponse(content={"message": "Error during execution"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         if isinstance(ex, ValidationError):

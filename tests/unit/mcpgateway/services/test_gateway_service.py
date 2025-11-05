@@ -522,13 +522,14 @@ class TestGatewayService:
         existing_tool.original_name = "existing_tool"
         existing_tool.id = 123
         existing_tool.url = "http://example.com/gateway"
+        existing_tool.slug = "tool_gateway"
         existing_tool.enabled = True
         existing_tool.visibility = "public"
 
         test_db.execute = Mock(
             side_effect=[
                 _make_execute_result(scalar=None),  # name-conflict check
-                _make_execute_result(scalar=existing_tool),  # existing tool found
+                _make_execute_result(scalar=existing_tool),  # existing tool found (same URL and slug)
             ]
         )
         test_db.add = Mock()
@@ -566,6 +567,62 @@ class TestGatewayService:
         assert "Public Gateway already exists with URL" in str(err)
         assert err.gateway_id == existing_tool.id
         assert err.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_register_gateway_same_url_different_name_succeeds(self, gateway_service, test_db, monkeypatch):
+        """Test that registering gateways with same URL but different names succeeds."""
+        # Mock existing gateway with different name/slug
+        existing_gateway = MagicMock()
+        existing_gateway.id = "existing-id"
+        existing_gateway.url = "http://example.com/gateway"
+        existing_gateway.slug = "github-orgA"
+        existing_gateway.enabled = True
+        existing_gateway.visibility = "public"
+
+        # Mock new gateway to create
+        new_gateway = MagicMock()
+        new_gateway.id = "new-id"
+        new_gateway.url = "http://example.com/gateway"
+        new_gateway.slug = "github-orgB"  # Different slug!
+        new_gateway.enabled = True
+        new_gateway.visibility = "public"
+
+        test_db.execute = Mock(
+            side_effect=[
+                _make_execute_result(scalar=None),  # name-conflict check (no conflict on slug)
+                _make_execute_result(scalar=None),  # URL conflict check (different slug, so no conflict)
+            ]
+        )
+        test_db.add = Mock()
+        test_db.commit = Mock()
+        test_db.refresh = Mock()
+
+        gateway_service._initialize_gateway = AsyncMock(return_value=({"tools": {"listChanged": True}}, [], [], []))
+        gateway_service._notify_gateway_added = AsyncMock()
+
+        mock_model = Mock()
+        mock_model.masked.return_value = mock_model
+        mock_model.name = "github-orgB"
+
+        monkeypatch.setattr(
+            "mcpgateway.services.gateway_service.GatewayRead.model_validate",
+            lambda x: mock_model,
+        )
+
+        # First-Party
+        from mcpgateway.schemas import GatewayCreate
+
+        gateway_create = GatewayCreate(
+            name="github-orgB",
+            url="http://example.com/gateway",
+            description="GitHub gateway for OrgB",
+        )
+
+        # Should NOT raise GatewayUrlConflictError
+        result = await gateway_service.register_gateway(test_db, gateway_create)
+        assert result is not None
+        assert test_db.add.called
+        assert test_db.commit.called
 
     # ────────────────────────────────────────────────────────────────────
     # Validate Gateway URL - Parameterized Tests
