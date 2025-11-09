@@ -3357,9 +3357,25 @@
             class="space-y-4 p-5"
           >
             <p class="text-sm text-gray-600 dark:text-gray-400">
-              Paste a JSON array or upload a <code>.json</code> file. Max {{
+              Paste a JSON array, Postman Collection, or upload a <code>.json</code> file. Max {{
               bulk_import_max_tools }} tools.
             </p>
+
+            <!-- Import Format Info -->
+            <div id="import-format-info" class="hidden rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-900/20">
+              <div class="flex items-start gap-2">
+                <svg class="h-5 w-5 flex-shrink-0 text-blue-600 dark:text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                </svg>
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-blue-800 dark:text-blue-300" id="format-detected-text">
+                    Format Detected
+                  </p>
+                  <div id="format-details" class="mt-1 text-sm text-blue-700 dark:text-blue-400">
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <label
               class="block text-sm font-medium dark:text-gray-300"
@@ -3371,14 +3387,14 @@
               name="tools_json"
               rows="8"
               class="mt-1 block w-full rounded-md border border-gray-300 font-mono text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
-              placeholder="[{&quot;name&quot;:&quot;tool_name&quot;,&quot;url&quot;:&quot;https://...&quot;,&quot;integration_type&quot;:&quot;REST&quot;,&quot;request_type&quot;:&quot;GET&quot;}]"
+              placeholder="[{&quot;name&quot;:&quot;tool_name&quot;,&quot;url&quot;:&quot;https://...&quot;,&quot;integration_type&quot;:&quot;REST&quot;,&quot;request_type&quot;:&quot;GET&quot;}]&#10;&#10;or Postman Collection v2.1:&#10;{&quot;info&quot;:{&quot;name&quot;:&quot;My API&quot;,...},&quot;item&quot;:[...]}"
             ></textarea>
 
             <div>
               <label
                 class="block text-sm font-medium dark:text-gray-300"
                 for="tools_file"
-                >Or upload JSON file</label
+                >Or upload JSON file (Tools Array or Postman Collection)</label
               >
               <input
                 id="tools_file"
@@ -11185,6 +11201,75 @@ Hello &#123;&#123; name &#125;&#125;, welcome to &#123;&#123; company &#125;&#12
           bulkImportData = null;
         };
 
+        // Detect import format (Postman, JSON array, etc.)
+        window.detectImportFormat = function (data) {
+          if (!data || typeof data !== 'object') {
+            return 'unknown';
+          }
+
+          // Check for Postman Collection
+          const info = data.info || {};
+          const schema = info.schema || '';
+          if (schema.toLowerCase().includes('postman') || (data.item && info.name)) {
+            return 'postman';
+          }
+
+          // Check for JSON array of tools
+          if (Array.isArray(data)) {
+            return 'tool-array';
+          }
+
+          return 'unknown';
+        };
+
+        // Show Postman collection info
+        window.showPostmanCollectionInfo = function (collection) {
+          const infoDiv = document.getElementById('import-format-info');
+          const detailsDiv = document.getElementById('format-details');
+
+          if (!infoDiv || !detailsDiv) return;
+
+          const info = collection.info || {};
+          const collectionName = info.name || 'Unnamed Collection';
+          const requestCount = countPostmanRequests(collection.item || []);
+          const authType = collection.auth ? collection.auth.type : 'None';
+
+          detailsDiv.innerHTML = `
+            <div class="space-y-1">
+              <p><strong>Collection:</strong> ${escapeHtml(collectionName)}</p>
+              <p><strong>Requests:</strong> ${requestCount} (will be converted to ${requestCount} tools)</p>
+              <p><strong>Auth:</strong> ${escapeHtml(authType)}</p>
+              <p class="text-xs mt-2">The collection will be automatically converted to MCP tools upon import.</p>
+            </div>
+          `;
+
+          document.getElementById('format-detected-text').textContent = '✓ Postman Collection Detected';
+          infoDiv.classList.remove('hidden');
+        };
+
+        // Count requests in Postman collection (recursive for folders)
+        window.countPostmanRequests = function (items) {
+          let count = 0;
+          if (!Array.isArray(items)) return 0;
+
+          for (const item of items) {
+            if (item.request) {
+              count++;
+            }
+            if (item.item && Array.isArray(item.item)) {
+              count += countPostmanRequests(item.item);
+            }
+          }
+          return count;
+        };
+
+        // HTML escape helper
+        window.escapeHtml = function (text) {
+          const div = document.createElement('div');
+          div.textContent = text;
+          return div.innerHTML;
+        };
+
         // Handle file selection
         window.handleFileSelect = function (input) {
           const file = input.files[0];
@@ -11211,6 +11296,14 @@ Hello &#123;&#123; name &#125;&#125;, welcome to &#123;&#123; company &#125;&#12
           reader.onload = function (e) {
             try {
               const jsonData = JSON.parse(e.target.result);
+
+              // Detect format
+              const format = detectImportFormat(jsonData);
+
+              if (format === 'postman') {
+                showPostmanCollectionInfo(jsonData);
+              }
+
               processImportData(jsonData);
             } catch (error) {
               showImportError(`Invalid JSON file: ${error.message}`);
@@ -11244,6 +11337,19 @@ Hello &#123;&#123; name &#125;&#125;, welcome to &#123;&#123; company &#125;&#12
 
           try {
             const jsonData = JSON.parse(jsonText);
+
+            // Detect format
+            const format = detectImportFormat(jsonData);
+
+            // Handle Postman collection
+            if (format === 'postman') {
+              showPostmanCollectionInfo(jsonData);
+              statusElement.textContent = "✓ Valid Postman Collection detected";
+              statusElement.className = "text-sm text-green-600 dark:text-green-400";
+              document.getElementById("import-submit-btn").disabled = false;
+              bulkImportData = jsonData;
+              return;
+            }
 
             // Validate structure with helpful messages
             if (!Array.isArray(jsonData)) {

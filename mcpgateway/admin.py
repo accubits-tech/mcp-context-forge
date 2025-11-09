@@ -8539,8 +8539,54 @@ async def admin_import_tools(
                     LOGGER.exception("Invalid JSON in form field")
                     return JSONResponse({"success": False, "message": f"Invalid JSON: {ex}"}, status_code=422)
 
+        # ---------- detect import format ----------
+        # Check if payload is a Postman collection
+        is_postman_collection = False
+        if isinstance(payload, dict):
+            # Check for Postman collection schema
+            info = payload.get("info", {})
+            schema = info.get("schema", "")
+            if "postman" in schema.lower() or "item" in payload:
+                is_postman_collection = True
+                LOGGER.info("Detected Postman Collection format")
+
+        # ---------- convert Postman collection to tools ----------
+        if is_postman_collection:
+            try:
+                # First-Party
+                from mcpgateway.services.postman_service import PostmanCollectionService
+
+                postman_service = PostmanCollectionService()
+
+                # Parse and validate collection
+                collection = await postman_service.parse_collection(payload)
+                await postman_service.validate_collection(collection)
+
+                # Get user's email for ownership
+                user_email = user.get("email") if isinstance(user, dict) else None
+
+                # Convert collection to tools
+                tools = await postman_service.generate_tools_from_collection(
+                    collection,
+                    gateway_id=None,  # No specific gateway
+                    tags=["postman_import"],
+                    owner_email=user_email,
+                    team_id=None,
+                    visibility="public",
+                )
+
+                # Convert ToolCreate objects to dicts for processing
+                payload = [tool.model_dump() for tool in tools]
+
+                LOGGER.info(f"Converted Postman collection to {len(payload)} tools")
+
+            except Exception as ex:
+                LOGGER.exception("Failed to convert Postman collection")
+                return JSONResponse({"success": False, "message": f"Failed to parse Postman collection: {str(ex)}"}, status_code=422)
+
+        # ---------- validate payload is a list ----------
         if not isinstance(payload, list):
-            return JSONResponse({"success": False, "message": "Payload must be a JSON array of tools."}, status_code=422)
+            return JSONResponse({"success": False, "message": "Payload must be a JSON array of tools or a Postman collection."}, status_code=422)
 
         max_batch = settings.mcpgateway_bulk_import_max_tools
         if len(payload) > max_batch:
