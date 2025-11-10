@@ -375,7 +375,7 @@ class TokenScopingMiddleware:
                 team_id = team["id"] if isinstance(team, dict) else team
 
                 membership = db.execute(
-                    select(EmailTeamMember).where(and_(EmailTeamMember.team_id == team_id, EmailTeamMember.user_email == user_email, EmailTeamMember.is_active))
+                    select(EmailTeamMember).where(and_(EmailTeamMember.team_id == team_id, EmailTeamMember.user_email == user_email, EmailTeamMember.is_active.is_(True)))
                 ).scalar_one_or_none()
 
                 if not membership:

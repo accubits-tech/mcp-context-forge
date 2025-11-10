@@ -467,7 +467,7 @@ class PromptService:
             query = query.where(DbPrompt.id > last_id)
 
         if not include_inactive:
-            query = query.where(DbPrompt.is_active)
+            query = query.where(DbPrompt.is_active.is_(True))
 
         # Add tag filtering if tags are provided
         if tags:
@@ -529,7 +529,7 @@ class PromptService:
 
         # Apply active/inactive filter
         if not include_inactive:
-            query = query.where(DbPrompt.is_active)
+            query = query.where(DbPrompt.is_active.is_(True))
 
         if team_id:
             if team_id not in team_ids:
@@ -608,7 +608,7 @@ class PromptService:
         """
         query = select(DbPrompt).join(server_prompt_association, DbPrompt.id == server_prompt_association.c.prompt_id).where(server_prompt_association.c.server_id == server_id)
         if not include_inactive:
-            query = query.where(DbPrompt.is_active)
+            query = query.where(DbPrompt.is_active.is_(True))
         # Cursor-based pagination logic can be implemented here in the future.
         logger.debug(cursor)
         prompts = db.execute(query).scalars().all()
@@ -745,12 +745,12 @@ class PromptService:
 
                 # Find prompt by ID or name
                 if prompt_id_int is not None:
-                    prompt = db.execute(select(DbPrompt).where(DbPrompt.id == prompt_id_int).where(DbPrompt.is_active)).scalar_one_or_none()
+                    prompt = db.execute(select(DbPrompt).where(DbPrompt.id == prompt_id_int).where(DbPrompt.is_active.is_(True))).scalar_one_or_none()
                     search_key = prompt_id_int
                 else:
                     # Look up by name (active prompts only)
                     # Note: Team/owner scoping could be added here when user context is available
-                    prompt = db.execute(select(DbPrompt).where(DbPrompt.name == prompt_name).where(DbPrompt.is_active)).scalar_one_or_none()
+                    prompt = db.execute(select(DbPrompt).where(DbPrompt.name == prompt_name).where(DbPrompt.is_active.is_(True))).scalar_one_or_none()
                     search_key = prompt_name
 
                 if not prompt:

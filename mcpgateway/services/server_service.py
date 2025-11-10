@@ -526,7 +526,7 @@ class ServerService:
         """
         query = select(DbServer)
         if not include_inactive:
-            query = query.where(DbServer.is_active)
+            query = query.where(DbServer.is_active.is_(True))
 
         # Add tag filtering if tags are provided
         if tags:
@@ -568,7 +568,7 @@ class ServerService:
 
         # Apply active/inactive filter
         if not include_inactive:
-            query = query.where(DbServer.is_active)
+            query = query.where(DbServer.is_active.is_(True))
 
         if team_id:
             if team_id not in team_ids:

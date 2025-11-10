@@ -465,7 +465,7 @@ class ResourceService:
             query = query.where(DbResource.id > last_id)
 
         if not include_inactive:
-            query = query.where(DbResource.is_active)
+            query = query.where(DbResource.is_active.is_(True))
 
         # Add tag filtering if tags are provided
         if tags:
@@ -558,7 +558,7 @@ class ResourceService:
 
         # Apply active/inactive filter
         if not include_inactive:
-            query = query.where(DbResource.is_active)
+            query = query.where(DbResource.is_active.is_(True))
 
         if team_id:
             if team_id not in team_ids:
@@ -637,7 +637,7 @@ class ResourceService:
         """
         query = select(DbResource).join(server_resource_association, DbResource.id == server_resource_association.c.resource_id).where(server_resource_association.c.server_id == server_id)
         if not include_inactive:
-            query = query.where(DbResource.is_active)
+            query = query.where(DbResource.is_active.is_(True))
         # Cursor-based pagination logic can be implemented here in the future.
         resources = db.execute(query).scalars().all()
         result = []
@@ -782,7 +782,7 @@ class ResourceService:
                     content = await self._read_template_resource(uri)
                 else:
                     # Find resource
-                    resource = db.execute(select(DbResource).where(DbResource.id == resource_id).where(DbResource.is_active)).scalar_one_or_none()
+                    resource = db.execute(select(DbResource).where(DbResource.id == resource_id).where(DbResource.is_active.is_(True))).scalar_one_or_none()
                     if not resource:
                         # Check if inactive resource exists
                         inactive_resource = db.execute(select(DbResource).where(DbResource.id == resource_id).where(not_(DbResource.is_active))).scalar_one_or_none()
@@ -940,7 +940,7 @@ class ResourceService:
         """
         try:
             # Verify resource exists
-            resource = db.execute(select(DbResource).where(DbResource.uri == subscription.uri).where(DbResource.is_active)).scalar_one_or_none()
+            resource = db.execute(select(DbResource).where(DbResource.uri == subscription.uri).where(DbResource.is_active.is_(True))).scalar_one_or_none()
 
             if not resource:
                 # Check if inactive resource exists
@@ -1251,7 +1251,7 @@ class ResourceService:
         query = select(DbResource).where(DbResource.id == resource_id)
 
         if not include_inactive:
-            query = query.where(DbResource.is_active)
+            query = query.where(DbResource.is_active.is_(True))
 
         resource = db.execute(query).scalar_one_or_none()
 
@@ -1544,7 +1544,7 @@ class ResourceService:
         """
         query = select(DbResource).where(DbResource.template.isnot(None))
         if not include_inactive:
-            query = query.where(DbResource.is_active)
+            query = query.where(DbResource.is_active.is_(True))
         # Cursor-based pagination logic can be implemented here in the future.
         templates = db.execute(query).scalars().all()
         return [ResourceTemplate.model_validate(t) for t in templates]
