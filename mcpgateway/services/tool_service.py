@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 import json
 import os
 import re
+import ssl
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -29,6 +30,7 @@ import uuid
 # Third-Party
 import httpx
 import jq
+import jsonschema
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -37,6 +39,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 # First-Party
+from mcpgateway.common.models import Gateway as PydanticGateway
+from mcpgateway.common.models import TextContent
+from mcpgateway.common.models import Tool as PydanticTool
+from mcpgateway.common.models import ToolResult
 from mcpgateway.config import settings
 from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.db import EmailTeam
@@ -44,12 +50,8 @@ from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import server_tool_association
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.db import ToolMetric
-from mcpgateway.models import Gateway as PydanticGateway
-from mcpgateway.models import TextContent
-from mcpgateway.models import Tool as PydanticTool
-from mcpgateway.models import ToolResult
 from mcpgateway.observability import create_span
-from mcpgateway.plugins.framework import GlobalContext, HttpHeaderPayload, PluginError, PluginManager, PluginViolationError, ToolPostInvokePayload, ToolPreInvokePayload
+from mcpgateway.plugins.framework import GlobalContext, HttpHeaderPayload, PluginError, PluginManager, PluginViolationError, ToolHookType, ToolPostInvokePayload, ToolPreInvokePayload
 from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
 from mcpgateway.schemas import ToolCreate, ToolRead, ToolUpdate, TopPerformer
 from mcpgateway.services.logging_service import LoggingService
@@ -63,6 +65,7 @@ from mcpgateway.utils.passthrough_headers import get_passthrough_headers
 from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.services_auth import decode_auth
 from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
+from mcpgateway.utils.validate_signature import validate_signature
 
 # Initialize logging service first
 logging_service = LoggingService()
@@ -459,6 +462,146 @@ class ToolService:
         db.add(metric)
         db.commit()
 
+    def _extract_and_validate_structured_content(self, tool: DbTool, tool_result: "ToolResult", candidate: Optional[Any] = None) -> bool:
+        """
+        Extract structured content (if any) and validate it against ``tool.output_schema``.
+
+        Args:
+            tool: The tool with an optional output schema to validate against.
+            tool_result: The tool result containing content to validate.
+            candidate: Optional structured payload to validate. If not provided, will attempt
+                      to parse the first TextContent item as JSON.
+
+        Behavior:
+        - If ``candidate`` is provided it is used as the structured payload to validate.
+        - Otherwise the method will try to parse the first ``TextContent`` item in
+            ``tool_result.content`` as JSON and use that as the candidate.
+        - If no output schema is declared on the tool the method returns True (nothing to validate).
+        - On successful validation the parsed value is attached to ``tool_result.structured_content``.
+            When structured content is present and valid callers may drop textual ``content`` in favour
+            of the structured payload.
+        - On validation failure the method sets ``tool_result.content`` to a single ``TextContent``
+            containing a compact JSON object describing the validation error, sets
+            ``tool_result.is_error = True`` and returns False.
+
+        Returns:
+                True when the structured content is valid or when no schema is declared.
+                False when validation fails.
+
+        Examples:
+                >>> from mcpgateway.services.tool_service import ToolService
+                >>> from mcpgateway.common.models import TextContent, ToolResult
+                >>> import json
+                >>> service = ToolService()
+                >>> # No schema declared -> nothing to validate
+                >>> tool = type("T", (object,), {"output_schema": None})()
+                >>> r = ToolResult(content=[TextContent(type="text", text='{"a":1}')])
+                >>> service._extract_and_validate_structured_content(tool, r)
+                True
+
+                >>> # Valid candidate provided -> attaches structured_content and returns True
+                >>> tool = type(
+                ...     "T",
+                ...     (object,),
+                ...     {"output_schema": {"type": "object", "properties": {"foo": {"type": "string"}}, "required": ["foo"]}},
+                ... )()
+                >>> r = ToolResult(content=[])
+                >>> service._extract_and_validate_structured_content(tool, r, candidate={"foo": "bar"})
+                True
+                >>> r.structured_content == {"foo": "bar"}
+                True
+
+                >>> # Invalid candidate -> returns False, marks result as error and emits details
+                >>> tool = type(
+                ...     "T",
+                ...     (object,),
+                ...     {"output_schema": {"type": "object", "properties": {"foo": {"type": "string"}}, "required": ["foo"]}},
+                ... )()
+                >>> r = ToolResult(content=[])
+                >>> ok = service._extract_and_validate_structured_content(tool, r, candidate={"foo": 123})
+                >>> ok
+                False
+                >>> r.is_error
+                True
+                >>> details = json.loads(r.content[0].text)
+                >>> "received" in details
+                True
+        """
+        try:
+            output_schema = getattr(tool, "output_schema", None)
+            # Nothing to do if the tool doesn't declare a schema
+            if not output_schema:
+                return True
+
+            structured: Optional[Any] = None
+            # Prefer explicit candidate
+            if candidate is not None:
+                structured = candidate
+            else:
+                # Try to parse first TextContent text payload as JSON
+                for c in getattr(tool_result, "content", []) or []:
+                    try:
+                        if isinstance(c, dict) and "type" in c and c.get("type") == "text" and "text" in c:
+                            structured = json.loads(c.get("text") or "null")
+                            break
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        # ignore JSON parse errors and continue
+                        continue
+
+            # If no structured data found, treat as valid (nothing to validate)
+            if structured is None:
+                return True
+
+            # Try to normalize common wrapper shapes to match schema expectations
+            schema_type = None
+            try:
+                if isinstance(output_schema, dict):
+                    schema_type = output_schema.get("type")
+            except Exception:
+                schema_type = None
+
+            # Unwrap single-element list wrappers when schema expects object
+            if isinstance(structured, list) and len(structured) == 1 and schema_type == "object":
+                inner = structured[0]
+                # If inner is a TextContent-like dict with 'text' JSON string, parse it
+                if isinstance(inner, dict) and "text" in inner and "type" in inner and inner.get("type") == "text":
+                    try:
+                        structured = json.loads(inner.get("text") or "null")
+                    except Exception:
+                        # leave as-is if parsing fails
+                        structured = inner
+                else:
+                    structured = inner
+
+            # Attach structured content
+            try:
+                setattr(tool_result, "structured_content", structured)
+            except Exception:
+                logger.debug("Failed to set structured_content on ToolResult")
+
+            # Validate using jsonschema
+            try:
+                jsonschema.validate(instance=structured, schema=output_schema)
+                return True
+            except jsonschema.exceptions.ValidationError as e:
+                details = {
+                    "code": getattr(e, "validator", "validation_error"),
+                    "expected": e.schema.get("type") if isinstance(e.schema, dict) and "type" in e.schema else None,
+                    "received": type(e.instance).__name__.lower() if e.instance is not None else None,
+                    "path": list(e.absolute_path) if hasattr(e, "absolute_path") else list(e.path or []),
+                    "message": e.message,
+                }
+                try:
+                    tool_result.content = [TextContent(type="text", text=json.dumps(details))]
+                except Exception:
+                    tool_result.content = [TextContent(type="text", text=str(details))]
+                tool_result.is_error = True
+                logger.debug(f"structured_content validation failed for tool {getattr(tool, 'name', '<unknown>')}: {details}")
+                return False
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(f"Error extracting/validating structured_content: {exc}")
+            return False
+
     async def register_tool(
         self,
         db: Session,
@@ -590,12 +733,10 @@ class ToolService:
                 plugin_chain_pre=tool.plugin_chain_pre if tool.integration_type == "REST" else None,
                 plugin_chain_post=tool.plugin_chain_post if tool.integration_type == "REST" else None,
             )
-
             db.add(db_tool)
             db.commit()
             db.refresh(db_tool)
             await self._notify_tool_added(db_tool)
-            logger.info(f"Registered tool: {db_tool.name}")
             return self._convert_tool_to_read(db_tool)
         except IntegrityError as ie:
             db.rollback()
@@ -1082,8 +1223,9 @@ class ToolService:
                     if self._plugin_manager:
                         tool_metadata = PydanticTool.model_validate(tool)
                         global_context.metadata[TOOL_METADATA] = tool_metadata
-                        pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
-                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(headers)),
+                        pre_result, context_table = await self._plugin_manager.invoke_hook(
+                            ToolHookType.TOOL_PRE_INVOKE,
+                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(root=headers)),
                             global_context=global_context,
                             local_contexts=None,
                             violations_as_exceptions=True,
@@ -1132,7 +1274,6 @@ class ToolService:
                     # Handle 204 No Content responses that have no body
                     if response.status_code == 204:
                         tool_result = ToolResult(content=[TextContent(type="text", text="Request completed successfully (No Content)")])
-                        # Mark as successful only after all operations complete successfully
                         success = True
                     elif response.status_code not in [200, 201, 202, 206]:
                         result = response.json()
@@ -1143,13 +1284,18 @@ class ToolService:
                         # Don't mark as successful for error responses - success remains False
                     else:
                         result = response.json()
+                        logger.debug(f"REST API tool response: {result}")
                         filtered_response = extract_using_jq(result, tool.jsonpath_filter)
                         tool_result = ToolResult(content=[TextContent(type="text", text=json.dumps(filtered_response, indent=2))])
-                        # Mark as successful only after all operations complete successfully
                         success = True
+                        # If output schema is present, validate and attach structured content
+                        if getattr(tool, "output_schema", None):
+                            valid = self._extract_and_validate_structured_content(tool, tool_result, candidate=filtered_response)
+                            success = bool(valid)
                 elif tool.integration_type == "MCP":
                     transport = tool.request_type.lower()
-                    gateway = db.execute(select(DbGateway).where(DbGateway.id == tool.gateway_id).where(DbGateway.enabled)).scalar_one_or_none()
+                    # gateway = db.execute(select(DbGateway).where(DbGateway.id == tool.gateway_id).where(DbGateway.enabled)).scalar_one_or_none()
+                    gateway = tool.gateway
 
                     # Handle OAuth authentication for the gateway
                     if gateway and gateway.auth_type == "oauth" and gateway.oauth_config:
@@ -1192,6 +1338,56 @@ class ToolService:
                     if request_headers:
                         headers = get_passthrough_headers(request_headers, headers, db, gateway)
 
+                    def create_ssl_context(ca_certificate: str) -> ssl.SSLContext:
+                        """Create an SSL context with the provided CA certificate.
+
+                        Args:
+                            ca_certificate: CA certificate in PEM format
+
+                        Returns:
+                            ssl.SSLContext: Configured SSL context
+                        """
+                        ctx = ssl.create_default_context()
+                        ctx.load_verify_locations(cadata=ca_certificate)
+                        return ctx
+
+                    def get_httpx_client_factory(
+                        headers: dict[str, str] | None = None,
+                        timeout: httpx.Timeout | None = None,
+                        auth: httpx.Auth | None = None,
+                    ) -> httpx.AsyncClient:
+                        """Factory function to create httpx.AsyncClient with optional CA certificate.
+
+                        Args:
+                            headers: Optional headers for the client
+                            timeout: Optional timeout for the client
+                            auth: Optional auth for the client
+
+                        Returns:
+                            httpx.AsyncClient: Configured HTTPX async client
+
+                        Raises:
+                            Exception: If CA certificate signature is invalid
+                        """
+                        valid = False
+                        if gateway.ca_certificate:
+                            if settings.enable_ed25519_signing:
+                                public_key_pem = settings.ed25519_public_key
+                                valid = validate_signature(gateway.ca_certificate.encode(), gateway.ca_certificate_sig, public_key_pem)
+                            else:
+                                valid = True
+                        if valid:
+                            ctx = create_ssl_context(gateway.ca_certificate)
+                        else:
+                            ctx = None
+                        return httpx.AsyncClient(
+                            verify=ctx if ctx else True,
+                            follow_redirects=True,
+                            headers=headers,
+                            timeout=timeout or httpx.Timeout(30.0),
+                            auth=auth,
+                        )
+
                     async def connect_to_sse_server(server_url: str, headers: dict = headers):
                         """Connect to an MCP server running with SSE transport.
 
@@ -1202,7 +1398,7 @@ class ToolService:
                         Returns:
                             ToolResult: Result of tool call
                         """
-                        async with sse_client(url=server_url, headers=headers) as streams:
+                        async with sse_client(url=server_url, headers=headers, httpx_client_factory=get_httpx_client_factory) as streams:
                             async with ClientSession(*streams) as session:
                                 await session.initialize()
                                 tool_call_result = await session.call_tool(tool.original_name, arguments)
@@ -1218,7 +1414,7 @@ class ToolService:
                         Returns:
                             ToolResult: Result of tool call
                         """
-                        async with streamablehttp_client(url=server_url, headers=headers) as (read_stream, write_stream, _get_session_id):
+                        async with streamablehttp_client(url=server_url, headers=headers, httpx_client_factory=get_httpx_client_factory) as (read_stream, write_stream, _get_session_id):
                             async with ClientSession(read_stream, write_stream) as session:
                                 await session.initialize()
                                 tool_call_result = await session.call_tool(tool.original_name, arguments)
@@ -1233,8 +1429,9 @@ class ToolService:
                         if tool_gateway:
                             gateway_metadata = PydanticGateway.model_validate(tool_gateway)
                             global_context.metadata[GATEWAY_METADATA] = gateway_metadata
-                        pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
-                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(headers)),
+                        pre_result, context_table = await self._plugin_manager.invoke_hook(
+                            ToolHookType.TOOL_PRE_INVOKE,
+                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(root=headers)),
                             global_context=global_context,
                             local_contexts=None,
                             violations_as_exceptions=True,
@@ -1251,18 +1448,25 @@ class ToolService:
                         tool_call_result = await connect_to_sse_server(tool_gateway.url, headers=headers)
                     elif transport == "streamablehttp":
                         tool_call_result = await connect_to_streamablehttp_server(tool_gateway.url, headers=headers)
-                    content = tool_call_result.model_dump(by_alias=True).get("content", [])
-
+                    dump = tool_call_result.model_dump(by_alias=True)
+                    logger.debug(f"Tool call result dump: {dump}")
+                    content = dump.get("content", [])
+                    # Accept both alias and pythonic names for structured content
+                    structured = dump.get("structuredContent") or dump.get("structured_content")
                     filtered_response = extract_using_jq(content, tool.jsonpath_filter)
-                    tool_result = ToolResult(content=filtered_response)
-                    # Mark as successful only after all operations complete successfully
-                    success = True
+
+                    is_err = getattr(tool_call_result, "is_error", None)
+                    if is_err is None:
+                        is_err = getattr(tool_call_result, "isError", False)
+                    tool_result = ToolResult(content=filtered_response, structured_content=structured, is_error=is_err, meta=getattr(tool_call_result, "meta", None))
+                    logger.debug(f"Final tool_result: {tool_result}")
                 else:
                     tool_result = ToolResult(content=[TextContent(type="text", text="Invalid tool type")])
 
                 # Plugin hook: tool post-invoke
                 if self._plugin_manager:
-                    post_result, _ = await self._plugin_manager.tool_post_invoke(
+                    post_result, _ = await self._plugin_manager.invoke_hook(
+                        ToolHookType.TOOL_POST_INVOKE,
                         payload=ToolPostInvokePayload(name=name, result=tool_result.model_dump(by_alias=True)),
                         global_context=global_context,
                         local_contexts=context_table,
@@ -1273,7 +1477,11 @@ class ToolService:
                         # Reconstruct ToolResult from modified result
                         modified_result = post_result.modified_payload.result
                         if isinstance(modified_result, dict) and "content" in modified_result:
-                            tool_result = ToolResult(content=modified_result["content"])
+                            # Safely obtain structured content using .get() to avoid KeyError when
+                            # plugins provide only the content without structured content fields.
+                            structured = modified_result.get("structuredContent") if "structuredContent" in modified_result else modified_result.get("structured_content")
+
+                            tool_result = ToolResult(content=modified_result["content"], structured_content=structured)
                         else:
                             # If result is not in expected format, convert it to text content
                             tool_result = ToolResult(content=[TextContent(type="text", text=str(modified_result))])
@@ -1429,6 +1637,7 @@ class ToolService:
                 tool.version += 1
             else:
                 tool.version = 1
+            logger.info(f"Update tool: {tool.name} (output_schema: {tool.output_schema})")
 
             tool.updated_at = datetime.now(timezone.utc)
             db.commit()

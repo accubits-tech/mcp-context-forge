@@ -30,15 +30,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 # First-Party
+from mcpgateway.common.models import Message, PromptResult, Role, TextContent
 from mcpgateway.config import settings
 from mcpgateway.db import EmailTeam
 from mcpgateway.db import Prompt as DbPrompt
 from mcpgateway.db import PromptMetric, server_prompt_association
-from mcpgateway.models import Message, PromptResult, Role, TextContent
 from mcpgateway.observability import create_span
-from mcpgateway.plugins.framework import GlobalContext, PluginManager, PromptPosthookPayload, PromptPrehookPayload
+from mcpgateway.plugins.framework import GlobalContext, PluginManager, PromptHookType, PromptPosthookPayload, PromptPrehookPayload
 from mcpgateway.schemas import PromptCreate, PromptRead, PromptUpdate, TopPerformer
 from mcpgateway.services.logging_service import LoggingService
+from mcpgateway.services.observability_service import current_trace_id, ObservabilityService
 from mcpgateway.utils.metrics_common import build_top_performers
 from mcpgateway.utils.pagination import decode_cursor, encode_cursor
 from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
@@ -690,7 +691,33 @@ class PromptService:
         error_message = None
         prompt = None
 
-        # Create a trace span for prompt rendering
+        # Create database span for observability dashboard
+        trace_id = current_trace_id.get()
+        db_span_id = None
+        db_span_ended = False
+        observability_service = ObservabilityService() if trace_id else None
+
+        if trace_id and observability_service:
+            try:
+                db_span_id = observability_service.start_span(
+                    db=db,
+                    trace_id=trace_id,
+                    name="prompt.render",
+                    attributes={
+                        "prompt.id": str(prompt_id),
+                        "arguments_count": len(arguments) if arguments else 0,
+                        "user": user or "anonymous",
+                        "server_id": server_id,
+                        "tenant_id": tenant_id,
+                        "request_id": request_id or "none",
+                    },
+                )
+                logger.debug(f"✓ Created prompt.render span: {db_span_id} for prompt: {prompt_id}")
+            except Exception as e:
+                logger.warning(f"Failed to start observability span for prompt rendering: {e}")
+                db_span_id = None
+
+        # Create a trace span for OpenTelemetry export (Jaeger, Zipkin, etc.)
         with create_span(
             "prompt.render",
             {
@@ -723,8 +750,12 @@ class PromptService:
                     if not request_id:
                         request_id = uuid.uuid4().hex
                     global_context = GlobalContext(request_id=request_id, user=user, server_id=server_id, tenant_id=tenant_id)
-                    pre_result, context_table = await self._plugin_manager.prompt_pre_fetch(
-                        payload=PromptPrehookPayload(prompt_id=str(prompt_id), args=arguments), global_context=global_context, local_contexts=None, violations_as_exceptions=True
+                    pre_result, context_table = await self._plugin_manager.invoke_hook(
+                        PromptHookType.PROMPT_PRE_FETCH,
+                        payload=PromptPrehookPayload(prompt_id=str(prompt_id), args=arguments),
+                        global_context=global_context,
+                        local_contexts=None,
+                        violations_as_exceptions=True,
                     )
 
                     # Use modified payload if provided
@@ -788,8 +819,12 @@ class PromptService:
                         raise PromptError(f"Failed to process prompt: {str(e)}")
 
                 if self._plugin_manager:
-                    post_result, _ = await self._plugin_manager.prompt_post_fetch(
-                        payload=PromptPosthookPayload(prompt_id=str(prompt.id), result=result), global_context=global_context, local_contexts=context_table, violations_as_exceptions=True
+                    post_result, _ = await self._plugin_manager.invoke_hook(
+                        PromptHookType.PROMPT_POST_FETCH,
+                        payload=PromptPosthookPayload(prompt_id=str(prompt.id), result=result),
+                        global_context=global_context,
+                        local_contexts=context_table,
+                        violations_as_exceptions=True,
                     )
                     # Use modified payload if provided
                     result = post_result.modified_payload.result if post_result.modified_payload else result
@@ -815,6 +850,20 @@ class PromptService:
                         await self._record_prompt_metric(db, prompt, start_time, success, error_message)
                     except Exception as metrics_error:
                         logger.warning(f"Failed to record prompt metric: {metrics_error}")
+
+                # End database span for observability dashboard
+                if db_span_id and observability_service and not db_span_ended:
+                    try:
+                        observability_service.end_span(
+                            db=db,
+                            span_id=db_span_id,
+                            status="ok" if success else "error",
+                            status_message=error_message if error_message else None,
+                        )
+                        db_span_ended = True
+                        logger.debug(f"✓ Ended prompt.render span: {db_span_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to end observability span for prompt rendering: {e}")
 
     async def update_prompt(
         self,
@@ -1061,7 +1110,6 @@ class PromptService:
             >>> result == prompt_dict
             True
         """
-        logger.info(f"prompt_id:::{prompt_id}")
         prompt = db.get(DbPrompt, prompt_id)
         if not prompt:
             raise PromptNotFoundError(f"Prompt not found: {prompt_id}")
