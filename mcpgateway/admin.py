@@ -8836,7 +8836,16 @@ async def admin_test_gateway(request: GatewayTestRequest, team_id: Optional[str]
                     LOGGER.error(f"Failed to obtain OAuth access token for gateway {gateway.name}: {e}")
                     response_body = {"error": f"OAuth token retrieval failed for gateway: {str(e)}"}
         else:
-            headers: dict = decode_auth(gateway.auth_value if gateway else None)
+            # Handle auth_value which can be either encrypted string or plain dict
+            if gateway and gateway.auth_value:
+                if isinstance(gateway.auth_value, str):
+                    headers: dict = decode_auth(gateway.auth_value)
+                elif isinstance(gateway.auth_value, dict):
+                    headers: dict = gateway.auth_value
+                else:
+                    headers: dict = {}
+            else:
+                headers: dict = {}
 
         # Prepare request based on content type
         content_type = getattr(request, "content_type", "application/json")

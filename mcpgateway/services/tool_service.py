@@ -357,7 +357,16 @@ class ToolService:
         tool_dict["request_type"] = tool.request_type
         tool_dict["annotations"] = tool.annotations or {}
 
-        decoded_auth_value = decode_auth(tool.auth_value)
+        # Handle auth_value which can be either encrypted string or plain dict
+        if tool.auth_value:
+            if isinstance(tool.auth_value, str):
+                decoded_auth_value = decode_auth(tool.auth_value)
+            elif isinstance(tool.auth_value, dict):
+                decoded_auth_value = tool.auth_value
+            else:
+                decoded_auth_value = {}
+        else:
+            decoded_auth_value = {}
         if tool.auth_type == "basic":
             if decoded_auth_value and "Authorization" in decoded_auth_value:
                 try:
@@ -1211,7 +1220,16 @@ class ToolService:
                             logger.error(f"Failed to obtain OAuth access token for tool {tool.name}: {e}")
                             raise ToolInvocationError(f"OAuth authentication failed: {str(e)}")
                     else:
-                        credentials = decode_auth(tool.auth_value)
+                        # Handle auth_value which can be either encrypted string or plain dict
+                        if tool.auth_value:
+                            if isinstance(tool.auth_value, str):
+                                credentials = decode_auth(tool.auth_value)
+                            elif isinstance(tool.auth_value, dict):
+                                credentials = tool.auth_value
+                            else:
+                                credentials = {}
+                        else:
+                            credentials = {}
                         # Filter out empty header names/values to avoid "Illegal header name" errors
                         filtered_credentials = {k: v for k, v in credentials.items() if k and v}
                         headers.update(filtered_credentials)
@@ -1332,7 +1350,16 @@ class ToolService:
                                 logger.error(f"Failed to obtain OAuth access token for gateway {gateway.name}: {e}")
                                 raise ToolInvocationError(f"OAuth authentication failed for gateway: {str(e)}")
                     else:
-                        headers = decode_auth(gateway.auth_value if gateway else None)
+                        # Handle auth_value which can be either encrypted string or plain dict
+                        if gateway and gateway.auth_value:
+                            if isinstance(gateway.auth_value, str):
+                                headers = decode_auth(gateway.auth_value)
+                            elif isinstance(gateway.auth_value, dict):
+                                headers = gateway.auth_value
+                            else:
+                                headers = {}
+                        else:
+                            headers = {}
 
                     # Get combined headers including gateway auth and passthrough
                     if request_headers:
