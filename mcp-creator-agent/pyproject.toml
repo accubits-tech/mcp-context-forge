@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mcp-creator-agent"
 version = "1.0.0"
-description = "A CrewAI agent that creates Python functions based on API documentation"
+description = "An LLM-powered agent that creates Python functions based on API documentation"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 authors = [
     {name = "MCP Context Forge Contributors", email = "noreply@example.com"}
 ]
-keywords = ["mcp", "crewai", "ai", "agent", "python", "code-generation"]
+keywords = ["mcp", "llm", "ai", "agent", "python", "code-generation"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -21,28 +21,28 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 requires-python = ">=3.10"
 
 dependencies = [
-    # Core CrewAI and AI Framework
-    "crewai>=0.28.0",
+    # Sandbox for code execution
     "e2b-code-interpreter>=0.17.0",
-    
-    # LLM Providers
-    "openai>=1.0.0",
-    "anthropic>=0.7.0",
-    
+
+    # HTTP client for LLM API calls
+    "requests>=2.31.0",
+
     # Web Framework (optional, for API endpoints)
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
-    
+
     # Data and Validation
     "pydantic>=2.5.0",
     "python-dotenv>=1.0.0",
-    
+
     # Utilities
     "typing-extensions>=4.0.0",
 ]

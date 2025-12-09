@@ -409,6 +409,14 @@ class Settings(BaseSettings):
     llmchat_chat_history_ttl: int = Field(default=3600, description="Seconds for chat history expiry")
     llmchat_chat_history_max_messages: int = Field(default=50, description="Maximum message history to store per user")
 
+    # LLM Configuration for AI-enhanced analysis (OpenAPI/API docs parsing)
+    llm_api_base_url: str = Field(default="https://api.openai.com/v1", description="Base URL for OpenAI-compatible LLM API")
+    llm_api_key: SecretStr = Field(default=SecretStr(""), description="API key for LLM service")
+    llm_model: str = Field(default="gpt-4o", description="Model name for LLM API")
+    llm_timeout: int = Field(default=120, description="Timeout in seconds for LLM API calls")
+    llm_max_tokens: int = Field(default=4096, description="Maximum tokens for LLM responses")
+    llm_temperature: float = Field(default=0.7, description="Temperature for LLM responses")
+
     @field_validator("jwt_secret_key", "auth_encryption_secret")
     @classmethod
     def validate_secrets(cls, v: Any, info: ValidationInfo) -> SecretStr:

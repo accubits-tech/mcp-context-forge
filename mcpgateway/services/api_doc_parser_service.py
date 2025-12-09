@@ -125,7 +125,8 @@ class APIDocumentationParserService:
             # Fetch content with timeout and size limits
             headers = {
                 'User-Agent': 'MCP-Gateway API Documentation Parser 1.0',
-                'Accept': 'text/html,application/xhtml+xml,text/markdown,text/plain,*/*'
+                'Accept': 'text/html,application/xhtml+xml,text/markdown,text/plain,*/*',
+                'Accept-Encoding': 'gzip, deflate'  # Avoid brotli streaming decode issues
             }
             
             response = requests.get(
@@ -455,7 +456,7 @@ class APIDocumentationParserService:
                 'potential_endpoints': unique_endpoints,
                 'authentication_info': auth_info,
                 'parameters': parameters,
-                'raw_content': content[:5000] if len(content) > 5000 else content  # First 5KB for AI analysis
+                'raw_content': content[:50000] if len(content) > 50000 else content  # First 50KB for AI analysis
             }
 
             logger.info(f"Extracted {len(unique_endpoints)} potential endpoints from text content")
@@ -640,6 +641,139 @@ class APIDocumentationParserService:
                 continue
         
         logger.info(f"Generated {len(tools)} tools from documentation")
+        return tools
+
+    async def generate_tools_from_llm_analysis(
+        self,
+        extracted_endpoints: List[Dict[str, Any]],
+        base_url: str,
+        gateway_id: Optional[str] = None,
+        tags: Optional[List[str]] = None
+    ) -> List[ToolCreate]:
+        """Generate MCP Gateway tools from LLM-extracted endpoints.
+
+        Args:
+            extracted_endpoints: List of endpoints from LLM analysis
+            base_url: Base URL for the API
+            gateway_id: Gateway ID to associate tools with
+            tags: Additional tags for generated tools
+
+        Returns:
+            List of ToolCreate objects
+        """
+        tools = []
+        logger.info(f"Generating tools from {len(extracted_endpoints)} LLM-extracted endpoints")
+
+        for idx, ep in enumerate(extracted_endpoints):
+            try:
+                # Get method with fallback
+                method = (ep.get('method') or 'GET').upper()
+                if method not in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']:
+                    logger.warning(f"Invalid HTTP method '{method}' for endpoint {idx}, defaulting to GET")
+                    method = 'GET'
+
+                # Get path - skip if completely missing
+                path = ep.get('path', '') or ep.get('url', '') or ep.get('endpoint', '')
+                if not path:
+                    logger.warning(f"Skipping endpoint {idx}: no path/url/endpoint field found")
+                    continue
+
+                # Clean path
+                path = path.strip()
+                if not path.startswith('/') and not path.startswith('http'):
+                    path = '/' + path
+
+                # Generate tool name with validation
+                tool_name = self._generate_tool_name(method, path)
+
+                # Ensure tool name is valid (at least 3 chars, alphanumeric with underscores)
+                if len(tool_name) < 3 or tool_name.endswith('_'):
+                    # Try to use endpoint name from LLM if available
+                    llm_name = ep.get('name', '') or ep.get('operationId', '')
+                    if llm_name and len(llm_name) >= 3:
+                        tool_name = re.sub(r'[^a-zA-Z0-9_]', '_', llm_name)
+                    else:
+                        # Generate a fallback name
+                        tool_name = f"{method.lower()}_endpoint_{idx}"
+                    logger.info(f"Using fallback tool name: {tool_name}")
+
+                # Generate URL
+                if path.startswith('http'):
+                    full_url = path
+                else:
+                    full_url = urljoin(base_url.rstrip('/') + '/', path.lstrip('/'))
+
+                # Validate URL
+                if not full_url or not full_url.startswith(('http://', 'https://')):
+                    logger.warning(f"Skipping endpoint {idx}: invalid URL '{full_url}'")
+                    continue
+
+                # Get description with fallback
+                description = ep.get('description') or ep.get('summary') or f"{method} {path}"
+                
+                # Generate schema from LLM parameters
+                input_schema = {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+                
+                for param in ep.get('parameters', []):
+                    p_name = param.get('name')
+                    if not p_name: continue
+                    
+                    p_type = param.get('type', 'string')
+                    p_desc = param.get('description', '')
+                    p_req = param.get('required', False)
+                    
+                    # Basic type mapping
+                    json_type = "string"
+                    if p_type.lower() in ["integer", "int", "number"]:
+                        json_type = "integer"
+                    elif p_type.lower() in ["boolean", "bool"]:
+                        json_type = "boolean"
+                    
+                    input_schema["properties"][p_name] = {
+                        "type": json_type,
+                        "description": p_desc
+                    }
+                    if p_req:
+                        input_schema["required"].append(p_name)
+                
+                # Add body if needed and not present
+                if method in ['POST', 'PUT', 'PATCH'] and 'body' not in input_schema["properties"]:
+                     input_schema["properties"]["body"] = {
+                        "type": "object",
+                        "description": "Request body"
+                     }
+
+                all_tags = (tags or []) + ["api-docs", "llm-extracted"]
+
+                annotations = {
+                    "title": tool_name,
+                    "api_doc_method": method,
+                    "api_doc_path": path,
+                    "confidence_rating": ep.get('confidence', 5),
+                    "generated_from": "llm_analysis"
+                }
+
+                tool = ToolCreate(
+                    name=tool_name,
+                    url=full_url,
+                    description=description,
+                    integration_type="REST",
+                    request_type=method,
+                    input_schema=input_schema,
+                    annotations=annotations,
+                    auth=None, # Auth handled later or via defaults
+                    gateway_id=gateway_id,
+                    tags=all_tags
+                )
+                tools.append(tool)
+
+            except Exception as e:
+                logger.warning(f"Failed to create tool from LLM endpoint {ep.get('path')}: {str(e)}")
+        
         return tools
 
     async def _create_tool_from_endpoint(

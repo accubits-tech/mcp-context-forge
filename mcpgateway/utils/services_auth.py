@@ -34,6 +34,7 @@ error
 
 # Standard
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -123,7 +124,7 @@ def decode_auth(encoded_value: str) -> dict:
         encoded_value (str): The encrypted base64-url string to decode and decrypt.
 
     Returns:
-        dict: The decrypted authentication dictionary, or empty dict if input is None.
+        dict: The decrypted authentication dictionary, or empty dict if input is None or invalid.
 
     Doctest:
     >>> import os
@@ -136,15 +137,21 @@ def decode_auth(encoded_value: str) -> dict:
     True
     >>> services_auth.decode_auth(None) == {}
     True
+    >>> services_auth.decode_auth('invalid-base64!@#') == {}
+    True
     """
     if not encoded_value:
         return {}
-    key = get_key()
-    aesgcm = AESGCM(key)
-    # Fix base64 padding
-    padded = encoded_value + "=" * (-len(encoded_value) % 4)
-    combined = base64.urlsafe_b64decode(padded)
-    nonce = combined[:12]
-    ciphertext = combined[12:]
-    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-    return json.loads(plaintext.decode())
+    try:
+        key = get_key()
+        aesgcm = AESGCM(key)
+        # Fix base64 padding
+        padded = encoded_value + "=" * (-len(encoded_value) % 4)
+        combined = base64.urlsafe_b64decode(padded)
+        nonce = combined[:12]
+        ciphertext = combined[12:]
+        plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+        return json.loads(plaintext.decode())
+    except (ValueError, binascii.Error, json.JSONDecodeError, Exception):
+        # Return empty dict for corrupted/invalid auth values
+        return {}

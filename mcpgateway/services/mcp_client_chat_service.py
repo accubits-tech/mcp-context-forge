@@ -1753,7 +1753,9 @@ class MCPClient:
                     server_config["args"] = self.config.args
 
             if not MultiServerMCPClient:
-                logger.error("Some dependencies are missing. Install those with: pip install '.[llmchat]'")
+                error_msg = "Missing required dependencies for LLM chat. MultiServerMCPClient not available. Install with: pip install '.[llmchat]' or pip install langchain-mcp-adapters langchain-core langchain-openai langchain-ollama langgraph"
+                logger.error(error_msg)
+                raise ImportError(error_msg)
 
             # Create MultiServerMCPClient with single server
             self._client = MultiServerMCPClient({"default": server_config})

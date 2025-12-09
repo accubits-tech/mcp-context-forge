@@ -3005,62 +3005,95 @@ async def upload_api_documentation(
         if tags:
             additional_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-        # Parse API documentation
+        # Parse API documentation to extract raw content
         doc_structure = await api_doc_parser_service.parse_documentation_file(content, file.filename or "unknown", format_hint, base_url)
 
-        logger.info(f"Parsed {len(doc_structure.get('potential_endpoints', []))} potential endpoints from documentation")
+        logger.info(f"Parsed documentation: {doc_structure.get('content_length', 0)} chars, format: {doc_structure.get('source_format', 'unknown')}")
 
-        # If no endpoints found, return early
-        if not doc_structure.get("potential_endpoints"):
-            return {"success": False, "message": "No API endpoints detected in the documentation", "analysis": doc_structure, "tool_count": 0}
-
-        # Generate tools from documentation
+        # Set base_url
         if not base_url:
-            # Try to prompt user for base URL if not provided
             logger.warning("No base URL provided - tools may need manual URL configuration")
             base_url = "http://api.example.com"  # Placeholder
 
-        tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
+        tools = []
+        analysis = {}
 
-        # Enhance tools with AI if requested
+        # Use direct LLM extraction if AI is enabled
         if enhance_with_ai:
-            logger.info("Enhancing tool descriptions with AI agent")
+            logger.info("Extracting tools directly from documentation using LLM")
             try:
-                # Generate comprehensive analysis
-                analysis = await openapi_agent.analyze_api_documentation(doc_structure)
+                raw_content = doc_structure.get('raw_content', '')
+                if not raw_content:
+                    raise ValueError("No raw content extracted from documentation")
 
-                # Convert tools to dict format for enhancement
-                tools_dict = [
-                    {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "request_type": tool.request_type,
-                        "url": str(tool.url),
-                        "input_schema": tool.input_schema,
-                        "annotations": tool.annotations,
-                        "tags": tool.tags,
-                        "auth": tool.auth.model_dump() if tool.auth else None,
-                    }
-                    for tool in tools
-                ]
+                # Extract tools directly from raw content using LLM
+                source_info = {
+                    "filename": file.filename,
+                    "format": doc_structure.get('source_format', 'unknown')
+                }
+                llm_tool_defs = await openapi_agent.extract_tools_from_raw_content(
+                    raw_content=raw_content,
+                    base_url=base_url,
+                    source_info=source_info
+                )
 
-                # Enhance with AI
-                enhanced_tools_dict = await openapi_agent.enhance_tools_from_documentation(tools_dict, analysis, doc_structure)
+                logger.info(f"LLM extracted {len(llm_tool_defs)} tool definitions")
 
-                # Update original tools with enhanced information
-                for i, enhanced in enumerate(enhanced_tools_dict):
-                    if i < len(tools):
-                        tools[i].description = enhanced.get("description", tools[i].description)
-                        tools[i].tags = enhanced.get("tags", tools[i].tags)
-                        if enhanced.get("annotations"):
-                            tools[i].annotations.update(enhanced["annotations"])
+                # Convert LLM tool definitions to ToolCreate objects
+                for tool_def in llm_tool_defs:
+                    try:
+                        # Merge additional tags
+                        tool_tags = (tool_def.get('tags', []) or []) + additional_tags + ["api-docs", "llm-extracted"]
 
-                logger.info("AI enhancement completed successfully")
+                        tool = ToolCreate(
+                            name=tool_def['name'],
+                            url=tool_def['url'],
+                            description=tool_def.get('description', f"{tool_def['method']} {tool_def['path']}"),
+                            integration_type="REST",
+                            request_type=tool_def['method'],
+                            input_schema=tool_def.get('input_schema', {"type": "object", "properties": {}}),
+                            annotations=tool_def.get('annotations', {}),
+                            gateway_id=gateway_id,
+                            tags=tool_tags
+                        )
+                        tools.append(tool)
+                    except Exception as e:
+                        logger.warning(f"Failed to create ToolCreate from LLM definition {tool_def.get('name')}: {e}")
+
+                analysis = {
+                    "extraction_method": "llm_direct",
+                    "tools_extracted": len(llm_tool_defs),
+                    "tools_created": len(tools),
+                    "source_format": doc_structure.get('source_format', 'unknown'),
+                    "content_length": doc_structure.get('content_length', 0)
+                }
+
+                logger.info(f"Created {len(tools)} ToolCreate objects from LLM extraction")
 
             except Exception as e:
-                logger.warning(f"AI enhancement failed: {str(e)}")
-                # Continue without AI enhancement
-                analysis = {"error": f"AI enhancement failed: {str(e)}"}
+                logger.warning(f"LLM extraction failed: {str(e)}, falling back to regex-based extraction")
+                # Fall back to regex-based extraction
+                tools = await api_doc_parser_service.generate_tools_from_documentation(
+                    doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags
+                )
+                analysis = {"error": f"LLM extraction failed: {str(e)}", "fallback": "regex_extraction"}
+
+        else:
+            # Use regex-based extraction without AI
+            logger.info("Using regex-based extraction (AI disabled)")
+            tools = await api_doc_parser_service.generate_tools_from_documentation(
+                doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags
+            )
+            analysis = {"extraction_method": "regex", "ai_enabled": False}
+
+        # Check if any tools were found
+        if not tools:
+            return {
+                "success": False,
+                "message": "No API endpoints could be extracted from the documentation",
+                "analysis": analysis,
+                "tool_count": 0
+            }
 
         # Preview mode - return without creating tools
         if preview_only:
@@ -3087,16 +3120,30 @@ async def upload_api_documentation(
         created_tools = []
         errors = []
 
+        # Note: Using a mock request for metadata capture since file upload doesn't have standard request
+        class MockRequest:
+            headers = {}
+            client = type("Client", (), {"host": "unknown"})()
+
+        metadata = MetadataCapture.extract_creation_metadata(MockRequest(), user)
+
         for tool in tools:
             try:
-                # Add metadata about creation source
-                metadata = {"created_via": "api_doc_upload", "filename": file.filename, "source_format": doc_structure.get("source_format", "unknown"), "ai_enhanced": enhance_with_ai}
-                tool.metadata = metadata
+                # Add metadata about creation source to annotations
+                creation_metadata = {"created_via": "api_doc_upload", "filename": file.filename, "source_format": doc_structure.get("source_format", "unknown"), "ai_enhanced": enhance_with_ai}
+                if tool.annotations is None:
+                    tool.annotations = {}
+                tool.annotations.update(creation_metadata)
 
-                # Create the tool
-                db_tool = await tool_service.create_tool(tool, db)
+                # Create the tool using register_tool
+                db_tool = await tool_service.register_tool(
+                    db=db,
+                    tool=tool,
+                    created_by=metadata["created_by"],
+                    created_via="api_doc_upload",
+                )
                 created_tools.append(
-                    {"id": db_tool.id, "name": db_tool.name, "url": db_tool.url, "description": db_tool.description, "tags": [tag.name for tag in db_tool.tags] if db_tool.tags else []}
+                    {"id": db_tool.id, "name": db_tool.name, "url": db_tool.url, "description": db_tool.description, "tags": db_tool.tags or []}
                 )
                 logger.info(f"Created tool: {db_tool.name}")
 
@@ -3170,66 +3217,98 @@ async def process_api_documentation_url(
         if tags:
             additional_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-        # Parse API documentation from URL
+        # Parse API documentation from URL to extract raw content
         doc_structure = await api_doc_parser_service.parse_documentation_url(url, format_hint, base_url)
 
-        logger.info(f"Parsed {len(doc_structure.get('potential_endpoints', []))} potential endpoints from URL")
+        logger.info(f"Parsed documentation: {doc_structure.get('content_length', 0)} chars, format: {doc_structure.get('source_format', 'unknown')}")
 
-        # If no endpoints found, return early
-        if not doc_structure.get("potential_endpoints"):
-            return {"success": False, "message": "No API endpoints detected in the documentation", "analysis": doc_structure, "tool_count": 0}
-
-        # Generate tools from documentation
+        # Set base_url - infer from documentation URL if not provided
         if not base_url:
-            # Try to infer base URL from documentation URL
             from urllib.parse import urlparse
-
             parsed_url = urlparse(url)
             base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
             logger.info(f"Inferred base URL from documentation URL: {base_url}")
 
-        tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
+        tools = []
+        analysis = {}
 
-        # Enhance tools with AI if requested
-        analysis = None
+        # Use direct LLM extraction if AI is enabled
         if enhance_with_ai:
-            logger.info("Enhancing tool descriptions with AI agent")
+            logger.info("Extracting tools directly from documentation using LLM")
             try:
-                # Generate comprehensive analysis
-                analysis = await openapi_agent.analyze_api_documentation(doc_structure, {"source_url": url})
+                raw_content = doc_structure.get('raw_content', '')
+                if not raw_content:
+                    raise ValueError("No raw content extracted from documentation")
 
-                # Convert tools to dict format for enhancement
-                tools_dict = [
-                    {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "request_type": tool.request_type,
-                        "url": str(tool.url),
-                        "input_schema": tool.input_schema,
-                        "annotations": tool.annotations,
-                        "tags": tool.tags,
-                        "auth": tool.auth.model_dump() if tool.auth else None,
-                    }
-                    for tool in tools
-                ]
+                # Extract tools directly from raw content using LLM
+                source_info = {
+                    "url": url,
+                    "format": doc_structure.get('source_format', 'unknown')
+                }
+                llm_tool_defs = await openapi_agent.extract_tools_from_raw_content(
+                    raw_content=raw_content,
+                    base_url=base_url,
+                    source_info=source_info
+                )
 
-                # Enhance with AI
-                enhanced_tools_dict = await openapi_agent.enhance_tools_from_documentation(tools_dict, analysis, doc_structure)
+                logger.info(f"LLM extracted {len(llm_tool_defs)} tool definitions")
 
-                # Update original tools with enhanced information
-                for i, enhanced in enumerate(enhanced_tools_dict):
-                    if i < len(tools):
-                        tools[i].description = enhanced.get("description", tools[i].description)
-                        tools[i].tags = enhanced.get("tags", tools[i].tags)
-                        if enhanced.get("annotations"):
-                            tools[i].annotations.update(enhanced["annotations"])
+                # Convert LLM tool definitions to ToolCreate objects
+                for tool_def in llm_tool_defs:
+                    try:
+                        # Merge additional tags
+                        tool_tags = (tool_def.get('tags', []) or []) + additional_tags + ["api-docs", "llm-extracted"]
 
-                logger.info("AI enhancement completed successfully")
+                        tool = ToolCreate(
+                            name=tool_def['name'],
+                            url=tool_def['url'],
+                            description=tool_def.get('description', f"{tool_def['method']} {tool_def['path']}"),
+                            integration_type="REST",
+                            request_type=tool_def['method'],
+                            input_schema=tool_def.get('input_schema', {"type": "object", "properties": {}}),
+                            annotations=tool_def.get('annotations', {}),
+                            gateway_id=gateway_id,
+                            tags=tool_tags
+                        )
+                        tools.append(tool)
+                    except Exception as e:
+                        logger.warning(f"Failed to create ToolCreate from LLM definition {tool_def.get('name')}: {e}")
+
+                analysis = {
+                    "extraction_method": "llm_direct",
+                    "tools_extracted": len(llm_tool_defs),
+                    "tools_created": len(tools),
+                    "source_url": url,
+                    "source_format": doc_structure.get('source_format', 'unknown'),
+                    "content_length": doc_structure.get('content_length', 0)
+                }
+
+                logger.info(f"Created {len(tools)} ToolCreate objects from LLM extraction")
 
             except Exception as e:
-                logger.warning(f"AI enhancement failed: {str(e)}")
-                # Continue without AI enhancement
-                analysis = {"error": f"AI enhancement failed: {str(e)}"}
+                logger.warning(f"LLM extraction failed: {str(e)}, falling back to regex-based extraction")
+                # Fall back to regex-based extraction
+                tools = await api_doc_parser_service.generate_tools_from_documentation(
+                    doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags
+                )
+                analysis = {"error": f"LLM extraction failed: {str(e)}", "fallback": "regex_extraction"}
+
+        else:
+            # Use regex-based extraction without AI
+            logger.info("Using regex-based extraction (AI disabled)")
+            tools = await api_doc_parser_service.generate_tools_from_documentation(
+                doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags
+            )
+            analysis = {"extraction_method": "regex", "ai_enabled": False}
+
+        # Check if any tools were found
+        if not tools:
+            return {
+                "success": False,
+                "message": "No API endpoints could be extracted from the documentation",
+                "analysis": analysis,
+                "tool_count": 0
+            }
 
         # Preview mode - return without creating tools
         if preview_only:
@@ -3256,16 +3335,30 @@ async def process_api_documentation_url(
         created_tools = []
         errors = []
 
+        # Note: Using a mock request for metadata capture since URL endpoint doesn't have standard request
+        class MockRequest:
+            headers = {}
+            client = type("Client", (), {"host": "unknown"})()
+
+        metadata = MetadataCapture.extract_creation_metadata(MockRequest(), user)
+
         for tool in tools:
             try:
-                # Add metadata about creation source
-                metadata = {"created_via": "api_doc_url", "source_url": url, "source_format": doc_structure.get("source_format", "unknown"), "ai_enhanced": enhance_with_ai}
-                tool.metadata = metadata
+                # Add metadata about creation source to annotations
+                creation_metadata = {"created_via": "api_doc_url", "source_url": url, "source_format": doc_structure.get("source_format", "unknown"), "ai_enhanced": enhance_with_ai}
+                if tool.annotations is None:
+                    tool.annotations = {}
+                tool.annotations.update(creation_metadata)
 
-                # Create the tool
-                db_tool = await tool_service.create_tool(tool, db)
+                # Create the tool using register_tool
+                db_tool = await tool_service.register_tool(
+                    db=db,
+                    tool=tool,
+                    created_by=metadata["created_by"],
+                    created_via="api_doc_url",
+                )
                 created_tools.append(
-                    {"id": db_tool.id, "name": db_tool.name, "url": db_tool.url, "description": db_tool.description, "tags": [tag.name for tag in db_tool.tags] if db_tool.tags else []}
+                    {"id": db_tool.id, "name": db_tool.name, "url": db_tool.url, "description": db_tool.description, "tags": db_tool.tags or []}
                 )
                 logger.info(f"Created tool: {db_tool.name}")
 

@@ -18,15 +18,20 @@ history management via ChatHistoryManager from mcp_client_chat_service.
 
 # Standard
 import asyncio
+from datetime import datetime
 import json
 import os
 from typing import Any, Dict, Optional
 
 # Third-Party
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+
+# Authentication security scheme
+security = HTTPBearer(auto_error=False)
 
 try:
     # Third-Party
@@ -727,15 +732,14 @@ async def get_active_session(user_id: str) -> Optional[MCPChatService]:
 
 
 @llmchat_router.post("/connect")
-async def connect(input_data: ConnectInput, request: Request):
+async def connect(input_data: ConnectInput, request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security), jwt_token: Optional[str] = Cookie(default=None)):
     """Create or refresh a chat session for a user.
 
     Initializes a new MCPChatService instance for the specified user, establishing
     connections to both the MCP server and the configured LLM provider. If a session
     already exists for the user, it is gracefully shutdown before creating a new one.
 
-    Authentication is handled via JWT token from cookies if not explicitly provided
-    in the request body.
+    Authentication is handled via JWT token from Authorization header, cookies, or request body.
 
     Args:
         input_data: ConnectInput containing user_id, optional server/LLM config, and streaming preference.
@@ -794,13 +798,33 @@ async def connect(input_data: ConnectInput, request: Request):
         if not user_id or not isinstance(user_id, str):
             raise HTTPException(status_code=400, detail="Invalid user ID provided")
 
-        # Handle authentication token
+        # Handle authentication token - try multiple sources
+        # Priority: 1. Request body auth_token, 2. Authorization header, 3. Cookie
+        auth_token = None
         empty_token = ""  # nosec B105
-        if input_data.server and (input_data.server.auth_token is None or input_data.server.auth_token == empty_token):
-            jwt_token = request.cookies.get("jwt_token")
-            if not jwt_token:
-                raise HTTPException(status_code=401, detail="Authentication required. Please ensure you are logged in.")
-            input_data.server.auth_token = jwt_token
+
+        # Check if auth_token is already provided in request body
+        if input_data.server and input_data.server.auth_token and input_data.server.auth_token != empty_token:
+            auth_token = input_data.server.auth_token
+        # Try Authorization header (Bearer token)
+        elif credentials and credentials.credentials:
+            auth_token = credentials.credentials
+        # Try cookies
+        elif jwt_token:
+            auth_token = jwt_token
+        # Manual cookie reading as fallback
+        elif request.cookies.get("jwt_token"):
+            auth_token = request.cookies.get("jwt_token")
+
+        # If still no token found and auth is required, raise error
+        if not auth_token and settings.auth_required:
+            raise HTTPException(status_code=401, detail="Authentication required. Please provide a valid Bearer token in Authorization header, jwt_token cookie, or server.auth_token in request body.")
+
+        # Set the auth_token in the server config if we have one
+        if auth_token:
+            if not input_data.server:
+                input_data.server = ServerInput()
+            input_data.server.auth_token = auth_token
 
         # Close old session if it exists
         existing = await get_active_session(user_id)
@@ -827,25 +851,40 @@ async def connect(input_data: ConnectInput, request: Request):
 
         # Initialize chat service
         try:
+            logger.info(f"Creating MCPChatService for user '{user_id}'")
             chat_service = MCPChatService(config, user_id=user_id, redis_client=redis_client)
+
+            logger.info(f"Initializing chat service for user '{user_id}'")
             await chat_service.initialize()
 
+            logger.info(f"Clearing chat history for user '{user_id}'")
             # Clear chat history on new connection
             await chat_service.clear_history()
+
+            logger.info(f"Chat service fully initialized for user '{user_id}'")
         except ConnectionError as ce:
             # Clean up partial state
+            logger.error(f"ConnectionError during chat service initialization for user '{user_id}': {ce}", exc_info=True)
             await delete_user_config(user_id)
             raise HTTPException(status_code=503, detail=f"Failed to connect to MCP server: {str(ce)}. Please verify the server URL and authentication.")
         except ValueError as ve:
             # Clean up partial state
+            logger.error(f"ValueError during chat service initialization for user '{user_id}': {ve}", exc_info=True)
             await delete_user_config(user_id)
             raise HTTPException(status_code=400, detail=f"Invalid LLM configuration: {str(ve)}")
+        except ImportError as ie:
+            # Missing dependencies for LLM chat
+            logger.error(f"ImportError during chat service initialization for user '{user_id}': {ie}", exc_info=True)
+            await delete_user_config(user_id)
+            raise HTTPException(status_code=500, detail=f"Missing required dependencies: {str(ie)}. Please install with: pip install '.[llmchat]'")
         except Exception as init_error:
             # Clean up partial state
+            logger.error(f"Unexpected error during chat service initialization for user '{user_id}': {init_error}", exc_info=True)
             await delete_user_config(user_id)
             raise HTTPException(status_code=500, detail=f"Service initialization failed: {str(init_error)}")
 
         await set_active_session(user_id, chat_service)
+        logger.info(f"Successfully created and stored session for user '{user_id}'. Worker ID: {WORKER_ID}, Redis: {redis_client is not None}")
 
         # Extract tool names
         tool_names = []
@@ -928,8 +967,20 @@ async def token_streamer(chat_service: MCPChatService, message: str, user_id: st
         Yields:
             bytes: UTF-8 encoded SSE formatted lines.
         """
+
+        def _json_serializer(obj: Any) -> Any:
+            """Custom JSON serializer for non-serializable objects."""
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if hasattr(obj, "model_dump") and callable(obj.model_dump):
+                return obj.model_dump()
+            if hasattr(obj, "dict") and callable(obj.dict):
+                return obj.dict()
+            # Fallback to string representation
+            return str(obj)
+
         yield f"event: {event_type}\n".encode("utf-8")
-        yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+        yield f"data: {json.dumps(data, ensure_ascii=False, default=_json_serializer)}\n\n".encode("utf-8")
 
     try:
         async for ev in chat_service.chat_events(message):
@@ -1040,7 +1091,25 @@ async def chat(input_data: ChatInput):
     # Check for active session
     chat_service = await get_active_session(user_id)
     if not chat_service:
-        raise HTTPException(status_code=400, detail="No active session found. Please connect to a server first.")
+        # Provide more helpful debugging information
+        has_config = await get_user_config(user_id) is not None
+        session_in_memory = user_id in active_sessions
+
+        error_detail = f"No active session found for user '{user_id}'. "
+        if has_config:
+            error_detail += "Configuration exists but session not initialized. "
+        if session_in_memory:
+            error_detail += "Session exists in memory but not properly initialized. "
+        else:
+            error_detail += "Session does not exist - please call /llmchat/connect first. "
+
+        if redis_client:
+            error_detail += f"Using Redis session storage. Worker ID: {WORKER_ID}. "
+        else:
+            error_detail += "Using in-memory session storage. "
+
+        logger.warning(f"Session lookup failed: {error_detail}")
+        raise HTTPException(status_code=400, detail=error_detail.strip())
 
     # Verify session is initialized
     if not chat_service.is_initialized:
