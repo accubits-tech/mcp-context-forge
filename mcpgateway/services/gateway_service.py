@@ -755,14 +755,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 elif isinstance(gateway.auth_value, dict):
                     decoded_auth_value = gateway.auth_value
 
-            # Check for duplicate gateway
-            duplicate_gateway = self._check_gateway_uniqueness(
-                db=db, url=normalized_url, auth_value=decoded_auth_value, oauth_config=gateway.oauth_config, team_id=team_id, owner_email=owner_email, visibility=visibility
-            )
-
-            if duplicate_gateway:
-
-                raise GatewayDuplicateConflictError(duplicate_gateway=duplicate_gateway)
+            # NOTE: Duplicate URL+credentials check removed to allow gateway aliases.
+            # Users can register the same gateway URL with different names for organizational purposes.
+            # The name/slug uniqueness constraint (checked above) still prevents duplicate names.
 
             # Prevent URL-only gateways (no auth at all)
             # if not decoded_auth_value and not gateway.oauth_config:

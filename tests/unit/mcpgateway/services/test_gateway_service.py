@@ -37,7 +37,6 @@ from mcpgateway.services.gateway_service import (
     GatewayNameConflictError,
     GatewayNotFoundError,
     GatewayService,
-    GatewayDuplicateConflictError,
 )
 
 # ---------------------------------------------------------------------------
@@ -515,44 +514,42 @@ class TestGatewayService:
         # It just re-raises the exception, so we shouldn't expect rollback to be called
 
     @pytest.mark.asyncio
-    async def test_register_gateway_with_existing_tools(self, gateway_service, test_db, monkeypatch):
-        """Test registering gateway with URL/credentials that already exist (duplicate gateway)."""
-        # Mock existing GATEWAY in database (not tool)
-        existing_gateway = MagicMock()
-        existing_gateway.id = 123
-        existing_gateway.url = "http://example.com/gateway"
-        existing_gateway.enabled = True
-        existing_gateway.visibility = "public"
-        existing_gateway.name = "existing_gateway"
-        existing_gateway.team_id = None
-        existing_gateway.owner_email = "test@example.com"
-
+    async def test_register_gateway_with_same_url_as_alias(self, gateway_service, test_db, monkeypatch):
+        """Test registering gateway with same URL/credentials succeeds (alias support)."""
+        # Mock name-conflict check to return no conflict
         test_db.execute = Mock(
             side_effect=[
-                _make_execute_result(scalar=None),  # name-conflict check
-                # No second call needed - check_gateway_uniqueness uses query().all()
+                _make_execute_result(scalar=None),  # name-conflict check - no conflict
             ]
         )
-
-        # Mock check_gateway_uniqueness to return the existing gateway
-        gateway_service._check_gateway_uniqueness = Mock(return_value=existing_gateway)
 
         test_db.add = Mock()
         test_db.commit = Mock()
         test_db.refresh = Mock()
 
-        gateway_create = GatewayCreate(
-            name="tool_gateway",
-            url="http://example.com/gateway",  # Same URL as existing
-            description="Gateway with existing tools",
+        gateway_service._initialize_gateway = AsyncMock(return_value=({"tools": {"listChanged": True}}, [], [], []))
+        gateway_service._notify_gateway_added = AsyncMock()
+
+        mock_model = Mock()
+        mock_model.masked.return_value = mock_model
+        mock_model.name = "tool_gateway"
+
+        monkeypatch.setattr(
+            "mcpgateway.services.gateway_service.GatewayRead.model_validate",
+            lambda x: mock_model,
         )
 
-        with pytest.raises(GatewayDuplicateConflictError) as exc_info:
-            await gateway_service.register_gateway(test_db, gateway_create)
+        gateway_create = GatewayCreate(
+            name="tool_gateway",
+            url="http://example.com/gateway",
+            description="Gateway alias with same URL",
+        )
 
-        # Verify the error details
-        assert exc_info.value.gateway_id == 123
-        assert exc_info.value.enabled is True
+        # Should succeed - aliases are allowed (same URL with different name)
+        result = await gateway_service.register_gateway(test_db, gateway_create)
+        assert result is not None
+        assert test_db.add.called
+        assert test_db.commit.called
 
 
     @pytest.mark.asyncio
