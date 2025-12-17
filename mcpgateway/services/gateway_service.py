@@ -465,36 +465,102 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         )
 
         try:
-            # Make a single request and let httpx follow valid redirects.
+            logger.debug(f"[GATEWAY_VALIDATION] Starting validation for URL={url}, transport_type={transport_type}, timeout={timeout}")
+            logger.debug(f"[GATEWAY_VALIDATION] Request headers (auth redacted): {list(headers.keys())}")
+
+            # STREAMABLEHTTP requires POST with MCP initialize request
+            if transport_type == "STREAMABLEHTTP":
+                # MCP JSON-RPC initialize request
+                mcp_init_request = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "mcpgateway-validator", "version": "1.0.0"},
+                    },
+                }
+                request_headers = {**headers, "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+                logger.debug(f"[GATEWAY_VALIDATION] Sending POST request for STREAMABLEHTTP validation")
+
+                async with validation_client.client.stream("POST", url, headers=request_headers, json=mcp_init_request, timeout=timeout) as response:
+                    response_headers = dict(response.headers)
+                    content_type = response_headers.get("content-type", "")
+                    logger.info(f"Validating gateway URL {url}, received status {response.status_code}, content_type: {content_type}")
+                    logger.debug(f"[GATEWAY_VALIDATION] Full response headers: {response_headers}")
+
+                    # Authentication failures mean the endpoint is not usable
+                    if response.status_code in (401, 403, 404):
+                        try:
+                            body = await response.aread()
+                            body_text = body.decode("utf-8", errors="replace")[:1000]
+                            logger.warning(f"[GATEWAY_VALIDATION] Authentication failed for {url} with status {response.status_code}, body: {body_text}")
+                        except Exception as body_err:
+                            logger.warning(f"[GATEWAY_VALIDATION] Authentication failed for {url} with status {response.status_code}, could not read body: {body_err}")
+                        return False
+
+                    # Check for successful response (200 or 202)
+                    if response.status_code in (200, 202):
+                        mcp_session_id = response_headers.get("mcp-session-id")
+                        logger.debug(f"[GATEWAY_VALIDATION] STREAMABLEHTTP check: mcp-session-id={mcp_session_id}, content_type={content_type}")
+                        # For STREAMABLEHTTP, we expect either JSON response or SSE stream
+                        if "application/json" in content_type or "text/event-stream" in content_type:
+                            logger.debug(f"[GATEWAY_VALIDATION] STREAMABLEHTTP validation succeeded (status={response.status_code}, content_type={content_type})")
+                            return True
+                        else:
+                            logger.warning(f"[GATEWAY_VALIDATION] STREAMABLEHTTP validation failed: unexpected content_type={content_type}")
+                    else:
+                        try:
+                            body = await response.aread()
+                            body_text = body.decode("utf-8", errors="replace")[:1000]
+                            logger.warning(f"[GATEWAY_VALIDATION] STREAMABLEHTTP validation failed: status={response.status_code}, body: {body_text}")
+                        except Exception as body_err:
+                            logger.warning(f"[GATEWAY_VALIDATION] STREAMABLEHTTP validation failed: status={response.status_code}, could not read body: {body_err}")
+
+                logger.warning(f"[GATEWAY_VALIDATION] Validation failed for {url}: STREAMABLEHTTP validation unsuccessful")
+                return False
+
+            # SSE uses GET request
             async with validation_client.client.stream("GET", url, headers=headers, timeout=timeout) as response:
                 response_headers = dict(response.headers)
                 content_type = response_headers.get("content-type", "")
                 logger.info(f"Validating gateway URL {url}, received status {response.status_code}, content_type: {content_type}")
+                logger.debug(f"[GATEWAY_VALIDATION] Full response headers: {response_headers}")
 
                 # Authentication failures mean the endpoint is not usable
                 if response.status_code in (401, 403, 404):
-                    logger.debug(f"Authentication failed for {url} with status {response.status_code}")
+                    # Try to read body for error details
+                    try:
+                        body = await response.aread()
+                        body_text = body.decode("utf-8", errors="replace")[:1000]
+                        logger.warning(f"[GATEWAY_VALIDATION] Authentication failed for {url} with status {response.status_code}, body: {body_text}")
+                    except Exception as body_err:
+                        logger.warning(f"[GATEWAY_VALIDATION] Authentication failed for {url} with status {response.status_code}, could not read body: {body_err}")
                     return False
-
-                # STREAMABLEHTTP: expect an MCP session id and JSON content
-                if transport_type == "STREAMABLEHTTP":
-                    mcp_session_id = response_headers.get("mcp-session-id")
-                    if mcp_session_id is not None and mcp_session_id != "":
-                        if content_type is not None and content_type != "" and "application/json" in content_type:
-                            return True
 
                 # SSE: expect text/event-stream
                 if transport_type == "SSE":
                     logger.info(f"Validating SSE gateway URL {url}")
                     if "text/event-stream" in content_type:
+                        logger.debug(f"[GATEWAY_VALIDATION] SSE validation succeeded")
                         return True
+                    else:
+                        logger.warning(f"[GATEWAY_VALIDATION] SSE validation failed: expected text/event-stream but got {content_type}")
 
+            logger.warning(f"[GATEWAY_VALIDATION] Validation failed for {url}: no valid transport detected for type={transport_type}")
             return False
         except httpx.UnsupportedProtocol as e:
-            logger.debug(f"Gateway URL Unsupported Protocol for {url}: {str(e)}", exc_info=True)
+            logger.warning(f"[GATEWAY_VALIDATION] Unsupported protocol for {url}: {str(e)}", exc_info=True)
+            return False
+        except httpx.ConnectError as e:
+            logger.warning(f"[GATEWAY_VALIDATION] Connection error for {url}: {str(e)}", exc_info=True)
+            return False
+        except httpx.TimeoutException as e:
+            logger.warning(f"[GATEWAY_VALIDATION] Timeout connecting to {url} (timeout={timeout}s): {str(e)}", exc_info=True)
             return False
         except Exception as e:
-            logger.debug(f"Gateway validation failed for {url}: {str(e)}", exc_info=True)
+            logger.warning(f"[GATEWAY_VALIDATION] Unexpected error validating {url}: {type(e).__name__}: {str(e)}", exc_info=True)
             return False
         finally:
             await validation_client.aclose()
@@ -974,17 +1040,25 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             GatewayConnectionError: If connection or OAuth fails
         """
         try:
+            logger.info(f"[FETCH_TOOLS_OAUTH] Starting fetch_tools_after_oauth for gateway_id={gateway_id}, user={app_user_email}")
+
             # Get the gateway
             gateway = db.execute(select(DbGateway).where(DbGateway.id == gateway_id)).scalar_one_or_none()
 
             if not gateway:
+                logger.error(f"[FETCH_TOOLS_OAUTH] Gateway {gateway_id} not found in database")
                 raise ValueError(f"Gateway {gateway_id} not found")
 
+            logger.debug(f"[FETCH_TOOLS_OAUTH] Found gateway: name={gateway.name}, url={gateway.url}, transport={gateway.transport}")
+
             if not gateway.oauth_config:
+                logger.error(f"[FETCH_TOOLS_OAUTH] Gateway {gateway_id} has no OAuth configuration")
                 raise ValueError(f"Gateway {gateway_id} has no OAuth configuration")
 
             grant_type = gateway.oauth_config.get("grant_type")
+            logger.debug(f"[FETCH_TOOLS_OAUTH] OAuth config grant_type={grant_type}")
             if grant_type != "authorization_code":
+                logger.error(f"[FETCH_TOOLS_OAUTH] Gateway {gateway_id} is not using Authorization Code flow (grant_type={grant_type})")
                 raise ValueError(f"Gateway {gateway_id} is not using Authorization Code flow")
 
             # Get OAuth tokens for this gateway
@@ -995,31 +1069,38 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
             # Get user-specific OAuth token
             if not app_user_email:
+                logger.error(f"[FETCH_TOOLS_OAUTH] No user email provided for OAuth gateway {gateway.name}")
                 raise GatewayConnectionError(f"User authentication required for OAuth gateway {gateway.name}")
 
+            logger.debug(f"[FETCH_TOOLS_OAUTH] Retrieving OAuth token for user={app_user_email}, gateway_id={gateway.id}")
             access_token = await token_storage.get_user_token(gateway.id, app_user_email)
 
             if not access_token:
+                logger.error(f"[FETCH_TOOLS_OAUTH] No OAuth tokens found for user {app_user_email} on gateway {gateway.name}")
                 raise GatewayConnectionError(
                     f"No OAuth tokens found for user {app_user_email} on gateway {gateway.name}. Please complete the OAuth authorization flow first at /oauth/authorize/{gateway.id}"
                 )
 
             # Debug: Check if token was decrypted
             if access_token.startswith("Z0FBQUFBQm"):  # Encrypted tokens start with this
-                logger.error(f"Token appears to be encrypted! Encryption service may have failed. Token length: {len(access_token)}")
+                logger.error(f"[FETCH_TOOLS_OAUTH] Token appears to be encrypted! Encryption service may have failed. Token length: {len(access_token)}")
             else:
-                logger.info(f"Using decrypted OAuth token for {gateway.name} (length: {len(access_token)})")
+                logger.info(f"[FETCH_TOOLS_OAUTH] Using decrypted OAuth token for {gateway.name} (length: {len(access_token)}, prefix: {access_token[:10]}...)")
 
             # Now connect to MCP server with the access token
             authentication = {"Authorization": f"Bearer {access_token}"}
 
             # Use the existing connection logic
             # Note: For OAuth servers, skip validation since we already validated via OAuth flow
+            logger.info(f"[FETCH_TOOLS_OAUTH] Connecting to gateway URL={gateway.url} with transport={gateway.transport.upper()}")
             if gateway.transport.upper() == "SSE":
+                logger.debug(f"[FETCH_TOOLS_OAUTH] Using SSE transport")
                 capabilities, tools, resources, prompts = await self._connect_to_sse_server_without_validation(gateway.url, authentication)
             elif gateway.transport.upper() == "STREAMABLEHTTP":
+                logger.debug(f"[FETCH_TOOLS_OAUTH] Using STREAMABLEHTTP transport")
                 capabilities, tools, resources, prompts = await self.connect_to_streamablehttp_server(gateway.url, authentication)
             else:
+                logger.error(f"[FETCH_TOOLS_OAUTH] Unsupported transport type: {gateway.transport}")
                 raise ValueError(f"Unsupported transport type: {gateway.transport}")
 
             # Handle tools, resources, and prompts using helper methods
@@ -1095,11 +1176,15 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 # Still commit to save any updates to existing items
                 db.commit()
 
+            logger.info(f"[FETCH_TOOLS_OAUTH] Successfully completed for gateway {gateway_id}: {len(tools)} tools, {len(resources)} resources, {len(prompts)} prompts")
             return {"capabilities": capabilities, "tools": tools, "resources": resources, "prompts": prompts}
 
+        except GatewayConnectionError:
+            # Re-raise GatewayConnectionError without wrapping (already has detailed message)
+            raise
         except Exception as e:
-            logger.error(f"Failed to fetch tools after OAuth for gateway {gateway_id}: {e}")
-            raise GatewayConnectionError(f"Failed to fetch tools after OAuth: {str(e)}")
+            logger.error(f"[FETCH_TOOLS_OAUTH] Failed for gateway {gateway_id}: {type(e).__name__}: {e}", exc_info=True)
+            raise GatewayConnectionError(f"Failed to fetch tools after OAuth: {type(e).__name__}: {str(e)}")
 
     async def list_gateways(self, db: Session, include_inactive: bool = False, tags: Optional[List[str]] = None) -> List[GatewayRead]:
         """List all registered gateways.
@@ -3420,27 +3505,46 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 auth=auth,
             )
 
-        if await self._validate_gateway_url(url=server_url, headers=authentication, transport_type="STREAMABLEHTTP"):
+        logger.debug(f"[STREAMABLEHTTP] Starting connection to {server_url}")
+        logger.debug(f"[STREAMABLEHTTP] Authentication headers present: {list(authentication.keys()) if authentication else 'None'}")
+
+        validation_result = await self._validate_gateway_url(url=server_url, headers=authentication, transport_type="STREAMABLEHTTP")
+        if not validation_result:
+            logger.error(f"[STREAMABLEHTTP] Gateway validation failed for {server_url} - see [GATEWAY_VALIDATION] logs above for details")
+            raise GatewayConnectionError(f"Failed to initialize gateway at {server_url}: validation failed")
+
+        try:
+            logger.debug(f"[STREAMABLEHTTP] Validation passed, opening streamable HTTP client connection to {server_url}")
             async with streamablehttp_client(url=server_url, headers=authentication, httpx_client_factory=get_httpx_client_factory) as (read_stream, write_stream, _get_session_id):
+                logger.debug(f"[STREAMABLEHTTP] Client connection established, creating session")
                 async with ClientSession(read_stream, write_stream) as session:
                     # Initialize the session
-                    response = await session.initialize()
-                    capabilities = response.capabilities.model_dump(by_alias=True, exclude_none=True)
-                    logger.debug(f"Server capabilities: {capabilities}")
+                    logger.debug(f"[STREAMABLEHTTP] Initializing MCP session")
+                    try:
+                        response = await session.initialize()
+                        capabilities = response.capabilities.model_dump(by_alias=True, exclude_none=True)
+                        logger.debug(f"[STREAMABLEHTTP] Server capabilities: {capabilities}")
+                    except Exception as init_err:
+                        logger.error(f"[STREAMABLEHTTP] Failed to initialize session: {type(init_err).__name__}: {init_err}", exc_info=True)
+                        raise
 
-                    response = await session.list_tools()
-                    tools = response.tools
-                    tools = [tool.model_dump(by_alias=True, exclude_none=True) for tool in tools]
+                    logger.debug(f"[STREAMABLEHTTP] Fetching tools list")
+                    try:
+                        response = await session.list_tools()
+                        tools = response.tools
+                        tools = [tool.model_dump(by_alias=True, exclude_none=True) for tool in tools]
 
-                    tools = [ToolCreate.model_validate(tool) for tool in tools]
-                    for tool in tools:
-                        tool.request_type = "STREAMABLEHTTP"
-                    if tools:
-                        logger.info(f"Fetched {len(tools)} tools from gateway")
+                        tools = [ToolCreate.model_validate(tool) for tool in tools]
+                        for tool in tools:
+                            tool.request_type = "STREAMABLEHTTP"
+                        logger.info(f"[STREAMABLEHTTP] Fetched {len(tools)} tools from gateway")
+                    except Exception as tools_err:
+                        logger.error(f"[STREAMABLEHTTP] Failed to fetch tools: {type(tools_err).__name__}: {tools_err}", exc_info=True)
+                        raise
 
                     # Fetch resources if supported
                     resources = []
-                    logger.debug(f"Checking for resources support: {capabilities.get('resources')}")
+                    logger.debug(f"[STREAMABLEHTTP] Checking for resources support: {capabilities.get('resources')}")
                     if capabilities.get("resources"):
                         try:
                             response = await session.list_resources()
@@ -3455,13 +3559,13 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                                 if "content" not in resource_data:
                                     resource_data["content"] = ""
                                 resources.append(ResourceCreate.model_validate(resource_data))
-                            logger.info(f"Fetched {len(resources)} resources from gateway")
+                            logger.info(f"[STREAMABLEHTTP] Fetched {len(resources)} resources from gateway")
                         except Exception as e:
-                            logger.warning(f"Failed to fetch resources: {e}")
+                            logger.warning(f"[STREAMABLEHTTP] Failed to fetch resources: {e}")
 
                     # Fetch prompts if supported
                     prompts = []
-                    logger.debug(f"Checking for prompts support: {capabilities.get('prompts')}")
+                    logger.debug(f"[STREAMABLEHTTP] Checking for prompts support: {capabilities.get('prompts')}")
                     if capabilities.get("prompts"):
                         try:
                             response = await session.list_prompts()
@@ -3473,8 +3577,14 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                                 if "template" not in prompt_data:
                                     prompt_data["template"] = ""
                                 prompts.append(PromptCreate.model_validate(prompt_data))
+                            logger.info(f"[STREAMABLEHTTP] Fetched {len(prompts)} prompts from gateway")
                         except Exception as e:
-                            logger.warning(f"Failed to fetch prompts: {e}")
+                            logger.warning(f"[STREAMABLEHTTP] Failed to fetch prompts: {e}")
 
+                    logger.info(f"[STREAMABLEHTTP] Successfully connected to {server_url}: {len(tools)} tools, {len(resources)} resources, {len(prompts)} prompts")
                     return capabilities, tools, resources, prompts
-        raise GatewayConnectionError(f"Failed to initialize gateway at{server_url}")
+        except GatewayConnectionError:
+            raise
+        except Exception as e:
+            logger.error(f"[STREAMABLEHTTP] Connection failed for {server_url}: {type(e).__name__}: {e}", exc_info=True)
+            raise GatewayConnectionError(f"Failed to initialize gateway at {server_url}: {type(e).__name__}: {e}")
