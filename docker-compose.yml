@@ -109,13 +109,20 @@ services:
       - MCP_CLIENT_AUTH_ENABLED=true
       - TRUST_PROXY_AUTH=false
       # Logging configuration
-      - LOG_LEVEL=ERROR  # Default to ERROR for production performance
+      - LOG_LEVEL=INFO  # Default to ERROR for production performance
       - DISABLE_ACCESS_LOG=true  # Disable uvicorn access logs for performance (massive I/O overhead)
       # Crewai fix
       - HOME=/app
       - XDG_DATA_HOME=/app/.local/share
       - XDG_CACHE_HOME=/app/.cache
       - XDG_CONFIG_HOME=/app/.config
+      - SSO_ENABLED=true
+      - SSO_KEYCLOAK_ENABLED=true
+      - SSO_KEYCLOAK_BASE_URL=https://keycloak.bud.studio
+      - SSO_KEYCLOAK_REALM=bud-keycloak
+      - SSO_KEYCLOAK_CLIENT_ID=mcp-gateway
+      - SSO_KEYCLOAK_CLIENT_SECRET=QCwtC06JbKWlTqsOsocBlYeaZSkxs1E2
+
       # Phoenix Observability Integration (uncomment when using Phoenix)
       # - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT:-http://phoenix:6006}
       # - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:4317}
