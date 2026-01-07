@@ -225,6 +225,20 @@ def get_predefined_sso_providers() -> List[Dict]:
             endpoints = discover_keycloak_endpoints_sync(settings.sso_keycloak_base_url, settings.sso_keycloak_realm)
 
             if endpoints:
+                # Store Keycloak-specific settings in team_mapping as provider metadata
+                # (SSOProvider model doesn't have separate metadata/jwks_uri columns)
+                keycloak_metadata = {
+                    "_keycloak_config": {
+                        "realm": settings.sso_keycloak_realm,
+                        "base_url": settings.sso_keycloak_base_url,
+                        "jwks_uri": endpoints.get("jwks_uri"),
+                        "map_realm_roles": settings.sso_keycloak_map_realm_roles,
+                        "map_client_roles": settings.sso_keycloak_map_client_roles,
+                        "username_claim": settings.sso_keycloak_username_claim,
+                        "email_claim": settings.sso_keycloak_email_claim,
+                        "groups_claim": settings.sso_keycloak_groups_claim,
+                    }
+                }
                 providers.append(
                     {
                         "id": "keycloak",
@@ -237,20 +251,10 @@ def get_predefined_sso_providers() -> List[Dict]:
                         "token_url": endpoints["token_url"],
                         "userinfo_url": endpoints["userinfo_url"],
                         "issuer": endpoints["issuer"],
-                        "jwks_uri": endpoints.get("jwks_uri"),
                         "scope": "openid profile email",
                         "trusted_domains": settings.sso_trusted_domains,
                         "auto_create_users": settings.sso_auto_create_users,
-                        "team_mapping": {},
-                        "metadata": {
-                            "realm": settings.sso_keycloak_realm,
-                            "base_url": settings.sso_keycloak_base_url,
-                            "map_realm_roles": settings.sso_keycloak_map_realm_roles,
-                            "map_client_roles": settings.sso_keycloak_map_client_roles,
-                            "username_claim": settings.sso_keycloak_username_claim,
-                            "email_claim": settings.sso_keycloak_email_claim,
-                            "groups_claim": settings.sso_keycloak_groups_claim,
-                        },
+                        "team_mapping": keycloak_metadata,
                     }
                 )
             else:
@@ -316,8 +320,22 @@ def bootstrap_sso_providers() -> None:
             existing_by_name = sso_service.get_provider_by_name(provider_config["name"])
 
             if not existing_by_id and not existing_by_name:
-                sso_service.create_provider(provider_config)
-                print(f"✅ Created SSO provider: {provider_config['display_name']}")
+                try:
+                    sso_service.create_provider(provider_config)
+                    print(f"✅ Created SSO provider: {provider_config['display_name']}")
+                except Exception as create_error:
+                    # Handle race condition: another process may have created the provider
+                    if "UNIQUE constraint failed" in str(create_error) or "IntegrityError" in str(type(create_error).__name__):
+                        # Rollback the failed transaction and retry as update
+                        db.rollback()
+                        existing_provider = sso_service.get_provider(provider_config["id"]) or sso_service.get_provider_by_name(provider_config["name"])
+                        if existing_provider:
+                            sso_service.update_provider(existing_provider.id, provider_config)
+                            print(f"🔄 Updated SSO provider (race condition): {provider_config['display_name']}")
+                        else:
+                            logger.warning(f"Could not find or create SSO provider: {provider_config['id']}")
+                    else:
+                        raise
             else:
                 # Update existing provider with current configuration
                 existing_provider = existing_by_id or existing_by_name

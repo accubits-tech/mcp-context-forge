@@ -96,6 +96,10 @@ from mcpgateway.schemas import (
     A2AAgentCreate,
     A2AAgentRead,
     A2AAgentUpdate,
+    BatchAuthSummary,
+    BulkAuthConfigRequest,
+    BulkAuthConfigResponse,
+    BulkAuthConfigResult,
     GatewayCreate,
     GatewayRead,
     GatewayUpdate,
@@ -114,6 +118,8 @@ from mcpgateway.schemas import (
     ServerUpdate,
     TaggedEntity,
     TagInfo,
+    ToolAuthInfo,
+    ToolBatchResponse,
     ToolCreate,
     ToolRead,
     ToolUpdate,
@@ -2614,6 +2620,153 @@ async def toggle_tool_status(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+###################################
+# Bulk Auth Configuration APIs    #
+###################################
+
+
+@tool_router.get("/batch/{batch_id}", response_model=ToolBatchResponse)
+async def get_tools_by_batch(
+    batch_id: str,
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Get all tools from an import batch with auth status.
+
+    Args:
+        batch_id: UUID of the import batch
+        include_inactive: Include disabled tools
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        ToolBatchResponse with tools and auth summary
+    """
+    from mcpgateway.utils.services_auth import decode_auth
+
+    tools = await tool_service.get_tools_by_batch_id(db, batch_id, include_inactive)
+
+    if not tools:
+        raise HTTPException(status_code=404, detail=f"No tools found for batch {batch_id}")
+
+    tool_infos = []
+    auth_types_seen = set()
+    requiring_auth = 0
+    configured = 0
+
+    for tool in tools:
+        auth_required = tool.auth is not None and tool.auth.auth_type is not None
+        auth_type = tool.auth.auth_type if tool.auth else None
+        auth_configured = False
+
+        if auth_required and tool.auth and tool.auth.auth_value:
+            # Check if auth is actually configured (not placeholder)
+            try:
+                decoded = decode_auth(tool.auth.auth_value)
+                auth_configured = not any("REPLACE_WITH" in str(v) for v in decoded.values())
+            except Exception:
+                pass
+
+        if auth_required:
+            requiring_auth += 1
+            if auth_type:
+                auth_types_seen.add(auth_type)
+        if auth_configured:
+            configured += 1
+
+        tool_infos.append(ToolAuthInfo(
+            id=tool.id,
+            name=tool.name,
+            auth_required=auth_required,
+            auth_type=auth_type,
+            auth_configured=auth_configured,
+        ))
+
+    return ToolBatchResponse(
+        batch_id=batch_id,
+        tools=tool_infos,
+        summary=BatchAuthSummary(
+            total=len(tools),
+            requiring_auth=requiring_auth,
+            configured=configured,
+            auth_types=list(auth_types_seen),
+        ),
+    )
+
+
+@tool_router.post("/auth/configure", response_model=BulkAuthConfigResponse)
+@require_permission("tools.update")
+async def bulk_configure_auth(
+    config: BulkAuthConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Dict[str, Any]:
+    """Configure authentication for multiple tools.
+
+    Supports:
+    - Batch-level: Configure all tools from an import batch
+    - Tool-level: Configure specific tools by ID
+    - Shared auth: Apply same credentials to all selected tools
+    - Per-tool: Override with specific credentials per tool
+    - Dry-run: Preview changes without applying
+
+    Args:
+        config: Bulk auth configuration request
+        request: HTTP request for metadata
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        BulkAuthConfigResponse with results
+    """
+    user_str = user.get("email") if isinstance(user, dict) else str(user)
+    logger.info(f"User {user_str} configuring auth for batch={config.batch_id}, tool_ids={config.tool_ids}, dry_run={config.dry_run}")
+
+    mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)
+
+    result = await tool_service.bulk_configure_auth(
+        db=db,
+        batch_id=config.batch_id,
+        tool_ids=config.tool_ids,
+        shared_auth=config.shared_auth,
+        tool_auth=config.tool_auth,
+        dry_run=config.dry_run,
+        skip_already_configured=config.skip_already_configured,
+        modified_by=mod_metadata.get("modified_by"),
+        modified_from_ip=mod_metadata.get("modified_from_ip"),
+        modified_via="bulk_auth_config",
+    )
+
+    configured_count = len(result["configured"])
+    skipped_count = len(result["skipped"])
+    failed_count = len(result["failed"])
+
+    success = failed_count == 0 and configured_count > 0
+
+    if config.dry_run:
+        message = f"Dry run: would configure {configured_count} tools, skip {skipped_count}, fail {failed_count}"
+    else:
+        message = f"Configured authentication for {configured_count} tools"
+        if skipped_count > 0:
+            message += f", skipped {skipped_count}"
+        if failed_count > 0:
+            message += f", failed {failed_count}"
+
+    return BulkAuthConfigResponse(
+        success=success,
+        message=message,
+        dry_run=config.dry_run,
+        configured_count=configured_count,
+        skipped_count=skipped_count,
+        failed_count=failed_count,
+        configured=[BulkAuthConfigResult(**r) for r in result["configured"]],
+        skipped=[BulkAuthConfigResult(**r) for r in result["skipped"]],
+        failed=[BulkAuthConfigResult(**r) for r in result["failed"]],
+    )
+
+
 ########################
 # OpenAPI Tools APIs   #
 ########################
@@ -2650,6 +2803,9 @@ async def upload_openapi_spec(
     """
     try:
         logger.info(f"User {user} uploading OpenAPI spec file: {file.filename}")
+
+        # Generate import batch ID for grouping tools
+        import_batch_id = str(uuid.uuid4())
 
         # Read file content
         content = await file.read()
@@ -2747,24 +2903,46 @@ async def upload_openapi_spec(
                     created_from_ip=metadata["created_from_ip"],
                     created_via=metadata["created_via"],
                     created_user_agent=metadata["created_user_agent"],
-                    import_batch_id=metadata.get("import_batch_id"),
+                    import_batch_id=import_batch_id,
                     federation_source=metadata.get("federation_source"),
                 )
-                created_tools.append(created_tool.model_dump(by_alias=True))
+
+                # Add auth info to response
+                tool_data = created_tool.model_dump(by_alias=True)
+                auth_required = tool.auth is not None and tool.auth.auth_type is not None
+                tool_data["auth_required"] = auth_required
+                tool_data["auth_type"] = tool.auth.auth_type if tool.auth else None
+                tool_data["auth_configured"] = False  # Placeholders are not configured
+                created_tools.append(tool_data)
 
             except Exception as tool_error:
                 logger.error(f"Failed to create tool {tool.name}: {str(tool_error)}")
                 failed_tools.append({"name": tool.name, "error": str(tool_error)})
 
+        # Build auth summary
+        auth_types_seen = set()
+        tools_requiring_auth = 0
+        for t in created_tools:
+            if t.get("auth_required"):
+                tools_requiring_auth += 1
+                if t.get("auth_type"):
+                    auth_types_seen.add(t["auth_type"])
+
         return {
             "status": "success",
             "message": f"Processed OpenAPI specification from {file.filename}",
+            "import_batch_id": import_batch_id,
             "api_info": {"title": spec.get("info", {}).get("title", "Unknown API"), "version": spec.get("info", {}).get("version", "unknown"), "openapi_version": spec.get("openapi", "unknown")},
             "tools_created": len(created_tools),
             "tools_failed": len(failed_tools),
             "created_tools": created_tools,
             "failed_tools": failed_tools,
             "ai_enhanced": enhance_with_ai and len(tools) > 0,
+            "auth_summary": {
+                "tools_requiring_auth": tools_requiring_auth,
+                "tools_configured": 0,
+                "auth_types": list(auth_types_seen),
+            },
         }
 
     except OpenAPIValidationError as e:
@@ -2812,6 +2990,9 @@ async def process_openapi_url(
     """
     try:
         logger.info(f"User {user} processing OpenAPI spec from URL: {url}")
+
+        # Generate import batch ID for grouping tools
+        import_batch_id = str(uuid.uuid4())
 
         # Fetch OpenAPI specification from URL
         import httpx
@@ -2915,18 +3096,35 @@ async def process_openapi_url(
                     created_from_ip=metadata["created_from_ip"],
                     created_via=metadata["created_via"],
                     created_user_agent=metadata["created_user_agent"],
-                    import_batch_id=metadata.get("import_batch_id"),
+                    import_batch_id=import_batch_id,
                     federation_source=metadata.get("federation_source"),
                 )
-                created_tools.append(created_tool.model_dump(by_alias=True))
+
+                # Add auth info to response
+                tool_data = created_tool.model_dump(by_alias=True)
+                auth_required = tool.auth is not None and tool.auth.auth_type is not None
+                tool_data["auth_required"] = auth_required
+                tool_data["auth_type"] = tool.auth.auth_type if tool.auth else None
+                tool_data["auth_configured"] = False  # Placeholders are not configured
+                created_tools.append(tool_data)
 
             except Exception as tool_error:
                 logger.error(f"Failed to create tool {tool.name}: {str(tool_error)}")
                 failed_tools.append({"name": tool.name, "error": str(tool_error)})
 
+        # Build auth summary
+        auth_types_seen = set()
+        tools_requiring_auth = 0
+        for t in created_tools:
+            if t.get("auth_required"):
+                tools_requiring_auth += 1
+                if t.get("auth_type"):
+                    auth_types_seen.add(t["auth_type"])
+
         return {
             "status": "success",
             "message": f"Processed OpenAPI specification from {url}",
+            "import_batch_id": import_batch_id,
             "source_url": url,
             "api_info": {"title": spec.get("info", {}).get("title", "Unknown API"), "version": spec.get("info", {}).get("version", "unknown"), "openapi_version": spec.get("openapi", "unknown")},
             "tools_created": len(created_tools),
@@ -2934,6 +3132,11 @@ async def process_openapi_url(
             "created_tools": created_tools,
             "failed_tools": failed_tools,
             "ai_enhanced": enhance_with_ai and len(tools) > 0,
+            "auth_summary": {
+                "tools_requiring_auth": tools_requiring_auth,
+                "tools_configured": 0,
+                "auth_types": list(auth_types_seen),
+            },
         }
 
     except httpx.HTTPError as e:
@@ -2991,6 +3194,9 @@ async def upload_api_documentation(
     """
     try:
         logger.info(f"User {user} uploading API documentation file: {file.filename} (format: {format_hint})")
+
+        # Generate import batch ID for grouping tools
+        import_batch_id = str(uuid.uuid4())
 
         # Check file size
         max_file_size = 50 * 1024 * 1024  # 50MB
@@ -3141,22 +3347,48 @@ async def upload_api_documentation(
                     tool=tool,
                     created_by=metadata["created_by"],
                     created_via="api_doc_upload",
+                    import_batch_id=import_batch_id,
                 )
-                created_tools.append(
-                    {"id": db_tool.id, "name": db_tool.name, "url": db_tool.url, "description": db_tool.description, "tags": db_tool.tags or []}
-                )
+
+                # Add auth info to response
+                auth_required = tool.auth is not None and tool.auth.auth_type is not None
+                created_tools.append({
+                    "id": db_tool.id,
+                    "name": db_tool.name,
+                    "url": db_tool.url,
+                    "description": db_tool.description,
+                    "tags": db_tool.tags or [],
+                    "auth_required": auth_required,
+                    "auth_type": tool.auth.auth_type if tool.auth else None,
+                    "auth_configured": False,
+                })
                 logger.info(f"Created tool: {db_tool.name}")
 
             except Exception as e:
                 logger.error(f"Failed to create tool {tool.name}: {str(e)}")
                 errors.append(f"Tool '{tool.name}': {str(e)}")
 
+        # Build auth summary
+        auth_types_seen = set()
+        tools_requiring_auth = 0
+        for t in created_tools:
+            if t.get("auth_required"):
+                tools_requiring_auth += 1
+                if t.get("auth_type"):
+                    auth_types_seen.add(t["auth_type"])
+
         result = {
             "success": len(created_tools) > 0,
             "message": f"Created {len(created_tools)} tools from API documentation",
+            "import_batch_id": import_batch_id,
             "tool_count": len(created_tools),
             "created_tools": created_tools,
             "analysis": doc_structure if not enhance_with_ai else analysis,
+            "auth_summary": {
+                "tools_requiring_auth": tools_requiring_auth,
+                "tools_configured": 0,
+                "auth_types": list(auth_types_seen),
+            },
         }
 
         if errors:
@@ -3211,6 +3443,9 @@ async def process_api_documentation_url(
     """
     try:
         logger.info(f"User {user} processing API documentation from URL: {url} (format: {format_hint})")
+
+        # Generate import batch ID for grouping tools
+        import_batch_id = str(uuid.uuid4())
 
         # Parse additional tags
         additional_tags = []
@@ -3356,22 +3591,48 @@ async def process_api_documentation_url(
                     tool=tool,
                     created_by=metadata["created_by"],
                     created_via="api_doc_url",
+                    import_batch_id=import_batch_id,
                 )
-                created_tools.append(
-                    {"id": db_tool.id, "name": db_tool.name, "url": db_tool.url, "description": db_tool.description, "tags": db_tool.tags or []}
-                )
+
+                # Add auth info to response
+                auth_required = tool.auth is not None and tool.auth.auth_type is not None
+                created_tools.append({
+                    "id": db_tool.id,
+                    "name": db_tool.name,
+                    "url": db_tool.url,
+                    "description": db_tool.description,
+                    "tags": db_tool.tags or [],
+                    "auth_required": auth_required,
+                    "auth_type": tool.auth.auth_type if tool.auth else None,
+                    "auth_configured": False,
+                })
                 logger.info(f"Created tool: {db_tool.name}")
 
             except Exception as e:
                 logger.error(f"Failed to create tool {tool.name}: {str(e)}")
                 errors.append(f"Tool '{tool.name}': {str(e)}")
 
+        # Build auth summary
+        auth_types_seen = set()
+        tools_requiring_auth = 0
+        for t in created_tools:
+            if t.get("auth_required"):
+                tools_requiring_auth += 1
+                if t.get("auth_type"):
+                    auth_types_seen.add(t["auth_type"])
+
         result = {
             "success": len(created_tools) > 0,
             "message": f"Created {len(created_tools)} tools from API documentation",
+            "import_batch_id": import_batch_id,
             "tool_count": len(created_tools),
             "created_tools": created_tools,
             "analysis": analysis or doc_structure,
+            "auth_summary": {
+                "tools_requiring_auth": tools_requiring_auth,
+                "tools_configured": 0,
+                "auth_types": list(auth_types_seen),
+            },
         }
 
         if errors:

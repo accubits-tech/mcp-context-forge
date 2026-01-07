@@ -269,6 +269,87 @@ class AuthenticationValues(BaseModelWithConfigDict):
     auth_header_value: Optional[str] = Field("", description="Value for custom headers authentication")
 
 
+# Bulk Auth Configuration Schemas
+class ToolAuthInfo(BaseModel):
+    """Auth information for a single tool."""
+
+    id: str = Field(..., description="Tool ID")
+    name: str = Field(..., description="Tool name")
+    auth_required: bool = Field(..., description="Whether this tool requires authentication")
+    auth_type: Optional[str] = Field(None, description="Type of auth: bearer, basic, apikey, authheaders")
+    auth_configured: bool = Field(False, description="Whether valid credentials are configured")
+
+
+class BatchAuthSummary(BaseModel):
+    """Summary of auth requirements for a batch of tools."""
+
+    total: int = Field(..., description="Total number of tools in batch")
+    requiring_auth: int = Field(..., description="Number of tools requiring authentication")
+    configured: int = Field(..., description="Number of tools with configured credentials")
+    auth_types: List[str] = Field(default_factory=list, description="List of auth types in batch")
+
+
+class ToolBatchResponse(BaseModel):
+    """Response for querying tools by batch ID."""
+
+    batch_id: str = Field(..., description="Import batch UUID")
+    tools: List[ToolAuthInfo] = Field(..., description="List of tools with auth info")
+    summary: BatchAuthSummary = Field(..., description="Auth summary for the batch")
+
+
+class BulkAuthConfigRequest(BaseModel):
+    """Request for bulk authentication configuration."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # Selection criteria (at least one required)
+    batch_id: Optional[str] = Field(None, description="Import batch ID to configure all tools from")
+    tool_ids: Optional[List[str]] = Field(None, description="Specific tool IDs to configure")
+
+    # Shared authentication (applies to all selected tools matching auth_type)
+    shared_auth: Optional[AuthenticationValues] = Field(None, description="Shared auth for all matching tools")
+
+    # Per-tool overrides (takes precedence over shared_auth)
+    tool_auth: Optional[Dict[str, AuthenticationValues]] = Field(None, description="Per-tool auth config, keyed by tool ID")
+
+    # Options
+    dry_run: bool = Field(False, description="Preview changes without applying")
+    skip_already_configured: bool = Field(True, description="Skip tools with existing valid auth")
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> "BulkAuthConfigRequest":
+        """Validate that selection and auth criteria are provided."""
+        if not self.batch_id and not self.tool_ids:
+            raise ValueError("Either batch_id or tool_ids must be provided")
+        if not self.shared_auth and not self.tool_auth:
+            raise ValueError("Either shared_auth or tool_auth must be provided")
+        return self
+
+
+class BulkAuthConfigResult(BaseModel):
+    """Result for a single tool in bulk auth config."""
+
+    id: str = Field(..., description="Tool ID")
+    name: str = Field(..., description="Tool name")
+    auth_type: Optional[str] = Field(None, description="Auth type configured")
+    reason: Optional[str] = Field(None, description="Reason for skipping")
+    error: Optional[str] = Field(None, description="Error message if failed")
+
+
+class BulkAuthConfigResponse(BaseModel):
+    """Response for bulk authentication configuration."""
+
+    success: bool = Field(..., description="Whether the operation succeeded")
+    message: str = Field(..., description="Summary message")
+    dry_run: bool = Field(..., description="Whether this was a dry run")
+    configured_count: int = Field(..., description="Number of tools configured")
+    skipped_count: int = Field(..., description="Number of tools skipped")
+    failed_count: int = Field(..., description="Number of tools that failed")
+    configured: List[BulkAuthConfigResult] = Field(default_factory=list, description="Successfully configured tools")
+    skipped: List[BulkAuthConfigResult] = Field(default_factory=list, description="Skipped tools with reasons")
+    failed: List[BulkAuthConfigResult] = Field(default_factory=list, description="Failed tools with errors")
+
+
 class ToolCreate(BaseModel):
     """
     Represents the configuration for creating a tool with various attributes and settings.
@@ -3436,6 +3517,7 @@ class ServerCreate(BaseModel):
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
     owner_email: Optional[str] = Field(None, description="Email of the server owner")
     visibility: Optional[str] = Field(default="public", description="Visibility level (private, team, public)")
+    creator_type: Optional[str] = Field(None, description="Type of creator (e.g., user, system, automated)")
 
     @field_validator("name")
     @classmethod
@@ -3566,6 +3648,7 @@ class ServerUpdate(BaseModelWithConfigDict):
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
     owner_email: Optional[str] = Field(None, description="Email of the server owner")
     visibility: Optional[str] = Field(None, description="Visibility level (private, team, public)")
+    creator_type: Optional[str] = Field(None, description="Type of creator (e.g., user, system, automated)")
 
     @field_validator("tags")
     @classmethod
@@ -3737,6 +3820,7 @@ class ServerRead(BaseModelWithConfigDict):
     team: Optional[str] = Field(None, description="Name of the team that owns this resource")
     owner_email: Optional[str] = Field(None, description="Email of the user who owns this resource")
     visibility: Optional[str] = Field(default="public", description="Visibility level: private, team, or public")
+    creator_type: Optional[str] = Field(None, description="Type of creator (e.g., user, system, automated)")
 
     @model_validator(mode="before")
     @classmethod

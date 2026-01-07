@@ -53,7 +53,7 @@ from mcpgateway.db import ToolMetric
 from mcpgateway.observability import create_span
 from mcpgateway.plugins.framework import GlobalContext, HttpHeaderPayload, PluginError, PluginManager, PluginViolationError, ToolHookType, ToolPostInvokePayload, ToolPreInvokePayload
 from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
-from mcpgateway.schemas import ToolCreate, ToolRead, ToolUpdate, TopPerformer
+from mcpgateway.schemas import AuthenticationValues, ToolCreate, ToolRead, ToolUpdate, TopPerformer
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.oauth_manager import OAuthManager
 from mcpgateway.services.team_management_service import TeamManagementService
@@ -63,7 +63,7 @@ from mcpgateway.utils.metrics_common import build_top_performers
 from mcpgateway.utils.pagination import decode_cursor, encode_cursor
 from mcpgateway.utils.passthrough_headers import get_passthrough_headers
 from mcpgateway.utils.retry_manager import ResilientHttpClient
-from mcpgateway.utils.services_auth import decode_auth
+from mcpgateway.utils.services_auth import decode_auth, encode_auth
 from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
 from mcpgateway.utils.validate_signature import validate_signature
 
@@ -967,6 +967,143 @@ class ToolService:
             t.team = team_name
             result.append(self._convert_tool_to_read(t))
         return result
+
+    async def get_tools_by_batch_id(self, db: Session, batch_id: str, include_inactive: bool = False) -> List[ToolRead]:
+        """Retrieve all tools from a specific import batch.
+
+        Args:
+            db: Database session
+            batch_id: Import batch UUID
+            include_inactive: Include disabled tools
+
+        Returns:
+            List of tools from the batch
+        """
+        query = select(DbTool).where(DbTool.import_batch_id == batch_id)
+        if not include_inactive:
+            query = query.where(DbTool.enabled == True)  # noqa: E712
+
+        tools = db.execute(query).scalars().all()
+        result = []
+        for t in tools:
+            team_name = self._get_team_name(db, getattr(t, "team_id", None))
+            t.team = team_name
+            result.append(self._convert_tool_to_read(t))
+        return result
+
+    async def bulk_configure_auth(
+        self,
+        db: Session,
+        batch_id: Optional[str],
+        tool_ids: Optional[List[str]],
+        shared_auth: Optional[AuthenticationValues],
+        tool_auth: Optional[Dict[str, AuthenticationValues]],
+        dry_run: bool = False,
+        skip_already_configured: bool = True,
+        modified_by: Optional[str] = None,
+        modified_from_ip: Optional[str] = None,
+        modified_via: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Configure authentication for multiple tools.
+
+        Args:
+            db: Database session
+            batch_id: Import batch ID (selects all tools from batch)
+            tool_ids: Specific tool IDs to configure
+            shared_auth: Shared auth to apply to all matching tools
+            tool_auth: Per-tool auth overrides keyed by tool ID
+            dry_run: Preview only, don't apply changes
+            skip_already_configured: Skip tools with valid existing auth
+            modified_by: User making the change
+            modified_from_ip: IP address
+            modified_via: Modification method
+
+        Returns:
+            Dict with configured, skipped, and failed tool lists
+        """
+        # Build tool query
+        query = select(DbTool)
+        if batch_id:
+            query = query.where(DbTool.import_batch_id == batch_id)
+        if tool_ids:
+            query = query.where(DbTool.id.in_(tool_ids))
+
+        tools = db.execute(query).scalars().all()
+
+        configured = []
+        skipped = []
+        failed = []
+
+        tool_auth = tool_auth or {}
+
+        for tool in tools:
+            try:
+                # Determine auth to apply (per-tool override takes precedence)
+                auth_config = tool_auth.get(tool.id) or shared_auth
+
+                if not auth_config:
+                    skipped.append({"id": tool.id, "name": tool.name, "reason": "no_auth_provided"})
+                    continue
+
+                # Check if tool requires auth (has auth_type set)
+                if not tool.auth_type:
+                    skipped.append({"id": tool.id, "name": tool.name, "reason": "no_auth_required"})
+                    continue
+
+                # Check if already configured (not a placeholder)
+                if skip_already_configured and tool.auth_value:
+                    try:
+                        decoded = decode_auth(tool.auth_value)
+                        has_placeholder = any("REPLACE_WITH" in str(v) for v in decoded.values())
+                        if not has_placeholder:
+                            skipped.append({"id": tool.id, "name": tool.name, "reason": "already_configured"})
+                            continue
+                    except Exception:
+                        pass  # Proceed if decoding fails
+
+                # Check auth type compatibility (if provided)
+                if auth_config.auth_type and auth_config.auth_type != tool.auth_type:
+                    skipped.append({
+                        "id": tool.id,
+                        "name": tool.name,
+                        "reason": f"auth_type_mismatch: tool needs {tool.auth_type}, provided {auth_config.auth_type}",
+                    })
+                    continue
+
+                if not dry_run:
+                    # Apply the auth configuration
+                    tool.auth_type = auth_config.auth_type or tool.auth_type
+
+                    if auth_config.auth_value:
+                        tool.auth_value = auth_config.auth_value
+                    elif auth_config.token:
+                        # Bearer token
+                        tool.auth_value = encode_auth({"Authorization": f"Bearer {auth_config.token}"})
+                    elif auth_config.username and auth_config.password:
+                        # Basic auth
+                        creds = base64.b64encode(f"{auth_config.username}:{auth_config.password}".encode()).decode()
+                        tool.auth_value = encode_auth({"Authorization": f"Basic {creds}"})
+                    elif auth_config.auth_header_key and auth_config.auth_header_value:
+                        # Custom header (API key, etc.)
+                        tool.auth_value = encode_auth({auth_config.auth_header_key: auth_config.auth_header_value})
+
+                    # Update modification metadata
+                    tool.modified_by = modified_by
+                    tool.modified_from_ip = modified_from_ip
+                    tool.modified_via = modified_via or "bulk_auth_config"
+                    tool.updated_at = datetime.now(timezone.utc)
+                    if hasattr(tool, "version") and tool.version:
+                        tool.version += 1
+
+                configured.append({"id": tool.id, "name": tool.name, "auth_type": tool.auth_type})
+
+            except Exception as e:
+                failed.append({"id": tool.id, "name": tool.name, "error": str(e)})
+
+        if not dry_run:
+            db.commit()
+
+        return {"configured": configured, "skipped": skipped, "failed": failed}
 
     async def get_tool(self, db: Session, tool_id: str) -> ToolRead:
         """

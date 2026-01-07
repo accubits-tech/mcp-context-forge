@@ -481,6 +481,7 @@ class SSOService:
 
             if response.status_code == 200:
                 user_data = response.json()
+                logger.info(f"Raw userinfo response from {provider.id}: {user_data}")
 
                 # For GitHub, also fetch organizations if admin assignment is configured
                 if provider.id == "github" and settings.sso_github_admin_orgs:
@@ -559,10 +560,17 @@ class SSOService:
 
         # Handle Keycloak provider with role mapping
         if provider.id == "keycloak":
-            metadata = provider.metadata or {}
+            # Keycloak config is stored in team_mapping["_keycloak_config"]
+            team_mapping = provider.team_mapping or {}
+            metadata = team_mapping.get("_keycloak_config", {})
             username_claim = metadata.get("username_claim", "preferred_username")
             email_claim = metadata.get("email_claim", "email")
             groups_claim = metadata.get("groups_claim", "groups")
+
+            # Debug logging to trace Keycloak userinfo
+            logger.info(f"Keycloak userinfo response keys: {list(user_data.keys())}")
+            logger.info(f"Keycloak email_claim='{email_claim}', value='{user_data.get(email_claim)}'")
+            logger.info(f"Keycloak username_claim='{username_claim}', value='{user_data.get(username_claim)}'")
 
             groups = []
 
@@ -637,8 +645,10 @@ class SSOService:
         Returns:
             JWT token for authenticated user or None if failed
         """
+        logger.debug(f"authenticate_or_create_user called with user_info: {user_info}")
         email = user_info.get("email")
         if not email:
+            logger.error(f"SSO user creation failed: No email in user_info. email value='{email}', user_info={user_info}")
             return None
 
         # Check if user exists
@@ -661,13 +671,18 @@ class SSOService:
         else:
             # Auto-create user if enabled
             provider = self.get_provider(user_info.get("provider"))
-            if not provider or not provider.auto_create_users:
+            if not provider:
+                logger.error(f"SSO user creation failed: Provider '{user_info.get('provider')}' not found in database")
+                return None
+            if not provider.auto_create_users:
+                logger.error(f"SSO user creation failed: auto_create_users is disabled for provider '{provider.id}'")
                 return None
 
             # Check trusted domains if configured
             if provider.trusted_domains:
                 domain = email.split("@")[1].lower()
                 if domain not in [d.lower() for d in provider.trusted_domains]:
+                    logger.error(f"SSO user creation failed: Domain '{domain}' not in trusted_domains {provider.trusted_domains}")
                     return None
 
             # Check if admin approval is required
@@ -678,8 +693,10 @@ class SSOService:
 
                 if pending:
                     if pending.status == "pending" and not pending.is_expired():
+                        logger.info(f"SSO user creation deferred: User '{email}' is pending admin approval")
                         return None  # Still waiting for approval
                     if pending.status == "rejected":
+                        logger.warning(f"SSO user creation failed: User '{email}' was rejected by admin")
                         return None  # User was rejected
                     if pending.status == "approved":
                         # User was approved, create account now
@@ -707,14 +724,19 @@ class SSOService:
             # Determine if user should be admin based on domain/organization
             is_admin = self._should_user_be_admin(email, user_info, provider)
 
-            user = await self.auth_service.create_user(
-                email=email,
-                password=random_password,  # Random password for SSO users (not used)
-                full_name=user_info.get("full_name", email),
-                is_admin=is_admin,
-                auth_provider=user_info.get("provider", "sso"),
-            )
-            if not user:
+            try:
+                user = await self.auth_service.create_user(
+                    email=email,
+                    password=random_password,  # Random password for SSO users (not used)
+                    full_name=user_info.get("full_name", email),
+                    is_admin=is_admin,
+                    auth_provider=user_info.get("provider", "sso"),
+                )
+                if not user:
+                    logger.error(f"SSO user creation failed: auth_service.create_user returned None for '{email}'")
+                    return None
+            except Exception as e:
+                logger.error(f"SSO user creation failed: Exception creating user '{email}': {e}")
                 return None
 
             # If user was created from approved request, mark request as used

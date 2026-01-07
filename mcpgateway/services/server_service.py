@@ -255,6 +255,7 @@ class ServerService:
         server_dict["updated_at"] = getattr(server, "updated_at", None)
         server_dict["version"] = getattr(server, "version", None)
         server_dict["team"] = getattr(server, "team", None)
+        server_dict["creator_type"] = getattr(server, "creator_type", None)
 
         return ServerRead.model_validate(server_dict)
 
@@ -397,6 +398,7 @@ class ServerService:
                 team_id=getattr(server_in, "team_id", None) or team_id,
                 owner_email=getattr(server_in, "owner_email", None) or owner_email or created_by,
                 visibility=getattr(server_in, "visibility", None) or visibility,
+                creator_type=getattr(server_in, "creator_type", None),
                 # Metadata fields
                 created_by=created_by,
                 created_from_ip=created_from_ip,
@@ -796,6 +798,9 @@ class ServerService:
 
             if server_update.owner_email is not None:
                 server.owner_email = server_update.owner_email
+
+            if server_update.creator_type is not None:
+                server.creator_type = server_update.creator_type
 
             # Update associated tools if provided
             if server_update.associated_tools is not None:
