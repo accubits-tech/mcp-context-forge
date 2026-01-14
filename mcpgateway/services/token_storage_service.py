@@ -151,12 +151,23 @@ class TokenStorageService:
 
             # Check if token is expired or near expiration
             if self._is_token_expired(token_record, threshold_seconds):
-                logger.info(f"OAuth token expired for gateway {gateway_id}, app user {app_user_email}")
+                expires_at_str = token_record.expires_at.isoformat() if token_record.expires_at else "unknown"
+                logger.warning(f"OAuth token expired for gateway {gateway_id}, app user {app_user_email}. Expired at: {expires_at_str}")
+
                 if token_record.refresh_token:
                     # Attempt to refresh token
+                    logger.info(f"Attempting to auto-refresh OAuth token for gateway {gateway_id}, user {app_user_email}")
                     new_token = await self._refresh_access_token(token_record)
                     if new_token:
                         return new_token
+                    logger.error(f"OAuth token refresh failed for gateway {gateway_id}, user {app_user_email}. Re-authorization required.")
+                else:
+                    # No refresh token available - common for providers like GitHub OAuth Apps
+                    logger.error(
+                        f"OAuth token expired for gateway {gateway_id}, user {app_user_email}, "
+                        f"but NO refresh_token is available (provider may not support token refresh). "
+                        f"User must re-authorize at /oauth/authorize/<gateway_id>"
+                    )
                 return None
 
             # Decrypt and return valid token

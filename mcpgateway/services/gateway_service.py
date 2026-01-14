@@ -1076,9 +1076,11 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             access_token = await token_storage.get_user_token(gateway.id, app_user_email)
 
             if not access_token:
-                logger.error(f"[FETCH_TOOLS_OAUTH] No OAuth tokens found for user {app_user_email} on gateway {gateway.name}")
+                logger.error(f"[FETCH_TOOLS_OAUTH] No valid OAuth token for user {app_user_email} on gateway {gateway.name} (may have expired without refresh capability)")
                 raise GatewayConnectionError(
-                    f"No OAuth tokens found for user {app_user_email} on gateway {gateway.name}. Please complete the OAuth authorization flow first at /oauth/authorize/{gateway.id}"
+                    f"No valid OAuth token for user {app_user_email} on gateway {gateway.name}. "
+                    f"Token may have expired and could not be auto-refreshed (some providers like GitHub OAuth Apps don't support refresh tokens). "
+                    f"Please re-authorize at /oauth/authorize/{gateway.id}"
                 )
 
             # Debug: Check if token was decrypted
@@ -1089,6 +1091,13 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
             # Now connect to MCP server with the access token
             authentication = {"Authorization": f"Bearer {access_token}"}
+
+            # Add any extra connection headers from oauth_config (e.g., Notion-Version for Notion MCP)
+            if gateway.oauth_config and gateway.oauth_config.get("connection_headers"):
+                extra_headers = gateway.oauth_config.get("connection_headers", {})
+                if isinstance(extra_headers, dict):
+                    authentication.update(extra_headers)
+                    logger.info(f"[FETCH_TOOLS_OAUTH] Added extra connection headers: {list(extra_headers.keys())}")
 
             # Use the existing connection logic
             # Note: For OAuth servers, skip validation since we already validated via OAuth flow

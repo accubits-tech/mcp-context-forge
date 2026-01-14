@@ -515,6 +515,8 @@ class OAuthManager:
         # Store state with code_verifier in session/cache for validation
         if self.token_storage:
             await self._store_authorization_state(gateway_id, state, code_verifier=pkce_params["code_verifier"])
+        else:
+            logger.warning(f"No token_storage provided for gateway {gateway_id} - OAuth state will NOT be stored! Callback will fail.")
 
         # Generate authorization URL with PKCE
         auth_url = self._create_authorization_url_with_pkce(credentials, state, pkce_params["code_challenge"], pkce_params["code_challenge_method"])
@@ -586,13 +588,32 @@ class OAuthManager:
             if not app_user_email:
                 raise OAuthError("User context required for OAuth token storage")
 
+            # Determine token expiration:
+            # - If provider returns expires_in, use it
+            # - If no expires_in AND no refresh_token (e.g., GitHub OAuth Apps), use long expiration (365 days)
+            #   because these tokens don't expire until revoked
+            # - Otherwise use the default timeout (configurable, defaults to 1 hour)
+            expires_in = token_response.get("expires_in")
+            refresh_token = token_response.get("refresh_token")
+
+            if expires_in is None:
+                if refresh_token is None:
+                    # No expiration and no refresh token = token doesn't expire (e.g., GitHub OAuth Apps)
+                    # Use 1 year as a practical upper bound
+                    expires_in = 365 * 24 * 3600  # 365 days in seconds
+                    logger.info(f"OAuth provider did not return expires_in or refresh_token. Using 1-year expiration for gateway {gateway_id}")
+                else:
+                    # Has refresh token but no expires_in - use default timeout
+                    expires_in = self.settings.oauth_default_timeout
+                    logger.info(f"OAuth provider did not return expires_in. Using default timeout ({expires_in}s) for gateway {gateway_id}")
+
             token_record = await self.token_storage.store_tokens(
                 gateway_id=gateway_id,
                 user_id=user_id,
                 app_user_email=app_user_email,  # User from state
                 access_token=token_response["access_token"],
-                refresh_token=token_response.get("refresh_token"),
-                expires_in=token_response.get("expires_in", self.settings.oauth_default_timeout),
+                refresh_token=refresh_token,
+                expires_in=expires_in,
                 scopes=token_response.get("scope", "").split(),
             )
 
@@ -660,7 +681,7 @@ class OAuthManager:
                     state_data = {"state": state, "gateway_id": gateway_id, "code_verifier": code_verifier, "expires_at": expires_at.isoformat(), "used": False}
                     # Store in Redis with TTL
                     await redis.setex(state_key, STATE_TTL_SECONDS, json.dumps(state_data))
-                    logger.debug(f"Stored OAuth state in Redis for gateway {gateway_id}")
+                    logger.info(f"Stored OAuth state in Redis for gateway {gateway_id}, expires_at={expires_at.isoformat()}, state_length={len(state)}")
                     return
                 except Exception as e:
                     logger.warning(f"Failed to store state in Redis: {e}, falling back")
@@ -681,7 +702,7 @@ class OAuthManager:
                     oauth_state = OAuthState(gateway_id=gateway_id, state=state, code_verifier=code_verifier, expires_at=expires_at, used=False)
                     db.add(oauth_state)
                     db.commit()
-                    logger.debug(f"Stored OAuth state in database for gateway {gateway_id}")
+                    logger.info(f"Stored OAuth state in database for gateway {gateway_id}, expires_at={expires_at.isoformat()}, state_length={len(state)}")
                     return
                 finally:
                     db_gen.close()
@@ -840,6 +861,7 @@ class OAuthManager:
             Dict with state data including code_verifier, or None if invalid/expired
         """
         settings = get_settings()
+        logger.info(f"Validating OAuth state for gateway {gateway_id}, cache_type={settings.cache_type}, state_length={len(state)}")
 
         # Try Redis first
         if settings.cache_type == "redis":
@@ -849,6 +871,7 @@ class OAuthManager:
                     state_key = f"oauth:state:{gateway_id}:{state}"
                     state_json = await redis.getdel(state_key)  # Atomic get+delete
                     if not state_json:
+                        logger.warning(f"OAuth state not found in Redis for gateway {gateway_id}")
                         return None
 
                     state_data = json.loads(state_json)
@@ -881,6 +904,7 @@ class OAuthManager:
                     oauth_state = db.query(OAuthState).filter(OAuthState.gateway_id == gateway_id, OAuthState.state == state).first()
 
                     if not oauth_state:
+                        logger.warning(f"OAuth state not found in database for gateway {gateway_id}. State may have never been stored or was already consumed.")
                         return None
 
                     # Check expiration
@@ -888,13 +912,16 @@ class OAuthManager:
                     if expires_at.tzinfo is None:
                         expires_at = expires_at.replace(tzinfo=timezone.utc)
 
-                    if expires_at < datetime.now(timezone.utc):
+                    now = datetime.now(timezone.utc)
+                    if expires_at < now:
+                        logger.warning(f"OAuth state expired for gateway {gateway_id}. Expired at {expires_at.isoformat()}, current time is {now.isoformat()}")
                         db.delete(oauth_state)
                         db.commit()
                         return None
 
                     # Check if already used
                     if oauth_state.used:
+                        logger.warning(f"OAuth state already used for gateway {gateway_id} - possible replay attack")
                         return None
 
                     # Build state data
@@ -912,9 +939,11 @@ class OAuthManager:
 
         # Fallback to in-memory
         state_key = f"oauth:state:{gateway_id}:{state}"
+        logger.info(f"Attempting in-memory state lookup for gateway {gateway_id} (cache_type={settings.cache_type})")
         async with _state_lock:
             state_data = _oauth_states.get(state_key)
             if not state_data:
+                logger.warning(f"OAuth state not found in memory for gateway {gateway_id}. Total states in memory: {len(_oauth_states)}")
                 return None
 
             # Check expiration
@@ -922,12 +951,15 @@ class OAuthManager:
             if expires_at.tzinfo is None:
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
 
-            if expires_at < datetime.now(timezone.utc):
+            now = datetime.now(timezone.utc)
+            if expires_at < now:
+                logger.warning(f"OAuth state expired in memory for gateway {gateway_id}. Expired at {expires_at.isoformat()}, current time is {now.isoformat()}")
                 del _oauth_states[state_key]
                 return None
 
             # Remove from memory (single-use)
             del _oauth_states[state_key]
+            logger.debug(f"Successfully validated OAuth state from memory for gateway {gateway_id}")
             return state_data
 
     def _create_authorization_url(self, credentials: Dict[str, Any], state: str) -> tuple[str, str]:
@@ -1005,40 +1037,63 @@ class OAuthManager:
 
         # Decrypt client secret if it's encrypted and present
         if client_secret and len(client_secret) > 50:  # Simple heuristic: encrypted secrets are longer
+            logger.info(f"Client secret appears encrypted (length={len(client_secret)}), attempting decryption...")
             try:
                 settings = get_settings()
                 encryption = get_encryption_service(settings.auth_encryption_secret)
                 decrypted_secret = encryption.decrypt_secret(client_secret)
                 if decrypted_secret:
                     client_secret = decrypted_secret
-                    logger.debug("Successfully decrypted client secret")
+                    logger.info(f"Successfully decrypted client secret (decrypted length={len(client_secret)})")
                 else:
-                    logger.warning("Failed to decrypt client secret, using encrypted version")
+                    logger.error("Decryption returned None/empty - client secret may be corrupted or wrong encryption key")
             except Exception as e:
-                logger.warning(f"Failed to decrypt client secret: {e}, using encrypted version")
+                logger.error(f"Failed to decrypt client secret: {e}")
 
         # Prepare token exchange data
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": redirect_uri,
-            "client_id": client_id,
         }
-
-        # Only include client_secret if present (public clients don't have secrets)
-        if client_secret:
-            token_data["client_secret"] = client_secret
 
         # Add PKCE code_verifier if present (RFC 7636)
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
+        # Determine token endpoint auth method (RFC 6749 Section 2.3)
+        # Options: "client_secret_basic" (Authorization header), "client_secret_post" (body), "none" (public client)
+        token_endpoint_auth_method = credentials.get("token_endpoint_auth_method", "client_secret_post")
+
+        # Prepare headers
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        logger.info(f"Token exchange: auth_method={token_endpoint_auth_method}, token_url={token_url}, client_id={client_id[:8]}..., has_secret={bool(client_secret)}")
+
+        if token_endpoint_auth_method == "client_secret_basic" and client_secret:
+            # RFC 6749 Section 2.3.1: HTTP Basic Authentication
+            # Used by providers like Notion, some Okta configurations
+            auth_string = f"{client_id}:{client_secret}"
+            auth_bytes = base64.b64encode(auth_string.encode()).decode()
+            headers["Authorization"] = f"Basic {auth_bytes}"
+            logger.info(f"Using client_secret_basic authentication (Authorization: Basic header)")
+        else:
+            # Default: client_secret_post - credentials in request body
+            token_data["client_id"] = client_id
+            if client_secret:
+                token_data["client_secret"] = client_secret
+            logger.info(f"Using client_secret_post authentication (credentials in POST body)")
+
         # Exchange code for token with retries
         for attempt in range(self.max_retries):
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(token_url, data=token_data, timeout=aiohttp.ClientTimeout(total=self.request_timeout)) as response:
-                        response.raise_for_status()
+                    async with session.post(token_url, data=token_data, headers=headers, timeout=aiohttp.ClientTimeout(total=self.request_timeout)) as response:
+                        # Check for errors and capture response body before raising
+                        if response.status >= 400:
+                            error_body = await response.text()
+                            logger.error(f"Token exchange failed with HTTP {response.status}: {error_body}")
+                            response.raise_for_status()
 
                         # GitHub returns form-encoded responses, not JSON
                         content_type = response.headers.get("content-type", "")
@@ -1066,6 +1121,12 @@ class OAuthManager:
                         logger.info("""Successfully exchanged authorization code for tokens""")
                         return token_response
 
+            except aiohttp.ClientResponseError as e:
+                # Try to get response body for better error messages
+                logger.warning(f"Token exchange attempt {attempt + 1} failed: HTTP {e.status} {e.message}")
+                if attempt == self.max_retries - 1:
+                    raise OAuthError(f"Failed to exchange code for token after {self.max_retries} attempts: HTTP {e.status} {e.message}")
+                await asyncio.sleep(2**attempt)  # Exponential backoff
             except aiohttp.ClientError as e:
                 logger.warning(f"Token exchange attempt {attempt + 1} failed: {str(e)}")
                 if attempt == self.max_retries - 1:
