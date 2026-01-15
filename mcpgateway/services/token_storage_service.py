@@ -172,7 +172,11 @@ class TokenStorageService:
 
             # Decrypt and return valid token
             if self.encryption:
-                return self.encryption.decrypt_secret(token_record.access_token)
+                logger.info(f"[TOKEN_STORAGE] Decrypting token for gateway {gateway_id}, stored_len={len(token_record.access_token)}")
+                decrypted = self.encryption.decrypt_secret(token_record.access_token)
+                logger.info(f"[TOKEN_STORAGE] Decrypted token: len={len(decrypted)}, prefix={decrypted[:15]}...")
+                return decrypted
+            logger.info(f"[TOKEN_STORAGE] No encryption, returning raw token: len={len(token_record.access_token)}, prefix={token_record.access_token[:15]}...")
             return token_record.access_token
 
         except Exception as e:

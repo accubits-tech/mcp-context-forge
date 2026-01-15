@@ -284,7 +284,10 @@ async def oauth_callback(
 
         result = await oauth_manager.complete_authorization_code_flow(gateway_id, code, state, gateway.oauth_config)
 
-        logger.info(f"Completed OAuth flow for gateway {gateway_id}, user {result.get('user_id')}")
+        logger.info(
+            f"[OAUTH_CALLBACK] Token stored successfully for gateway {gateway_id}, "
+            f"user_id={result.get('user_id')}, expires_at={result.get('expires_at')}, success={result.get('success')}"
+        )
 
         # Return success page with option to return to admin
         return HTMLResponse(

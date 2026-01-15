@@ -1072,8 +1072,21 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 logger.error(f"[FETCH_TOOLS_OAUTH] No user email provided for OAuth gateway {gateway.name}")
                 raise GatewayConnectionError(f"User authentication required for OAuth gateway {gateway.name}")
 
-            logger.debug(f"[FETCH_TOOLS_OAUTH] Retrieving OAuth token for user={app_user_email}, gateway_id={gateway.id}")
+            logger.info(f"[FETCH_TOOLS_OAUTH] Looking up token for gateway_id={gateway.id}, user={app_user_email}")
             access_token = await token_storage.get_user_token(gateway.id, app_user_email)
+
+            # Diagnostic: Query DB directly to see token record status
+            # First-Party
+            from mcpgateway.db import OAuthToken  # pylint: disable=import-outside-toplevel
+
+            token_record = db.execute(select(OAuthToken).where(OAuthToken.gateway_id == gateway.id, OAuthToken.app_user_email == app_user_email)).scalar_one_or_none()
+            if token_record:
+                logger.info(
+                    f"[FETCH_TOOLS_OAUTH] Token DB record found: expires_at={token_record.expires_at}, "
+                    f"has_refresh={bool(token_record.refresh_token)}, stored_token_len={len(token_record.access_token)}"
+                )
+            else:
+                logger.warning(f"[FETCH_TOOLS_OAUTH] No token record found in DB for gateway_id={gateway.id}, user={app_user_email}")
 
             if not access_token:
                 logger.error(f"[FETCH_TOOLS_OAUTH] No valid OAuth token for user {app_user_email} on gateway {gateway.name} (may have expired without refresh capability)")
@@ -1102,8 +1115,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             # Use the existing connection logic
             # Note: For OAuth servers, skip validation since we already validated via OAuth flow
             logger.info(f"[FETCH_TOOLS_OAUTH] Connecting to gateway URL={gateway.url} with transport={gateway.transport.upper()}")
+            logger.info(f"[FETCH_TOOLS_OAUTH] Auth headers: {list(authentication.keys())}, token_len={len(access_token)}, token_prefix={access_token[:20]}...")
             if gateway.transport.upper() == "SSE":
-                logger.debug(f"[FETCH_TOOLS_OAUTH] Using SSE transport")
+                logger.info(f"[FETCH_TOOLS_OAUTH] Using SSE transport to {gateway.url}")
                 capabilities, tools, resources, prompts = await self._connect_to_sse_server_without_validation(gateway.url, authentication)
             elif gateway.transport.upper() == "STREAMABLEHTTP":
                 logger.debug(f"[FETCH_TOOLS_OAUTH] Using STREAMABLEHTTP transport")
