@@ -658,3 +658,224 @@ class TestOAuthRouter:
 
                 assert exc_info.value.status_code == 400
                 assert "Invalid authorization code" in str(exc_info.value.detail)
+
+    # --- Tests for Token Status & Revocation Endpoints ---
+
+    @pytest.mark.asyncio
+    async def test_get_token_status_connected(self, mock_db, mock_gateway, mock_current_user):
+        """Test token status check when user has an active token."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        token_info = {
+            "user_id": "oauth_user_123",
+            "app_user_email": "test@example.com",
+            "token_type": "bearer",
+            "expires_at": "2025-11-05T12:00:00+00:00",
+            "is_expired": False,
+            "scopes": ["read", "write"],
+            "created_at": "2025-11-04T12:00:00+00:00",
+            "updated_at": "2025-11-04T12:00:00+00:00",
+        }
+
+        with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+            mock_token_storage = Mock()
+            mock_token_storage.get_token_info = AsyncMock(return_value=token_info)
+            mock_token_storage_class.return_value = mock_token_storage
+
+            # First-Party
+            from mcpgateway.routers.oauth_router import get_token_status
+
+            # Execute
+            result = await get_token_status("gateway123", mock_current_user, mock_db)
+
+            # Assert
+            assert result["connected"] is True
+            assert result["gateway_id"] == "gateway123"
+            assert result["user_id"] == "oauth_user_123"
+            assert result["token_type"] == "bearer"
+            assert result["is_expired"] is False
+            assert result["scopes"] == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_get_token_status_not_connected(self, mock_db, mock_gateway, mock_current_user):
+        """Test token status check when user has no token."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+            mock_token_storage = Mock()
+            mock_token_storage.get_token_info = AsyncMock(return_value=None)
+            mock_token_storage_class.return_value = mock_token_storage
+
+            # First-Party
+            from mcpgateway.routers.oauth_router import get_token_status
+
+            # Execute
+            result = await get_token_status("gateway123", mock_current_user, mock_db)
+
+            # Assert
+            assert result["connected"] is False
+            assert result["gateway_id"] == "gateway123"
+
+    @pytest.mark.asyncio
+    async def test_get_token_status_gateway_not_found(self, mock_db, mock_current_user):
+        """Test token status check when gateway does not exist."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        # First-Party
+        from mcpgateway.routers.oauth_router import get_token_status
+
+        # Execute & Assert
+        with pytest.raises(HTTPException) as exc_info:
+            await get_token_status("nonexistent", mock_current_user, mock_db)
+
+        assert exc_info.value.status_code == 404
+        assert "Gateway not found" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_get_token_status_service_error(self, mock_db, mock_gateway, mock_current_user):
+        """Test token status check when service raises an exception."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+            mock_token_storage = Mock()
+            mock_token_storage.get_token_info = AsyncMock(side_effect=Exception("Database connection lost"))
+            mock_token_storage_class.return_value = mock_token_storage
+
+            # First-Party
+            from mcpgateway.routers.oauth_router import get_token_status
+
+            # Execute & Assert
+            with pytest.raises(HTTPException) as exc_info:
+                await get_token_status("gateway123", mock_current_user, mock_db)
+
+            assert exc_info.value.status_code == 500
+            assert "Failed to get token status" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_revoke_token_success(self, mock_db, mock_gateway, mock_current_user):
+        """Test successful token revocation."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+            mock_token_storage = Mock()
+            mock_token_storage.revoke_user_tokens = AsyncMock(return_value=True)
+            mock_token_storage_class.return_value = mock_token_storage
+
+            # First-Party
+            from mcpgateway.routers.oauth_router import revoke_token
+
+            # Execute
+            result = await revoke_token("gateway123", mock_current_user, mock_db)
+
+            # Assert
+            assert result["success"] is True
+            assert result["gateway_id"] == "gateway123"
+            assert "revoked successfully" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_revoke_token_not_found(self, mock_db, mock_gateway, mock_current_user):
+        """Test token revocation when no token exists."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+            mock_token_storage = Mock()
+            mock_token_storage.revoke_user_tokens = AsyncMock(return_value=False)
+            mock_token_storage_class.return_value = mock_token_storage
+
+            # First-Party
+            from mcpgateway.routers.oauth_router import revoke_token
+
+            # Execute & Assert
+            with pytest.raises(HTTPException) as exc_info:
+                await revoke_token("gateway123", mock_current_user, mock_db)
+
+            assert exc_info.value.status_code == 404
+            assert "No OAuth token found" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_revoke_token_gateway_not_found(self, mock_db, mock_current_user):
+        """Test token revocation when gateway does not exist."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        # First-Party
+        from mcpgateway.routers.oauth_router import revoke_token
+
+        # Execute & Assert
+        with pytest.raises(HTTPException) as exc_info:
+            await revoke_token("nonexistent", mock_current_user, mock_db)
+
+        assert exc_info.value.status_code == 404
+        assert "Gateway not found" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_admin_revoke_token_success(self, mock_db, mock_gateway):
+        """Test successful admin token revocation for another user."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        admin_user = Mock(spec=EmailUserResponse)
+        admin_user.get = Mock(side_effect=lambda key: {"email": "admin@example.com", "is_admin": True}.get(key))
+
+        with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+            mock_token_storage = Mock()
+            mock_token_storage.revoke_user_tokens = AsyncMock(return_value=True)
+            mock_token_storage_class.return_value = mock_token_storage
+
+            # First-Party
+            from mcpgateway.routers.oauth_router import admin_revoke_token
+
+            # Execute
+            result = await admin_revoke_token("gateway123", "other@example.com", admin_user, mock_db)
+
+            # Assert
+            assert result["success"] is True
+            assert result["gateway_id"] == "gateway123"
+            assert "other@example.com" in result["message"]
+            mock_token_storage.revoke_user_tokens.assert_called_once_with("gateway123", "other@example.com")
+
+    @pytest.mark.asyncio
+    async def test_admin_revoke_token_not_admin(self, mock_db, mock_current_user):
+        """Test admin token revocation by a non-admin user."""
+        # Setup - mock_current_user.get("is_admin") returns None/False
+        mock_current_user.get = Mock(side_effect=lambda key: {"email": "test@example.com", "is_admin": False}.get(key))
+
+        # First-Party
+        from mcpgateway.routers.oauth_router import admin_revoke_token
+
+        # Execute & Assert
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_revoke_token("gateway123", "other@example.com", mock_current_user, mock_db)
+
+        assert exc_info.value.status_code == 403
+        assert "Admin privileges required" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_admin_revoke_token_not_found(self, mock_db, mock_gateway):
+        """Test admin token revocation when no token exists for target user."""
+        # Setup
+        mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
+
+        admin_user = Mock(spec=EmailUserResponse)
+        admin_user.get = Mock(side_effect=lambda key: {"email": "admin@example.com", "is_admin": True}.get(key))
+
+        with patch("mcpgateway.routers.oauth_router.TokenStorageService") as mock_token_storage_class:
+            mock_token_storage = Mock()
+            mock_token_storage.revoke_user_tokens = AsyncMock(return_value=False)
+            mock_token_storage_class.return_value = mock_token_storage
+
+            # First-Party
+            from mcpgateway.routers.oauth_router import admin_revoke_token
+
+            # Execute & Assert
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_revoke_token("gateway123", "other@example.com", admin_user, mock_db)
+
+            assert exc_info.value.status_code == 404
+            assert "No OAuth token found" in str(exc_info.value.detail)

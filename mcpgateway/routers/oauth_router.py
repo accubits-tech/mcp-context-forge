@@ -284,10 +284,7 @@ async def oauth_callback(
 
         result = await oauth_manager.complete_authorization_code_flow(gateway_id, code, state, gateway.oauth_config)
 
-        logger.info(
-            f"[OAUTH_CALLBACK] Token stored successfully for gateway {gateway_id}, "
-            f"user_id={result.get('user_id')}, expires_at={result.get('expires_at')}, success={result.get('success')}"
-        )
+        logger.info(f"[OAUTH_CALLBACK] Token stored successfully for gateway {gateway_id}, " f"user_id={result.get('user_id')}, expires_at={result.get('expires_at')}, success={result.get('success')}")
 
         # Return success page with option to return to admin
         return HTMLResponse(
@@ -930,3 +927,184 @@ async def oauth_callback_json(code: str, state: str, db: Session = Depends(get_d
     except Exception as e:
         logger.error(f"Failed to complete OAuth callback (JSON API): {str(e)}")
         raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")
+
+
+# ============================================================================
+# Token Status & Revocation Endpoints
+# ============================================================================
+
+
+@oauth_router.get("/api/tokens/{gateway_id}", response_model=Dict[str, Any])
+async def get_token_status(
+    gateway_id: str,
+    current_user: EmailUserResponse = Depends(get_current_user_with_permissions),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Check whether the current user has an active OAuth token for a gateway.
+
+    Returns ``connected: true`` with token metadata when a token exists, or
+    ``connected: false`` with HTTP 200 when no token is stored (so the client
+    can distinguish "not connected" from "gateway not found").
+
+    Args:
+        gateway_id: The unique identifier of the gateway.
+        current_user: The authenticated user.
+        db: The database session dependency.
+
+    Returns:
+        Token status information.
+
+    Raises:
+        HTTPException: 404 if the gateway itself does not exist; 500 on unexpected errors.
+
+    Examples:
+        >>> import asyncio
+        >>> asyncio.iscoroutinefunction(get_token_status)
+        True
+    """
+    # First-Party
+    from mcpgateway.schemas import OAuthTokenStatusResponse
+
+    try:
+        gateway = db.execute(select(Gateway).where(Gateway.id == gateway_id)).scalar_one_or_none()
+        if not gateway:
+            raise HTTPException(status_code=404, detail="Gateway not found")
+
+        token_service = TokenStorageService(db)
+        token_info = await token_service.get_token_info(gateway_id, current_user.get("email"))
+
+        if not token_info:
+            return OAuthTokenStatusResponse(connected=False, gateway_id=gateway_id).model_dump()
+
+        logger.info(f"Token status check for gateway {gateway_id} by user {current_user.get('email')}: connected")
+
+        return OAuthTokenStatusResponse(
+            connected=True,
+            gateway_id=gateway_id,
+            user_id=token_info.get("user_id"),
+            token_type=token_info.get("token_type"),
+            expires_at=token_info.get("expires_at"),
+            is_expired=token_info.get("is_expired"),
+            scopes=token_info.get("scopes"),
+            created_at=token_info.get("created_at"),
+            updated_at=token_info.get("updated_at"),
+        ).model_dump()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get token status for gateway {gateway_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get token status: {str(e)}")
+
+
+@oauth_router.delete("/api/tokens/{gateway_id}", response_model=Dict[str, Any])
+async def revoke_token(
+    gateway_id: str,
+    current_user: EmailUserResponse = Depends(get_current_user_with_permissions),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Revoke the current user's OAuth token for a gateway.
+
+    Args:
+        gateway_id: The unique identifier of the gateway.
+        current_user: The authenticated user.
+        db: The database session dependency.
+
+    Returns:
+        Revocation result.
+
+    Raises:
+        HTTPException: 404 if no token to revoke or gateway not found; 500 on unexpected errors.
+
+    Examples:
+        >>> import asyncio
+        >>> asyncio.iscoroutinefunction(revoke_token)
+        True
+    """
+    # First-Party
+    from mcpgateway.schemas import OAuthTokenRevokeResponse
+
+    try:
+        gateway = db.execute(select(Gateway).where(Gateway.id == gateway_id)).scalar_one_or_none()
+        if not gateway:
+            raise HTTPException(status_code=404, detail="Gateway not found")
+
+        token_service = TokenStorageService(db)
+        revoked = await token_service.revoke_user_tokens(gateway_id, current_user.get("email"))
+
+        if not revoked:
+            raise HTTPException(status_code=404, detail="No OAuth token found to revoke")
+
+        logger.info(f"Revoked OAuth token for gateway {gateway_id} by user {current_user.get('email')}")
+
+        return OAuthTokenRevokeResponse(
+            success=True,
+            gateway_id=gateway_id,
+            message="OAuth token revoked successfully",
+        ).model_dump()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to revoke token for gateway {gateway_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to revoke token: {str(e)}")
+
+
+@oauth_router.delete("/api/tokens/{gateway_id}/{user_email}", response_model=Dict[str, Any])
+async def admin_revoke_token(
+    gateway_id: str,
+    user_email: str,
+    current_user: EmailUserResponse = Depends(get_current_user_with_permissions),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Admin endpoint to revoke another user's OAuth token for a gateway.
+
+    Requires the caller to have admin privileges.
+
+    Args:
+        gateway_id: The unique identifier of the gateway.
+        user_email: The email of the user whose token should be revoked.
+        current_user: The authenticated admin user.
+        db: The database session dependency.
+
+    Returns:
+        Revocation result.
+
+    Raises:
+        HTTPException: 403 if caller is not admin; 404 if no token to revoke or gateway not found; 500 on unexpected errors.
+
+    Examples:
+        >>> import asyncio
+        >>> asyncio.iscoroutinefunction(admin_revoke_token)
+        True
+    """
+    # First-Party
+    from mcpgateway.schemas import OAuthTokenRevokeResponse
+
+    try:
+        if not current_user.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+
+        gateway = db.execute(select(Gateway).where(Gateway.id == gateway_id)).scalar_one_or_none()
+        if not gateway:
+            raise HTTPException(status_code=404, detail="Gateway not found")
+
+        token_service = TokenStorageService(db)
+        revoked = await token_service.revoke_user_tokens(gateway_id, user_email)
+
+        if not revoked:
+            raise HTTPException(status_code=404, detail=f"No OAuth token found for user {user_email}")
+
+        logger.info(f"Admin {current_user.get('email')} revoked OAuth token for gateway {gateway_id}, user {user_email}")
+
+        return OAuthTokenRevokeResponse(
+            success=True,
+            gateway_id=gateway_id,
+            message=f"OAuth token revoked for user {user_email}",
+        ).model_dump()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to admin-revoke token for gateway {gateway_id}, user {user_email}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to revoke token: {str(e)}")

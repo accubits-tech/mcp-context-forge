@@ -6713,6 +6713,73 @@ class OAuthCallbackResponse(BaseModelWithConfigDict):
     message: str = Field(..., description="Status message")
 
 
+class OAuthTokenStatusResponse(BaseModelWithConfigDict):
+    """Response schema for OAuth token status check.
+
+    Returns whether the current user has an active OAuth token for a given gateway,
+    along with token metadata when connected.
+
+    Attributes:
+        connected: Whether the user has an active OAuth token
+        gateway_id: The gateway ID queried
+        user_id: OAuth provider user ID (if connected)
+        token_type: Token type (e.g., 'bearer')
+        expires_at: ISO 8601 timestamp when access token expires
+        is_expired: Whether the token has expired
+        scopes: OAuth scopes granted
+        created_at: ISO 8601 timestamp when the token was created
+        updated_at: ISO 8601 timestamp when the token was last updated
+
+    Examples:
+        >>> response = OAuthTokenStatusResponse(
+        ...     connected=True,
+        ...     gateway_id="github-orgA",
+        ...     user_id="user@example.com",
+        ...     token_type="bearer",
+        ...     expires_at="2025-11-05T12:00:00+00:00",
+        ...     is_expired=False,
+        ...     scopes=["read", "write"],
+        ...     created_at="2025-11-04T12:00:00+00:00",
+        ...     updated_at="2025-11-04T12:00:00+00:00"
+        ... )
+        >>> response.connected
+        True
+    """
+
+    connected: bool = Field(..., description="Whether the user has an active OAuth token")
+    gateway_id: str = Field(..., description="Gateway ID queried")
+    user_id: Optional[str] = Field(None, description="OAuth provider user ID")
+    token_type: Optional[str] = Field(None, description="Token type (e.g., 'bearer')")
+    expires_at: Optional[str] = Field(None, description="ISO 8601 timestamp when access token expires")
+    is_expired: Optional[bool] = Field(None, description="Whether the token has expired")
+    scopes: Optional[List[str]] = Field(None, description="OAuth scopes granted")
+    created_at: Optional[str] = Field(None, description="ISO 8601 timestamp when the token was created")
+    updated_at: Optional[str] = Field(None, description="ISO 8601 timestamp when the token was last updated")
+
+
+class OAuthTokenRevokeResponse(BaseModelWithConfigDict):
+    """Response schema for OAuth token revocation.
+
+    Attributes:
+        success: Whether the token was successfully revoked
+        gateway_id: The gateway ID for which the token was revoked
+        message: Human-readable status message
+
+    Examples:
+        >>> response = OAuthTokenRevokeResponse(
+        ...     success=True,
+        ...     gateway_id="github-orgA",
+        ...     message="OAuth token revoked successfully"
+        ... )
+        >>> response.success
+        True
+    """
+
+    success: bool = Field(..., description="Whether the token was successfully revoked")
+    gateway_id: str = Field(..., description="Gateway ID for which the token was revoked")
+    message: str = Field(..., description="Status message")
+
+
 # ============================================================================
 # Observability Schemas (OpenTelemetry-style traces, spans, events, metrics)
 # ============================================================================
