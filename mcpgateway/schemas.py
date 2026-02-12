@@ -6409,6 +6409,7 @@ class CatalogServer(BaseModel):
     transport: Optional[str] = Field(None, description="Transport type: SSE, STREAMABLEHTTP, or WEBSOCKET")
     logo_url: Optional[str] = Field(None, description="URL to server logo/icon")
     documentation_url: Optional[str] = Field(None, description="URL to server documentation")
+    tools: List[str] = Field(default_factory=list, description="List of tool names provided by this server")
     is_registered: bool = Field(default=False, description="Whether server is already registered")
     is_available: bool = Field(default=True, description="Whether server is currently available")
 
