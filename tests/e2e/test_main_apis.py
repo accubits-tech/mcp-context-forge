@@ -45,7 +45,8 @@ import os
 import tempfile
 import time
 from typing import AsyncGenerator
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 from unittest.mock import patch as mock_patch
 
 # Third-Party
@@ -63,7 +64,6 @@ from sqlalchemy.pool import StaticPool
 # Completely replace RBAC decorators with no-op versions
 import mcpgateway.middleware.rbac as rbac_module
 
-# Local
 # Test utilities - must import BEFORE mcpgateway modules
 
 
@@ -971,12 +971,12 @@ class TestResourceAPIs:
         elif "mimeType" in result:
             assert result["mimeType"] == "application/json"
 
-
     async def test_create_resource_form_urlencoded(self, client: AsyncClient, mock_auth):
         """
         Test POST /resources with application/x-www-form-urlencoded.
         Ensures resource creation works with form-encoded data.
         """
+        # Standard
         import urllib.parse
 
         resource_data = {

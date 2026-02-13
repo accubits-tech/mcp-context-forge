@@ -6,7 +6,6 @@ Authors: Mihai Criveti
 """
 
 # Standard
-import asyncio
 import os
 import tempfile
 from unittest.mock import AsyncMock
@@ -21,8 +20,6 @@ from sqlalchemy.pool import StaticPool
 # First-Party
 from mcpgateway.config import Settings
 from mcpgateway.db import Base
-
-# Local
 
 # Skip session-level RBAC patching for now - let individual tests handle it
 # _session_rbac_originals = patch_rbac_decorators()
@@ -191,4 +188,3 @@ def app_with_temp_db():
 def pytest_sessionfinish(session, exitstatus):
     """Restore RBAC decorators at the end of the test session."""
     # restore_rbac_decorators(_session_rbac_originals)
-    pass

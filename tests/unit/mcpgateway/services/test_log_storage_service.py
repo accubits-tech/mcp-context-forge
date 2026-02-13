@@ -291,7 +291,7 @@ async def test_get_logs_time_range():
         service = LogStorageService()
 
         # Add logs with specific timestamps
-        now = datetime.now(timezone.utc)
+        datetime.now(timezone.utc)
 
         # Create log with past timestamp
         old_entry = LogEntry(level=LogLevel.INFO, message="Old log")

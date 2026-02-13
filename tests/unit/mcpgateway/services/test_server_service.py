@@ -608,7 +608,10 @@ class TestServerService:
 
     @pytest.mark.asyncio
     async def test_update_server_name_conflict(self, server_service, mock_server, test_db):
+        # Standard
         import types
+
+        # First-Party
         from mcpgateway.services.server_service import ServerNameConflictError
 
         # Mock PermissionService to bypass ownership checks (this test is about name conflicts)
@@ -632,6 +635,7 @@ class TestServerService:
             test_db.refresh = Mock()
 
             # Should not raise ServerNameConflictError for private, but should raise IntegrityError for duplicate name
+            # Third-Party
             from sqlalchemy.exc import IntegrityError
 
             test_db.commit = Mock(side_effect=IntegrityError("Duplicate name", None, None))

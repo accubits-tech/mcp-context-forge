@@ -7,12 +7,14 @@ Generates docker-compose.yml files from infrastructure profile configurations.
 Supports PostgreSQL version switching, instance scaling, and resource tuning.
 """
 
+# Standard
 import argparse
-import sys
 from pathlib import Path
-from typing import Dict, Any
-import yaml
+import sys
+from typing import Any, Dict
 
+# Third-Party
+import yaml
 
 DOCKER_COMPOSE_TEMPLATE = """version: '3.8'
 

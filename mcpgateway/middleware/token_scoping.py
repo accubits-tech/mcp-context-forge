@@ -693,6 +693,12 @@ class TokenScopingMiddleware:
             if not payload:
                 return await call_next(request)
 
+            # Keycloak tokens don't carry internal scoping claims (scopes, teams, server_id).
+            # Their authorization is handled by RBAC via database roles/teams populated
+            # by the KeycloakRoleMappingService during authentication.
+            if payload.get("_auth_source") == "keycloak":
+                return await call_next(request)
+
             # TEAM VALIDATION: Check team membership
             if not self._check_team_membership(payload):
                 logger.warning("Token rejected: User no longer member of associated team(s)")

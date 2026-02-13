@@ -30,7 +30,7 @@ import logging
 from unittest.mock import patch
 
 # Third-Party
-from pydantic import ValidationError, SecretStr
+from pydantic import SecretStr, ValidationError
 import pytest
 
 # First-Party
@@ -429,7 +429,7 @@ class TestSecurityValidation:
 
         assert tool.description is not None
         assert len(tool.description) == SecurityValidator.MAX_DESCRIPTION_LENGTH
-        assert tool.description == long_desc[:SecurityValidator.MAX_DESCRIPTION_LENGTH]
+        assert tool.description == long_desc[: SecurityValidator.MAX_DESCRIPTION_LENGTH]
         print(f"✅ Long description truncated to {SecurityValidator.MAX_DESCRIPTION_LENGTH} chars")
 
     def test_tool_create_headers_validation(self):

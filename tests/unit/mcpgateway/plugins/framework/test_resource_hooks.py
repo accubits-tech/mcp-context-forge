@@ -15,11 +15,11 @@ import pytest
 
 # First-Party
 from mcpgateway.common.models import ResourceContent
-from mcpgateway.plugins.framework.base import PluginRef
 
 # Registry is imported for mocking
 from mcpgateway.plugins.framework import (
     GlobalContext,
+    Plugin,
     PluginCondition,
     PluginConfig,
     PluginContext,
@@ -28,12 +28,12 @@ from mcpgateway.plugins.framework import (
     PluginMode,
     PluginViolation,
     ResourceHookType,
-    Plugin,
     ResourcePostFetchPayload,
     ResourcePostFetchResult,
     ResourcePreFetchPayload,
     ResourcePreFetchResult,
 )
+from mcpgateway.plugins.framework.base import PluginRef
 
 
 class TestResourceHooks:
@@ -47,7 +47,7 @@ class TestResourceHooks:
 
     def test_resource_post_fetch_payload(self):
         """Test ResourcePostFetchPayload creation and attributes."""
-        content = ResourceContent(type="resource", id="123",uri="file:///test.txt", text="Test content")
+        content = ResourceContent(type="resource", id="123", uri="file:///test.txt", text="Test content")
         payload = ResourcePostFetchPayload(uri="file:///test.txt", content=content)
         assert payload.uri == "file:///test.txt"
         assert payload.content == content
@@ -85,7 +85,7 @@ class TestResourceHooks:
             tags=["test"],
         )
         plugin = Plugin(config)
-        content = ResourceContent(type="resource",  id="123",uri="file:///test.txt", text="Test content")
+        content = ResourceContent(type="resource", id="123", uri="file:///test.txt", text="Test content")
         payload = ResourcePostFetchPayload(uri="file:///test.txt", content=content)
         context = PluginContext(global_context=GlobalContext(request_id="test-123"))
 
@@ -164,7 +164,7 @@ class TestResourceHooks:
         plugin = ContentFilterPlugin(config)
         content = ResourceContent(
             type="resource",
-             id="123",
+            id="123",
             uri="test://config",
             text="Database config:\npassword: secret123\nport: 5432",
         )

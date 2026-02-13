@@ -6,63 +6,63 @@ Usage:
     python -m tests.load.generate --config tests/load/configs/custom.yaml
 """
 
+# Standard
 import argparse
+from datetime import datetime
 import json
 import logging
+from pathlib import Path
 import sys
 import time
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
-import yaml
+# Third-Party
 from faker import Faker
+from rich.console import Console
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import yaml
 
+# First-Party
 from mcpgateway.config import settings
 
+# Local
 from .generators import (
-    UserGenerator,
-    TeamGenerator,
-    TeamMemberGenerator,
-    TokenGenerator,
-    GatewayGenerator,
-    ToolGenerator,
-    ResourceGenerator,
-    PromptGenerator,
-    ServerGenerator,
     A2AAgentGenerator,
-    ServerToolAssociationGenerator,
-    ServerResourceAssociationGenerator,
-    ServerPromptAssociationGenerator,
-    ServerA2AAssociationGenerator,
-    ToolMetricsGenerator,
-    ResourceMetricsGenerator,
-    PromptMetricsGenerator,
-    ServerMetricsGenerator,
     A2AAgentMetricsGenerator,
-    TokenUsageLogGenerator,
     EmailAuthEventGenerator,
-    PermissionAuditLogGenerator,
-    MCPSessionGenerator,
+    GatewayGenerator,
     MCPMessageGenerator,
+    MCPSessionGenerator,
+    OAuthTokenGenerator,
+    PermissionAuditLogGenerator,
+    PromptGenerator,
+    PromptMetricsGenerator,
+    ResourceGenerator,
+    ResourceMetricsGenerator,
     ResourceSubscriptionGenerator,
+    ServerA2AAssociationGenerator,
+    ServerGenerator,
+    ServerMetricsGenerator,
+    ServerPromptAssociationGenerator,
+    ServerResourceAssociationGenerator,
+    ServerToolAssociationGenerator,
+    TeamGenerator,
     TeamInvitationGenerator,
     TeamJoinRequestGenerator,
+    TeamMemberGenerator,
+    TokenGenerator,
     TokenRevocationGenerator,
-    OAuthTokenGenerator,
+    TokenUsageLogGenerator,
+    ToolGenerator,
+    ToolMetricsGenerator,
+    UserGenerator,
 )
 from .utils.progress import MultiProgressTracker, SimpleProgressTracker
 from .utils.validation import DataValidator
-from rich.console import Console
-
 
 # Logger setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -115,7 +115,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     Returns:
         Configuration dictionary
     """
-    with open(config_path, 'r') as f:
+    with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
 
@@ -172,7 +172,7 @@ def generate_data(config: Dict[str, Any], dry_run: bool = False) -> Dict[str, An
     console = Console()
     simple_progress = SimpleProgressTracker(console)
 
-    profile_name = config.get('profile', {}).get('name', 'unknown')
+    profile_name = config.get("profile", {}).get("name", "unknown")
     simple_progress.print_step(f"Starting load data generation (Profile: {profile_name})")
 
     logger.info("Starting load data generation...")
@@ -206,11 +206,7 @@ def generate_data(config: Dict[str, Any], dry_run: bool = False) -> Dict[str, An
                 generator_class = GENERATORS[generator_name]
                 temp_generator = generator_class(db, config, faker, logger)
                 count = temp_generator.get_count()
-                progress_tracker.add_task(
-                    generator_name,
-                    count,
-                    f"{generator_name:30}"
-                )
+                progress_tracker.add_task(generator_name, count, f"{generator_name:30}")
 
         simple_progress.print_success(f"Planning to generate {progress_tracker.total_records:,} total records")
 
@@ -305,63 +301,23 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument(
-        "--profile",
-        type=str,
-        choices=["small", "medium", "large", "production", "massive"],
-        help="Load profile to use"
-    )
+    parser.add_argument("--profile", type=str, choices=["small", "medium", "large", "production", "massive"], help="Load profile to use")
 
-    parser.add_argument(
-        "--config",
-        type=str,
-        help="Path to custom configuration file"
-    )
+    parser.add_argument("--config", type=str, help="Path to custom configuration file")
 
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help="Number of parallel workers (default: 1)"
-    )
+    parser.add_argument("--workers", type=int, default=1, help="Number of parallel workers (default: 1)")
 
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        help="Batch insert size (overrides config)"
-    )
+    parser.add_argument("--batch-size", type=int, help="Batch insert size (overrides config)")
 
-    parser.add_argument(
-        "--seed",
-        type=int,
-        help="Random seed for reproducibility"
-    )
+    parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
 
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be generated without inserting"
-    )
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be generated without inserting")
 
-    parser.add_argument(
-        "--skip-validation",
-        action="store_true",
-        help="Skip post-generation validation"
-    )
+    parser.add_argument("--skip-validation", action="store_true", help="Skip post-generation validation")
 
-    parser.add_argument(
-        "--output",
-        type=str,
-        help="Output report path (JSON)"
-    )
+    parser.add_argument("--output", type=str, help="Output report path (JSON)")
 
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        default="INFO",
-        help="Logging level"
-    )
+    parser.add_argument("--log-level", type=str, choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO", help="Logging level")
 
     args = parser.parse_args()
 
@@ -403,7 +359,7 @@ def main():
             output_file = Path(output_path)
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(output_file, 'w') as f:
+            with open(output_file, "w") as f:
                 json.dump(summary, f, indent=2, default=str)
 
             logger.info(f"Report saved to: {output_file}")

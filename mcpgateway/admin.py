@@ -42,7 +42,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Res
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 import httpx
-import jwt
 from pydantic import BaseModel, SecretStr, ValidationError
 from pydantic_core import ValidationError as CoreValidationError
 from sqlalchemy import and_, case, cast, desc, func, or_, select, String
@@ -6551,8 +6550,8 @@ async def admin_get_gateway(gateway_id: str, db: Session = Depends(get_db), user
         tools = [tool_service._convert_tool_to_read(tool) for tool in tool_records]
 
         # Add tools to response
-        gateway_dict = gateway.model_dump(mode='json', by_alias=True)
-        gateway_dict['tools'] = [tool.model_dump(mode='json', by_alias=True) for tool in tools]
+        gateway_dict = gateway.model_dump(mode="json", by_alias=True)
+        gateway_dict["tools"] = [tool.model_dump(mode="json", by_alias=True) for tool in tools]
 
         return JSONResponse(content=gateway_dict)
     except GatewayNotFoundError as e:

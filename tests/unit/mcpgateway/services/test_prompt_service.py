@@ -18,20 +18,18 @@ from __future__ import annotations
 # Standard
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, List, Optional, TypeVar
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
-from typing import TypeVar
 
 # Third-Party
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 # First-Party
+from mcpgateway.common.models import Message, PromptResult, Role, TextContent
 from mcpgateway.db import Prompt as DbPrompt
 from mcpgateway.db import PromptMetric
-from mcpgateway.common.models import Message, PromptResult, Role, TextContent
 from mcpgateway.schemas import PromptCreate, PromptRead, PromptUpdate
-
 from mcpgateway.services.prompt_service import (
     PromptError,
     PromptNotFoundError,
@@ -58,7 +56,10 @@ def mock_prompt():
 
     return prompt
 
+
 _R = TypeVar("_R")
+
+
 def _make_execute_result(*, scalar: Any = _R | None, scalars_list: list[_R] | None = None) -> MagicMock:
     """
     Return a MagicMock that mimics the SQLAlchemy Result object:
@@ -397,7 +398,6 @@ class TestPromptService:
     #   delete_prompt
     # ──────────────────────────────────────────────────────────────────
 
-
     @pytest.mark.asyncio
     async def test_delete_prompt_success(self, prompt_service, test_db):
         p = _build_db_prompt()
@@ -410,7 +410,6 @@ class TestPromptService:
 
         test_db.delete.assert_called_once_with(p)
         prompt_service._notify_prompt_deleted.assert_called_once()
-
 
     @pytest.mark.asyncio
     async def test_delete_prompt_not_found(self, prompt_service, test_db):
@@ -451,8 +450,8 @@ class TestPromptService:
 
     @pytest.mark.asyncio
     async def test_publish_event_puts_in_all_queues(self, prompt_service):
-        q1 = asyncio.Queue() # type: ignore[var-annotated]  # TODO: event types for services
-        q2 = asyncio.Queue() # type: ignore[var-annotated]  # TODO: event types for services
+        q1 = asyncio.Queue()  # type: ignore[var-annotated]  # TODO: event types for services
+        q2 = asyncio.Queue()  # type: ignore[var-annotated]  # TODO: event types for services
         prompt_service._event_subscribers.extend([q1, q2])
         event = {"type": "test"}
         await prompt_service._publish_event(event)

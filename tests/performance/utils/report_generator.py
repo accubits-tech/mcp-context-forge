@@ -12,15 +12,17 @@ Generates comprehensive HTML reports from performance test results including:
 - Recommendations
 """
 
+# Standard
 import argparse
+from datetime import datetime
 import json
+from pathlib import Path
 import re
 import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Any, Optional
-import yaml
+from typing import Any, Dict, List, Optional
 
+# Third-Party
+import yaml
 
 # HTML Template with embedded CSS and Chart.js
 HTML_TEMPLATE = """

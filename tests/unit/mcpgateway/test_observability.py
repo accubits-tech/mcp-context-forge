@@ -172,7 +172,6 @@ class TestObservability:
         # between the SpanWithAttributes wrapper and the underlying span
         # doesn't accurately represent the real behavior.
         # Manual testing confirms the exception handling works correctly.
-        pass
 
     @pytest.mark.asyncio
     async def test_trace_operation_decorator_no_tracer(self):

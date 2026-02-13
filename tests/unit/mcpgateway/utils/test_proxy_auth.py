@@ -264,6 +264,7 @@ class TestWebSocketAuthentication:
         """streamable_http_auth should allow request when proxy header present and auth disabled."""
         # from types import SimpleNamespace
         # from starlette.datastructures import Headers
+        # First-Party
         from mcpgateway.transports.streamablehttp_transport import streamable_http_auth
 
         # Build ASGI scope
@@ -287,6 +288,7 @@ class TestWebSocketAuthentication:
     @pytest.mark.asyncio
     async def test_streamable_http_auth_no_header_denied_when_required(self):
         """Should deny when proxy header missing and auth_required true."""
+        # First-Party
         from mcpgateway.transports.streamablehttp_transport import streamable_http_auth
 
         scope = {

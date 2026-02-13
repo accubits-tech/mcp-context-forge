@@ -7,15 +7,19 @@ Authors: Mihai Criveti
 Unit tests for Rust PII Filter implementation
 """
 
-import pytest
+# Standard
 from unittest.mock import patch
-import os
 
+# Third-Party
+import pytest
+
+# First-Party
 from plugins.pii_filter.pii_filter import PIIFilterConfig
 
 # Try to import Rust implementation
 try:
-    from plugins.pii_filter.pii_filter_rust import RustPIIDetector, RUST_AVAILABLE
+    # First-Party
+    from plugins.pii_filter.pii_filter_rust import RUST_AVAILABLE, RustPIIDetector
 except ImportError:
     RUST_AVAILABLE = False
     RustPIIDetector = None
@@ -43,10 +47,12 @@ class TestRustPIIDetector:
 
     def test_initialization_without_rust(self):
         """Test that ImportError is raised when Rust unavailable."""
-        with patch('plugins.pii_filter.pii_filter_rust.RUST_AVAILABLE', False):
+        with patch("plugins.pii_filter.pii_filter_rust.RUST_AVAILABLE", False):
             with pytest.raises(ImportError, match="Rust implementation not available"):
                 # Force reimport to get patched value
+                # First-Party
                 from plugins.pii_filter.pii_filter_rust import RustPIIDetector as RustDet
+
                 config = PIIFilterConfig()
                 RustDet(config)
 
@@ -261,13 +267,7 @@ class TestRustPIIDetector:
     # Nested Data Processing Tests
     def test_process_nested_dict(self, detector):
         """Test processing nested dictionary."""
-        data = {
-            "user": {
-                "ssn": "123-45-6789",
-                "email": "john@example.com",
-                "name": "John Doe"
-            }
-        }
+        data = {"user": {"ssn": "123-45-6789", "email": "john@example.com", "name": "John Doe"}}
 
         modified, new_data, detections = detector.process_nested(data)
 
@@ -280,11 +280,7 @@ class TestRustPIIDetector:
 
     def test_process_nested_list(self, detector):
         """Test processing list with PII."""
-        data = [
-            "SSN: 123-45-6789",
-            "No PII here",
-            "Email: test@example.com"
-        ]
+        data = ["SSN: 123-45-6789", "No PII here", "Email: test@example.com"]
 
         modified, new_data, detections = detector.process_nested(data)
 
@@ -295,16 +291,7 @@ class TestRustPIIDetector:
 
     def test_process_nested_mixed_structure(self, detector):
         """Test processing mixed nested structure."""
-        data = {
-            "users": [
-                {"ssn": "123-45-6789", "name": "Alice"},
-                {"ssn": "987-65-4321", "name": "Bob"}
-            ],
-            "contact": {
-                "email": "admin@example.com",
-                "phone": "555-1234"
-            }
-        }
+        data = {"users": [{"ssn": "123-45-6789", "name": "Alice"}, {"ssn": "987-65-4321", "name": "Bob"}], "contact": {"email": "admin@example.com", "phone": "555-1234"}}
 
         modified, new_data, detections = detector.process_nested(data)
 
@@ -315,12 +302,7 @@ class TestRustPIIDetector:
 
     def test_process_nested_no_pii(self, detector):
         """Test processing nested data with no PII."""
-        data = {
-            "user": {
-                "name": "John Doe",
-                "age": 30
-            }
-        }
+        data = {"user": {"name": "John Doe", "age": 30}}
 
         modified, new_data, detections = detector.process_nested(data)
 
@@ -331,11 +313,7 @@ class TestRustPIIDetector:
     # Configuration Tests
     def test_disabled_detection(self):
         """Test that disabled detectors don't detect PII."""
-        config = PIIFilterConfig(
-            detect_ssn=False,
-            detect_email=False,
-            detect_phone=False
-        )
+        config = PIIFilterConfig(detect_ssn=False, detect_email=False, detect_phone=False)
         detector = RustPIIDetector(config)
 
         text = "SSN: 123-45-6789, Email: test@example.com, Phone: 555-1234"
@@ -347,9 +325,7 @@ class TestRustPIIDetector:
 
     def test_whitelist_pattern(self):
         """Test whitelist pattern configuration."""
-        config = PIIFilterConfig(
-            whitelist_patterns=[r"test@example\.com"]
-        )
+        config = PIIFilterConfig(whitelist_patterns=[r"test@example\.com"])
         detector = RustPIIDetector(config)
 
         text = "Email1: test@example.com, Email2: john@example.com"
@@ -363,10 +339,7 @@ class TestRustPIIDetector:
     @pytest.mark.skip(reason="Rust implementation currently uses partial masking for all strategies")
     def test_custom_redaction_text(self):
         """Test custom redaction text."""
-        config = PIIFilterConfig(
-            default_mask_strategy="redact",
-            redaction_text="[CENSORED]"
-        )
+        config = PIIFilterConfig(default_mask_strategy="redact", redaction_text="[CENSORED]")
         detector = RustPIIDetector(config)
 
         text = "SSN: 123-45-6789"
@@ -408,7 +381,9 @@ class TestRustPIIDetector:
             text_parts.append(f"User {i}: SSN 123-45-{i:04d}, Email user{i}@example.com")
         text = "\n".join(text_parts)
 
+        # Standard
         import time
+
         start = time.time()
         detections = detector.detect(text)
         duration = time.time() - start
@@ -482,7 +457,9 @@ class TestRustPIIDetectorPerformance:
             lines.append(f"User {i}: SSN {i:03d}-45-6789, Email user{i}@example.com")
         text = "\n".join(lines)
 
+        # Standard
         import time
+
         start = time.time()
         detections = detector.detect(text)
         duration = time.time() - start
@@ -504,14 +481,12 @@ class TestRustPIIDetectorPerformance:
         data = {"level1": {}}
         current = data["level1"]
         for i in range(100):
-            current[f"level{i+2}"] = {
-                "ssn": f"{i:03d}-45-6789",
-                "email": f"user{i}@example.com",
-                "data": {}
-            }
+            current[f"level{i+2}"] = {"ssn": f"{i:03d}-45-6789", "email": f"user{i}@example.com", "data": {}}
             current = current[f"level{i+2}"]["data"]
 
+        # Standard
         import time
+
         start = time.time()
         modified, new_data, detections = detector.process_nested(data)
         duration = time.time() - start

@@ -7,30 +7,34 @@ Authors: Mihai Criveti
 Unit Tests for Catalog Service .
 """
 
-import pytest
-import asyncio
+# Standard
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
 
-from mcpgateway.services.catalog_service import CatalogService
+# Third-Party
+import pytest
+
+# First-Party
 from mcpgateway.schemas import (
-    CatalogListRequest,
     CatalogBulkRegisterRequest,
+    CatalogListRequest,
     CatalogServerRegisterRequest,
 )
+from mcpgateway.services.catalog_service import CatalogService
+
 
 @pytest.fixture
 def service():
     return CatalogService()
 
+
 @pytest.mark.asyncio
 async def test_load_catalog_cached(service):
     service._catalog_cache = {"cached": True}
     service._cache_timestamp = 1000.0
-    with patch("mcpgateway.services.catalog_service.settings", MagicMock(mcpgateway_catalog_cache_ttl=9999)), \
-         patch("mcpgateway.services.catalog_service.time.time", return_value=1001.0):
+    with patch("mcpgateway.services.catalog_service.settings", MagicMock(mcpgateway_catalog_cache_ttl=9999)), patch("mcpgateway.services.catalog_service.time.time", return_value=1001.0):
         result = await service.load_catalog()
         assert result == {"cached": True}
+
 
 @pytest.mark.asyncio
 async def test_load_catalog_missing_file(service):
@@ -38,6 +42,7 @@ async def test_load_catalog_missing_file(service):
         with patch("mcpgateway.services.catalog_service.Path.exists", return_value=False):
             result = await service.load_catalog(force_reload=True)
             assert "catalog_servers" in result
+
 
 @pytest.mark.asyncio
 async def test_load_catalog_valid_yaml(service):
@@ -49,12 +54,14 @@ async def test_load_catalog_valid_yaml(service):
                 result = await service.load_catalog(force_reload=True)
                 assert "catalog_servers" in result
 
+
 @pytest.mark.asyncio
 async def test_load_catalog_exception(service):
     with patch("mcpgateway.services.catalog_service.settings", MagicMock(mcpgateway_catalog_file="catalog.yml", mcpgateway_catalog_cache_ttl=0)):
         with patch("mcpgateway.services.catalog_service.open", side_effect=Exception("fail")):
             result = await service.load_catalog(force_reload=True)
             assert result["catalog_servers"] == []
+
 
 @pytest.mark.asyncio
 async def test_get_catalog_servers_filters(service):
@@ -72,6 +79,7 @@ async def test_get_catalog_servers_filters(service):
         assert result.total >= 1
         assert all(s.category == "cat" for s in result.servers)
 
+
 @pytest.mark.asyncio
 async def test_register_catalog_server_not_found(service):
     with patch.object(service, "load_catalog", AsyncMock(return_value={"catalog_servers": []})):
@@ -79,6 +87,7 @@ async def test_register_catalog_server_not_found(service):
         result = await service.register_catalog_server("missing", None, db)
         assert not result.success
         assert "not found" in result.message
+
 
 @pytest.mark.asyncio
 async def test_register_catalog_server_already_registered(service):
@@ -91,6 +100,7 @@ async def test_register_catalog_server_already_registered(service):
             assert not result.success
             assert "already registered" in result.message
 
+
 @pytest.mark.asyncio
 async def test_register_catalog_server_success(service):
     fake_catalog = {"catalog_servers": [{"id": "1", "name": "srv", "url": "http://a", "description": "desc"}]}
@@ -101,6 +111,7 @@ async def test_register_catalog_server_success(service):
             result = await service.register_catalog_server("1", None, db)
             assert result.success
             assert "Successfully" in result.message
+
 
 @pytest.mark.asyncio
 async def test_register_catalog_server_ipv6(service):
@@ -113,16 +124,17 @@ async def test_register_catalog_server_ipv6(service):
             assert not result.success
             assert "IPv6" in result.error
 
+
 @pytest.mark.asyncio
 async def test_register_catalog_server_exception_mapping(service):
     fake_catalog = {"catalog_servers": [{"id": "1", "name": "srv", "url": "http://a", "description": "desc"}]}
     with patch.object(service, "load_catalog", AsyncMock(return_value=fake_catalog)):
         db = MagicMock()
         db.execute.return_value.scalar_one_or_none.return_value = None
-        with patch("mcpgateway.services.catalog_service.select"), \
-             patch.object(service._gateway_service, "register_gateway", AsyncMock(side_effect=Exception("Connection refused"))):
+        with patch("mcpgateway.services.catalog_service.select"), patch.object(service._gateway_service, "register_gateway", AsyncMock(side_effect=Exception("Connection refused"))):
             result = await service.register_catalog_server("1", None, db)
             assert "offline" in result.message
+
 
 @pytest.mark.asyncio
 async def test_check_server_availability_success(service):
@@ -135,12 +147,14 @@ async def test_check_server_availability_success(service):
             result = await service.check_server_availability("1")
             assert result.is_available
 
+
 @pytest.mark.asyncio
 async def test_check_server_availability_not_found(service):
     with patch.object(service, "load_catalog", AsyncMock(return_value={"catalog_servers": []})):
         result = await service.check_server_availability("missing")
         assert not result.is_available
         assert "not found" in result.error
+
 
 @pytest.mark.asyncio
 async def test_check_server_availability_exception(service):
@@ -149,6 +163,7 @@ async def test_check_server_availability_exception(service):
         with patch("mcpgateway.services.catalog_service.httpx.AsyncClient", side_effect=Exception("fail")):
             result = await service.check_server_availability("1")
             assert not result.is_available
+
 
 @pytest.mark.asyncio
 async def test_bulk_register_servers_success_and_failure(service):

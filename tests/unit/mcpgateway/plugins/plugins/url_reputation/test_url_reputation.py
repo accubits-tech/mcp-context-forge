@@ -7,8 +7,10 @@ Authors: Mihai Criveti
 Tests for URLReputationPlugin.
 """
 
+# Third-Party
 import pytest
 
+# First-Party
 from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginConfig,

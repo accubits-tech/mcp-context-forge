@@ -7,9 +7,14 @@ in the OAuth Manager following TDD Red Phase.
 Tests will FAIL until implementation is complete.
 """
 
-import pytest
+# Standard
 from unittest.mock import AsyncMock, MagicMock, patch
-from mcpgateway.services.oauth_manager import OAuthManager, OAuthError
+
+# Third-Party
+import pytest
+
+# First-Party
+from mcpgateway.services.oauth_manager import OAuthError, OAuthManager
 
 
 class TestPKCEGeneration:
@@ -68,6 +73,7 @@ class TestPKCEGeneration:
 
     def test_generate_pkce_params_challenge_is_sha256_of_verifier(self):
         """Test that code_challenge is SHA256 hash of code_verifier."""
+        # Standard
         import base64
         import hashlib
 
@@ -175,8 +181,11 @@ class TestValidateAndRetrieveState:
         state = "test-state"
 
         # Mock in-memory state storage
-        from mcpgateway.services.oauth_manager import _oauth_states, _state_lock
+        # Standard
         from datetime import datetime, timedelta, timezone
+
+        # First-Party
+        from mcpgateway.services.oauth_manager import _oauth_states, _state_lock
 
         state_key = f"oauth:state:{gateway_id}:{state}"
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=300)
@@ -199,8 +208,11 @@ class TestValidateAndRetrieveState:
         gateway_id = "test-gateway-123"
         state = "test-state"
 
-        from mcpgateway.services.oauth_manager import _oauth_states, _state_lock
+        # Standard
         from datetime import datetime, timedelta, timezone
+
+        # First-Party
+        from mcpgateway.services.oauth_manager import _oauth_states, _state_lock
 
         state_key = f"oauth:state:{gateway_id}:{state}"
         expires_at = datetime.now(timezone.utc) - timedelta(seconds=60)  # Expired
@@ -220,8 +232,11 @@ class TestValidateAndRetrieveState:
         gateway_id = "test-gateway-123"
         state = "test-state"
 
-        from mcpgateway.services.oauth_manager import _oauth_states, _state_lock
+        # Standard
         from datetime import datetime, timedelta, timezone
+
+        # First-Party
+        from mcpgateway.services.oauth_manager import _oauth_states, _state_lock
 
         state_key = f"oauth:state:{gateway_id}:{state}"
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=300)
@@ -340,7 +355,7 @@ class TestInitiateAuthorizationCodeFlowWithPKCE:
             mock_store.return_value = None
             mock_create_url.return_value = "https://as.example.com/authorize?..."
 
-            result = await manager.initiate_authorization_code_flow(gateway_id, credentials)
+            await manager.initiate_authorization_code_flow(gateway_id, credentials)
 
         # Verify PKCE was generated
         mock_pkce.assert_called_once()
@@ -373,7 +388,7 @@ class TestCompleteAuthorizationCodeFlowWithPKCE:
             mock_exchange.return_value = {"access_token": "token", "expires_in": 3600}
             mock_extract.return_value = "user-123"
 
-            result = await manager.complete_authorization_code_flow(gateway_id, code, state, credentials)
+            await manager.complete_authorization_code_flow(gateway_id, code, state, credentials)
 
         # Verify code_verifier was passed to token exchange
         mock_exchange.assert_called_once()

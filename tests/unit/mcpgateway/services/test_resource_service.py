@@ -450,7 +450,6 @@ class TestResourceReading:
         # Add a template to the cache to trigger template logic
         resource_service._template_cache["template"] = MagicMock(uri_template="test://template/{value}")
 
-
         # Ensure db.get returns a mock resource with a template URI (containing curly braces)
         mock_template_resource = MagicMock()
         mock_template_resource.uri = "test://template/{value}"
@@ -590,7 +589,6 @@ class TestResourceManagement:
         """Test successful resource update."""
         update_data = ResourceUpdate(name="Updated Name", description="Updated description", content="Updated content")
 
-
         mock_scalar = MagicMock()
         mock_scalar.scalar_one_or_none.return_value = mock_resource
         mock_db.execute.return_value = mock_scalar
@@ -620,7 +618,7 @@ class TestResourceManagement:
                 },
             )
 
-            result = await resource_service.update_resource(mock_db, mock_resource.id, update_data)
+            await resource_service.update_resource(mock_db, mock_resource.id, update_data)
 
             assert mock_resource.name == "Updated Name"
             assert mock_resource.description == "Updated description"
@@ -630,7 +628,6 @@ class TestResourceManagement:
     async def test_update_resource_not_found(self, resource_service, mock_db):
         """Test updating non-existent resource."""
         update_data = ResourceUpdate(name="New Name")
-
 
         mock_scalar = MagicMock()
         mock_scalar.scalar_one_or_none.return_value = None
@@ -644,7 +641,6 @@ class TestResourceManagement:
     async def test_update_resource_inactive(self, resource_service, mock_db, mock_inactive_resource):
         """Test updating inactive resource."""
         update_data = ResourceUpdate(name="New Name")
-
 
         # First query (for active) returns None, second (for inactive) returns resource
         mock_scalar1 = MagicMock()
@@ -693,9 +689,8 @@ class TestResourceManagement:
                 },
             )
 
-
             mock_db.get.return_value = mock_resource
-            result = await resource_service.update_resource(mock_db, mock_resource.id, update_data)
+            await resource_service.update_resource(mock_db, mock_resource.id, update_data)
 
             assert mock_resource.binary_content == b"new binary content"
             assert mock_resource.text_content is None

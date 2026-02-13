@@ -23,12 +23,12 @@ from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginContext,
     PromptHookType,
-    ResourceHookType,
-    ToolHookType,
     PromptPosthookPayload,
     PromptPrehookPayload,
+    ResourceHookType,
     ResourcePostFetchPayload,
     ResourcePreFetchPayload,
+    ToolHookType,
     ToolPostInvokePayload,
     ToolPreInvokePayload,
 )
@@ -149,7 +149,7 @@ async def test_hook_methods_empty_content():
         await plugin.invoke_hook(ResourceHookType.RESOURCE_PRE_FETCH, payload, context)
 
     # Test resource_post_fetch with empty content - should raise PluginError
-    resource_content = ResourceContent(type="resource", id="123",uri="file://test.txt", text="content")
+    resource_content = ResourceContent(type="resource", id="123", uri="file://test.txt", text="content")
     payload = ResourcePostFetchPayload(uri="file://test.txt", content=resource_content)
     with pytest.raises(PluginError):
         await plugin.invoke_hook(ResourceHookType.RESOURCE_POST_FETCH, payload, context)

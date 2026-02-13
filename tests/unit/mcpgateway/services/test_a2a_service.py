@@ -21,6 +21,7 @@ from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.schemas import A2AAgentCreate, A2AAgentUpdate
 from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
 
+
 class TestA2AAgentService:
     """Test suite for A2A Agent Service."""
 
@@ -114,15 +115,17 @@ class TestA2AAgentService:
         service._db_to_schema = MagicMock(return_value=MagicMock())
 
         # Patch ToolRead.model_validate to accept the dict without error
+        # First-Party
         import mcpgateway.schemas
 
         if hasattr(mcpgateway.schemas.ToolRead, "model_validate"):
+            # Standard
             from unittest.mock import patch
 
             with patch.object(mcpgateway.schemas.ToolRead, "model_validate", return_value=MagicMock()):
-                result = await service.register_agent(mock_db, sample_agent_create)
+                await service.register_agent(mock_db, sample_agent_create)
         else:
-            result = await service.register_agent(mock_db, sample_agent_create)
+            await service.register_agent(mock_db, sample_agent_create)
 
         # Verify
         assert mock_db.add.call_count == 2
@@ -173,7 +176,7 @@ class TestA2AAgentService:
         service._db_to_schema = MagicMock(return_value=MagicMock())
 
         # Execute
-        result = await service.get_agent(mock_db, sample_db_agent.id)
+        await service.get_agent(mock_db, sample_db_agent.id)
 
         # Verify
         assert service._db_to_schema.called
@@ -194,7 +197,7 @@ class TestA2AAgentService:
         service._db_to_schema = MagicMock(return_value=MagicMock())
 
         # Execute
-        result = await service.get_agent_by_name(mock_db, sample_db_agent.name)
+        await service.get_agent_by_name(mock_db, sample_db_agent.name)
 
         # Verify
         assert service._db_to_schema.called
@@ -217,7 +220,7 @@ class TestA2AAgentService:
             update_data = A2AAgentUpdate(description="Updated description")
 
             # Execute
-            result = await service.update_agent(mock_db, sample_db_agent.id, update_data)
+            await service.update_agent(mock_db, sample_db_agent.id, update_data)
 
             # Verify
             mock_db.commit.assert_called_once()
@@ -243,7 +246,7 @@ class TestA2AAgentService:
         service._db_to_schema = MagicMock(return_value=MagicMock())
 
         # Execute
-        result = await service.toggle_agent_status(mock_db, sample_db_agent.id, False)
+        await service.toggle_agent_status(mock_db, sample_db_agent.id, False)
 
         # Verify
         assert sample_db_agent.enabled == False
@@ -407,7 +410,7 @@ class TestA2AAgentService:
 
     def test_db_to_schema_conversion(self, service, sample_db_agent):
         """
-            Test database model to schema conversion with db parameter.
+        Test database model to schema conversion with db parameter.
         """
 
         mock_db = MagicMock()

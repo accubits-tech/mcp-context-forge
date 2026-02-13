@@ -73,6 +73,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 # First-Party
 from mcpgateway import __version__
 from mcpgateway.admin import admin_router, set_logging_service
+from mcpgateway.agents.openapi_agent import OpenAPIAgent
 from mcpgateway.auth import get_current_user
 from mcpgateway.bootstrap_db import main as bootstrap_db
 from mcpgateway.cache import ResourceCache, SessionRegistry
@@ -125,6 +126,7 @@ from mcpgateway.schemas import (
     ToolUpdate,
 )
 from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
+from mcpgateway.services.api_doc_parser_service import APIDocumentationError, APIDocumentationParserService, ContentExtractionError, DocumentFormatError
 from mcpgateway.services.completion_service import CompletionService
 from mcpgateway.services.export_service import ExportError, ExportService
 from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayDuplicateConflictError, GatewayError, GatewayNameConflictError, GatewayNotFoundError, GatewayService
@@ -133,15 +135,13 @@ from mcpgateway.services.import_service import ImportError as ImportServiceError
 from mcpgateway.services.import_service import ImportService, ImportValidationError
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.metrics import setup_metrics
+from mcpgateway.services.openapi_service import OpenAPIError, OpenAPIParsingError, OpenAPIService, OpenAPIValidationError
 from mcpgateway.services.prompt_service import PromptError, PromptNameConflictError, PromptNotFoundError, PromptService
 from mcpgateway.services.resource_service import ResourceError, ResourceNotFoundError, ResourceService, ResourceURIConflictError
 from mcpgateway.services.root_service import RootService
 from mcpgateway.services.server_service import ServerError, ServerNameConflictError, ServerNotFoundError, ServerService
 from mcpgateway.services.tag_service import TagService
 from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, ToolNotFoundError, ToolService
-from mcpgateway.services.openapi_service import OpenAPIService, OpenAPIError, OpenAPIValidationError, OpenAPIParsingError
-from mcpgateway.services.api_doc_parser_service import APIDocumentationParserService, APIDocumentationError, DocumentFormatError, ContentExtractionError
-from mcpgateway.agents.openapi_agent import OpenAPIAgent
 from mcpgateway.transports.sse_transport import SSETransport
 from mcpgateway.transports.streamablehttp_transport import SessionManagerWrapper, streamable_http_auth
 from mcpgateway.utils.db_isready import wait_for_db_ready
@@ -2643,6 +2643,7 @@ async def get_tools_by_batch(
     Returns:
         ToolBatchResponse with tools and auth summary
     """
+    # First-Party
     from mcpgateway.utils.services_auth import decode_auth
 
     tools = await tool_service.get_tools_by_batch_id(db, batch_id, include_inactive)
@@ -2675,13 +2676,15 @@ async def get_tools_by_batch(
         if auth_configured:
             configured += 1
 
-        tool_infos.append(ToolAuthInfo(
-            id=tool.id,
-            name=tool.name,
-            auth_required=auth_required,
-            auth_type=auth_type,
-            auth_configured=auth_configured,
-        ))
+        tool_infos.append(
+            ToolAuthInfo(
+                id=tool.id,
+                name=tool.name,
+                auth_required=auth_required,
+                auth_type=auth_type,
+                auth_configured=auth_configured,
+            )
+        )
 
     return ToolBatchResponse(
         batch_id=batch_id,
@@ -2995,6 +2998,7 @@ async def process_openapi_url(
         import_batch_id = str(uuid.uuid4())
 
         # Fetch OpenAPI specification from URL
+        # Third-Party
         import httpx
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -3228,20 +3232,13 @@ async def upload_api_documentation(
         if enhance_with_ai:
             logger.info("Extracting tools directly from documentation using LLM")
             try:
-                raw_content = doc_structure.get('raw_content', '')
+                raw_content = doc_structure.get("raw_content", "")
                 if not raw_content:
                     raise ValueError("No raw content extracted from documentation")
 
                 # Extract tools directly from raw content using LLM
-                source_info = {
-                    "filename": file.filename,
-                    "format": doc_structure.get('source_format', 'unknown')
-                }
-                llm_tool_defs = await openapi_agent.extract_tools_from_raw_content(
-                    raw_content=raw_content,
-                    base_url=base_url,
-                    source_info=source_info
-                )
+                source_info = {"filename": file.filename, "format": doc_structure.get("source_format", "unknown")}
+                llm_tool_defs = await openapi_agent.extract_tools_from_raw_content(raw_content=raw_content, base_url=base_url, source_info=source_info)
 
                 logger.info(f"LLM extracted {len(llm_tool_defs)} tool definitions")
 
@@ -3249,18 +3246,18 @@ async def upload_api_documentation(
                 for tool_def in llm_tool_defs:
                     try:
                         # Merge additional tags
-                        tool_tags = (tool_def.get('tags', []) or []) + additional_tags + ["api-docs", "llm-extracted"]
+                        tool_tags = (tool_def.get("tags", []) or []) + additional_tags + ["api-docs", "llm-extracted"]
 
                         tool = ToolCreate(
-                            name=tool_def['name'],
-                            url=tool_def['url'],
-                            description=tool_def.get('description', f"{tool_def['method']} {tool_def['path']}"),
+                            name=tool_def["name"],
+                            url=tool_def["url"],
+                            description=tool_def.get("description", f"{tool_def['method']} {tool_def['path']}"),
                             integration_type="REST",
-                            request_type=tool_def['method'],
-                            input_schema=tool_def.get('input_schema', {"type": "object", "properties": {}}),
-                            annotations=tool_def.get('annotations', {}),
+                            request_type=tool_def["method"],
+                            input_schema=tool_def.get("input_schema", {"type": "object", "properties": {}}),
+                            annotations=tool_def.get("annotations", {}),
                             gateway_id=gateway_id,
-                            tags=tool_tags
+                            tags=tool_tags,
                         )
                         tools.append(tool)
                     except Exception as e:
@@ -3270,8 +3267,8 @@ async def upload_api_documentation(
                     "extraction_method": "llm_direct",
                     "tools_extracted": len(llm_tool_defs),
                     "tools_created": len(tools),
-                    "source_format": doc_structure.get('source_format', 'unknown'),
-                    "content_length": doc_structure.get('content_length', 0)
+                    "source_format": doc_structure.get("source_format", "unknown"),
+                    "content_length": doc_structure.get("content_length", 0),
                 }
 
                 logger.info(f"Created {len(tools)} ToolCreate objects from LLM extraction")
@@ -3279,27 +3276,18 @@ async def upload_api_documentation(
             except Exception as e:
                 logger.warning(f"LLM extraction failed: {str(e)}, falling back to regex-based extraction")
                 # Fall back to regex-based extraction
-                tools = await api_doc_parser_service.generate_tools_from_documentation(
-                    doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags
-                )
+                tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
                 analysis = {"error": f"LLM extraction failed: {str(e)}", "fallback": "regex_extraction"}
 
         else:
             # Use regex-based extraction without AI
             logger.info("Using regex-based extraction (AI disabled)")
-            tools = await api_doc_parser_service.generate_tools_from_documentation(
-                doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags
-            )
+            tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
             analysis = {"extraction_method": "regex", "ai_enabled": False}
 
         # Check if any tools were found
         if not tools:
-            return {
-                "success": False,
-                "message": "No API endpoints could be extracted from the documentation",
-                "analysis": analysis,
-                "tool_count": 0
-            }
+            return {"success": False, "message": "No API endpoints could be extracted from the documentation", "analysis": analysis, "tool_count": 0}
 
         # Preview mode - return without creating tools
         if preview_only:
@@ -3352,16 +3340,18 @@ async def upload_api_documentation(
 
                 # Add auth info to response
                 auth_required = tool.auth is not None and tool.auth.auth_type is not None
-                created_tools.append({
-                    "id": db_tool.id,
-                    "name": db_tool.name,
-                    "url": db_tool.url,
-                    "description": db_tool.description,
-                    "tags": db_tool.tags or [],
-                    "auth_required": auth_required,
-                    "auth_type": tool.auth.auth_type if tool.auth else None,
-                    "auth_configured": False,
-                })
+                created_tools.append(
+                    {
+                        "id": db_tool.id,
+                        "name": db_tool.name,
+                        "url": db_tool.url,
+                        "description": db_tool.description,
+                        "tags": db_tool.tags or [],
+                        "auth_required": auth_required,
+                        "auth_type": tool.auth.auth_type if tool.auth else None,
+                        "auth_configured": False,
+                    }
+                )
                 logger.info(f"Created tool: {db_tool.name}")
 
             except Exception as e:
@@ -3459,7 +3449,9 @@ async def process_api_documentation_url(
 
         # Set base_url - infer from documentation URL if not provided
         if not base_url:
+            # Standard
             from urllib.parse import urlparse
+
             parsed_url = urlparse(url)
             base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
             logger.info(f"Inferred base URL from documentation URL: {base_url}")
@@ -3471,20 +3463,13 @@ async def process_api_documentation_url(
         if enhance_with_ai:
             logger.info("Extracting tools directly from documentation using LLM")
             try:
-                raw_content = doc_structure.get('raw_content', '')
+                raw_content = doc_structure.get("raw_content", "")
                 if not raw_content:
                     raise ValueError("No raw content extracted from documentation")
 
                 # Extract tools directly from raw content using LLM
-                source_info = {
-                    "url": url,
-                    "format": doc_structure.get('source_format', 'unknown')
-                }
-                llm_tool_defs = await openapi_agent.extract_tools_from_raw_content(
-                    raw_content=raw_content,
-                    base_url=base_url,
-                    source_info=source_info
-                )
+                source_info = {"url": url, "format": doc_structure.get("source_format", "unknown")}
+                llm_tool_defs = await openapi_agent.extract_tools_from_raw_content(raw_content=raw_content, base_url=base_url, source_info=source_info)
 
                 logger.info(f"LLM extracted {len(llm_tool_defs)} tool definitions")
 
@@ -3492,18 +3477,18 @@ async def process_api_documentation_url(
                 for tool_def in llm_tool_defs:
                     try:
                         # Merge additional tags
-                        tool_tags = (tool_def.get('tags', []) or []) + additional_tags + ["api-docs", "llm-extracted"]
+                        tool_tags = (tool_def.get("tags", []) or []) + additional_tags + ["api-docs", "llm-extracted"]
 
                         tool = ToolCreate(
-                            name=tool_def['name'],
-                            url=tool_def['url'],
-                            description=tool_def.get('description', f"{tool_def['method']} {tool_def['path']}"),
+                            name=tool_def["name"],
+                            url=tool_def["url"],
+                            description=tool_def.get("description", f"{tool_def['method']} {tool_def['path']}"),
                             integration_type="REST",
-                            request_type=tool_def['method'],
-                            input_schema=tool_def.get('input_schema', {"type": "object", "properties": {}}),
-                            annotations=tool_def.get('annotations', {}),
+                            request_type=tool_def["method"],
+                            input_schema=tool_def.get("input_schema", {"type": "object", "properties": {}}),
+                            annotations=tool_def.get("annotations", {}),
                             gateway_id=gateway_id,
-                            tags=tool_tags
+                            tags=tool_tags,
                         )
                         tools.append(tool)
                     except Exception as e:
@@ -3514,8 +3499,8 @@ async def process_api_documentation_url(
                     "tools_extracted": len(llm_tool_defs),
                     "tools_created": len(tools),
                     "source_url": url,
-                    "source_format": doc_structure.get('source_format', 'unknown'),
-                    "content_length": doc_structure.get('content_length', 0)
+                    "source_format": doc_structure.get("source_format", "unknown"),
+                    "content_length": doc_structure.get("content_length", 0),
                 }
 
                 logger.info(f"Created {len(tools)} ToolCreate objects from LLM extraction")
@@ -3523,27 +3508,18 @@ async def process_api_documentation_url(
             except Exception as e:
                 logger.warning(f"LLM extraction failed: {str(e)}, falling back to regex-based extraction")
                 # Fall back to regex-based extraction
-                tools = await api_doc_parser_service.generate_tools_from_documentation(
-                    doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags
-                )
+                tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
                 analysis = {"error": f"LLM extraction failed: {str(e)}", "fallback": "regex_extraction"}
 
         else:
             # Use regex-based extraction without AI
             logger.info("Using regex-based extraction (AI disabled)")
-            tools = await api_doc_parser_service.generate_tools_from_documentation(
-                doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags
-            )
+            tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
             analysis = {"extraction_method": "regex", "ai_enabled": False}
 
         # Check if any tools were found
         if not tools:
-            return {
-                "success": False,
-                "message": "No API endpoints could be extracted from the documentation",
-                "analysis": analysis,
-                "tool_count": 0
-            }
+            return {"success": False, "message": "No API endpoints could be extracted from the documentation", "analysis": analysis, "tool_count": 0}
 
         # Preview mode - return without creating tools
         if preview_only:
@@ -3596,16 +3572,18 @@ async def process_api_documentation_url(
 
                 # Add auth info to response
                 auth_required = tool.auth is not None and tool.auth.auth_type is not None
-                created_tools.append({
-                    "id": db_tool.id,
-                    "name": db_tool.name,
-                    "url": db_tool.url,
-                    "description": db_tool.description,
-                    "tags": db_tool.tags or [],
-                    "auth_required": auth_required,
-                    "auth_type": tool.auth.auth_type if tool.auth else None,
-                    "auth_configured": False,
-                })
+                created_tools.append(
+                    {
+                        "id": db_tool.id,
+                        "name": db_tool.name,
+                        "url": db_tool.url,
+                        "description": db_tool.description,
+                        "tags": db_tool.tags or [],
+                        "auth_required": auth_required,
+                        "auth_type": tool.auth.auth_type if tool.auth else None,
+                        "auth_configured": False,
+                    }
+                )
                 logger.info(f"Created tool: {db_tool.name}")
 
             except Exception as e:

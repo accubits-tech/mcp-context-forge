@@ -18,11 +18,9 @@ Tests:
 - test_metrics_disabled: Ensures disabling metrics hides the endpoint
 """
 
-import os
-import time
-import re
-import pytest
+# Third-Party
 from fastapi.testclient import TestClient
+import pytest
 
 
 @pytest.fixture(scope="function")
@@ -31,12 +29,17 @@ def client(monkeypatch):
     monkeypatch.setenv("ENABLE_METRICS", "true")
 
     # Clear the prometheus registry to avoid duplicates
+    # Third-Party
     from prometheus_client import REGISTRY
+
     REGISTRY._collector_to_names.clear()
     REGISTRY._names_to_collectors.clear()
 
     # Create a fresh app instance with metrics enabled
+    # Third-Party
     from fastapi import FastAPI
+
+    # First-Party
     from mcpgateway.services.metrics import setup_metrics
 
     app = FastAPI()
@@ -68,7 +71,7 @@ def test_metrics_counters_increment(client):
     """✅ Counters increment after a request."""
     # Initial scrape
     resp1 = client.get("/metrics/prometheus")
-    before_lines = len(resp1.text.splitlines())
+    len(resp1.text.splitlines())
 
     # Trigger another request
     client.get("/health")
@@ -87,12 +90,17 @@ def test_metrics_excluded_paths(monkeypatch):
     monkeypatch.setenv("METRICS_EXCLUDED_HANDLERS", ".*health.*")
 
     # Clear the prometheus registry to avoid duplicates
+    # Third-Party
     from prometheus_client import REGISTRY
+
     REGISTRY._collector_to_names.clear()
     REGISTRY._names_to_collectors.clear()
 
     # Create fresh app with exclusions
+    # Third-Party
     from fastapi import FastAPI
+
+    # First-Party
     from mcpgateway.services.metrics import setup_metrics
 
     app = FastAPI()
@@ -115,6 +123,7 @@ def test_metrics_excluded_paths(monkeypatch):
 # ----------------------------------------------------------------------
 # Helper function
 # ----------------------------------------------------------------------
+
 
 def _sum_metric_values(text: str, metric_name: str) -> float:
     """Aggregate all metric values for a given metric name."""

@@ -45,7 +45,6 @@ from httpx import AsyncClient
 import pytest
 import pytest_asyncio
 
-
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
@@ -333,10 +332,12 @@ class TestAdminToolAPIs:
 
     async def test_admin_tool_name_conflict(self, client: AsyncClient, mock_settings):
         """Test creating tool with duplicate name via admin UI for private, team, and public scopes."""
+        # Standard
         import uuid
 
         unique_name = f"duplicate_tool_{uuid.uuid4().hex[:8]}"
         # create a real team and use its ID
+        # First-Party
         from mcpgateway.services.team_management_service import TeamManagementService
 
         # Get db session from test fixture context
@@ -347,6 +348,7 @@ class TestAdminToolAPIs:
         else:
             # Fallback: import get_db and use it directly if available
             try:
+                # First-Party
                 from mcpgateway.db import get_db
 
                 db = next(get_db())

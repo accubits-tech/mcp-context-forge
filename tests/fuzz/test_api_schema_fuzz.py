@@ -21,7 +21,6 @@ class TestAPIEndpointFuzzing:
     @pytest.mark.skip("Schemathesis schema loading requires auth configuration - use manual testing for now")
     def test_api_schema_fuzzing_placeholder(self):
         """Placeholder for future schema-based fuzzing."""
-        pass
 
 
 class TestAPIFuzzingCustom:

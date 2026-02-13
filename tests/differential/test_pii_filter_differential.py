@@ -12,12 +12,17 @@ accurate and should be considered the reference implementation. These tests will
 re-enabled once the Python implementation is fixed to match Rust accuracy.
 """
 
+# Third-Party
 import pytest
-from plugins.pii_filter.pii_filter import PIIDetector as PythonPIIDetector, PIIFilterConfig
+
+# First-Party
+from plugins.pii_filter.pii_filter import PIIDetector as PythonPIIDetector
+from plugins.pii_filter.pii_filter import PIIFilterConfig
 
 # Try to import Rust implementation
 try:
-    from plugins.pii_filter.pii_filter_rust import RustPIIDetector, RUST_AVAILABLE
+    # First-Party
+    from plugins.pii_filter.pii_filter_rust import RUST_AVAILABLE, RustPIIDetector
 except ImportError:
     RUST_AVAILABLE = False
     RustPIIDetector = None
@@ -55,30 +60,24 @@ class TestDifferentialPIIDetection:
             text: Original text (for error messages)
         """
         # Check same PII types detected
-        assert set(python_result.keys()) == set(rust_result.keys()), \
-            f"Different PII types detected.\nText: {text}\nPython: {python_result.keys()}\nRust: {rust_result.keys()}"
+        assert set(python_result.keys()) == set(rust_result.keys()), f"Different PII types detected.\nText: {text}\nPython: {python_result.keys()}\nRust: {rust_result.keys()}"
 
         # Check each PII type has same detections
         for pii_type in python_result:
             python_detections = python_result[pii_type]
             rust_detections = rust_result[pii_type]
 
-            assert len(python_detections) == len(rust_detections), \
-                f"Different number of {pii_type} detections.\nText: {text}\nPython: {len(python_detections)}\nRust: {len(rust_detections)}"
+            assert len(python_detections) == len(rust_detections), f"Different number of {pii_type} detections.\nText: {text}\nPython: {len(python_detections)}\nRust: {len(rust_detections)}"
 
             # Sort by start position for comparison
             python_sorted = sorted(python_detections, key=lambda d: d["start"])
             rust_sorted = sorted(rust_detections, key=lambda d: d["start"])
 
             for i, (py_det, rust_det) in enumerate(zip(python_sorted, rust_sorted)):
-                assert py_det["value"] == rust_det["value"], \
-                    f"{pii_type} detection {i} value mismatch.\nText: {text}\nPython: {py_det['value']}\nRust: {rust_det['value']}"
-                assert py_det["start"] == rust_det["start"], \
-                    f"{pii_type} detection {i} start mismatch.\nPython: {py_det['start']}\nRust: {rust_det['start']}"
-                assert py_det["end"] == rust_det["end"], \
-                    f"{pii_type} detection {i} end mismatch.\nPython: {py_det['end']}\nRust: {rust_det['end']}"
-                assert py_det["mask_strategy"] == rust_det["mask_strategy"], \
-                    f"{pii_type} detection {i} strategy mismatch.\nPython: {py_det['mask_strategy']}\nRust: {rust_det['mask_strategy']}"
+                assert py_det["value"] == rust_det["value"], f"{pii_type} detection {i} value mismatch.\nText: {text}\nPython: {py_det['value']}\nRust: {rust_det['value']}"
+                assert py_det["start"] == rust_det["start"], f"{pii_type} detection {i} start mismatch.\nPython: {py_det['start']}\nRust: {rust_det['start']}"
+                assert py_det["end"] == rust_det["end"], f"{pii_type} detection {i} end mismatch.\nPython: {py_det['end']}\nRust: {rust_det['end']}"
+                assert py_det["mask_strategy"] == rust_det["mask_strategy"], f"{pii_type} detection {i} strategy mismatch.\nPython: {py_det['mask_strategy']}\nRust: {rust_det['mask_strategy']}"
 
     # SSN Tests
     def test_ssn_standard_format(self, python_detector, rust_detector):
@@ -224,8 +223,7 @@ class TestDifferentialPIIDetection:
         py_masked = python_detector.mask(text, py_detections)
         rust_masked = rust_detector.mask(text, rust_detections)
 
-        assert py_masked == rust_masked, \
-            f"Masking mismatch.\nText: {text}\nPython: {py_masked}\nRust: {rust_masked}"
+        assert py_masked == rust_masked, f"Masking mismatch.\nText: {text}\nPython: {py_masked}\nRust: {rust_masked}"
 
     def test_masking_email(self, python_detector, rust_detector):
         """Test email masking produces identical results."""
@@ -252,13 +250,7 @@ class TestDifferentialPIIDetection:
     # Nested Data Tests
     def test_nested_dict(self, python_detector, rust_detector):
         """Test nested dictionary processing."""
-        data = {
-            "user": {
-                "ssn": "123-45-6789",
-                "email": "john@example.com",
-                "name": "John Doe"
-            }
-        }
+        data = {"user": {"ssn": "123-45-6789", "email": "john@example.com", "name": "John Doe"}}
 
         py_modified, py_data, py_detections = python_detector.process_nested(data)
         rust_modified, rust_data, rust_detections = rust_detector.process_nested(data)
@@ -270,11 +262,7 @@ class TestDifferentialPIIDetection:
 
     def test_nested_list(self, python_detector, rust_detector):
         """Test nested list processing."""
-        data = [
-            "SSN: 123-45-6789",
-            "No PII here",
-            "Email: test@example.com"
-        ]
+        data = ["SSN: 123-45-6789", "No PII here", "Email: test@example.com"]
 
         py_modified, py_data, py_detections = python_detector.process_nested(data)
         rust_modified, rust_data, rust_detections = rust_detector.process_nested(data)
@@ -284,16 +272,7 @@ class TestDifferentialPIIDetection:
 
     def test_nested_mixed(self, python_detector, rust_detector):
         """Test mixed nested structure."""
-        data = {
-            "users": [
-                {"ssn": "123-45-6789", "name": "Alice"},
-                {"ssn": "987-65-4321", "name": "Bob"}
-            ],
-            "contact": {
-                "email": "admin@example.com",
-                "phone": "555-1234"
-            }
-        }
+        data = {"users": [{"ssn": "123-45-6789", "name": "Alice"}, {"ssn": "987-65-4321", "name": "Bob"}], "contact": {"email": "admin@example.com", "phone": "555-1234"}}
 
         py_modified, py_data, py_detections = python_detector.process_nested(data)
         rust_modified, rust_data, rust_detections = rust_detector.process_nested(data)
@@ -326,10 +305,7 @@ class TestDifferentialPIIDetection:
     # Configuration Tests
     def test_disabled_detection(self):
         """Test with detectors disabled."""
-        config = PIIFilterConfig(
-            detect_ssn=False,
-            detect_email=False
-        )
+        config = PIIFilterConfig(detect_ssn=False, detect_email=False)
         python_detector = PythonPIIDetector(config)
         rust_detector = RustPIIDetector(config)
 
@@ -340,9 +316,7 @@ class TestDifferentialPIIDetection:
 
     def test_whitelist(self):
         """Test whitelist patterns."""
-        config = PIIFilterConfig(
-            whitelist_patterns=[r"test@example\.com"]
-        )
+        config = PIIFilterConfig(whitelist_patterns=[r"test@example\.com"])
         python_detector = PythonPIIDetector(config)
         rust_detector = RustPIIDetector(config)
 
@@ -361,6 +335,7 @@ class TestDifferentialPIIDetection:
             text_parts.append(f"User {i}: SSN {i:03d}-45-6789, Email user{i}@example.com")
         text = "\n".join(text_parts)
 
+        # Standard
         import time
 
         # Python detection
@@ -396,13 +371,10 @@ class TestDifferentialPIIDetection:
         data = {"level1": {}}
         current = data["level1"]
         for i in range(100):
-            current[f"level{i+2}"] = {
-                "ssn": f"{i:03d}-45-6789",
-                "email": f"user{i}@example.com",
-                "data": {}
-            }
+            current[f"level{i+2}"] = {"ssn": f"{i:03d}-45-6789", "email": f"user{i}@example.com", "data": {}}
             current = current[f"level{i+2}"]["data"]
 
+        # Standard
         import time
 
         # Python processing

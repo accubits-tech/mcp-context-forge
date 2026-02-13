@@ -15,17 +15,16 @@ from __future__ import annotations
 
 # Standard
 import asyncio
+from collections.abc import Callable, Coroutine
 import contextlib
 import json
 import os
 import sys
+from typing import Any, cast
 
 # Third-Party
 import httpx
 import pytest
-
-from collections.abc import Callable, Coroutine
-from typing import cast, Any
 
 # First-Party
 from mcpgateway.translate import _build_fastapi, _PubSub, _run_stdio_to_sse, StdIOEndpoint
