@@ -260,11 +260,7 @@ async def test_validate_import_data_invalid_entity_structure(import_service):
     invalid_data = {
         "version": "2025-03-26",
         "exported_at": "2025-01-01T00:00:00Z",
-        "entities": {
-            "tools": [
-                "not_a_dict"  # Should be a dictionary
-            ]
-        },
+        "entities": {"tools": ["not_a_dict"]},  # Should be a dictionary
     }
 
     with pytest.raises(ImportValidationError) as excinfo:
@@ -288,7 +284,7 @@ async def test_rekey_auth_data_success(import_service):
         settings.auth_encryption_secret = "original-key"
         original_auth = {"type": "bearer", "token": "test_token"}
         entity_data = {"name": "test_tool", "auth_type": "bearer", "auth_value": encode_auth(original_auth)}
-        original_auth_value = entity_data["auth_value"]
+        entity_data["auth_value"]
 
         # Test re-keying with different secret
         new_secret = "new-encryption-key"
@@ -499,9 +495,7 @@ async def test_import_with_rekey_secret(import_service, mock_db):
 async def test_import_skipped_entity(import_service, mock_db, valid_import_data):
     """Test skipped entity handling."""
     # Setup selective entities that don't match any entities in the data
-    selected_entities = {
-        "tools": ["non_existent_tool"]  # This doesn't match "test_tool"
-    }
+    selected_entities = {"tools": ["non_existent_tool"]}  # This doesn't match "test_tool"
 
     # Execute selective import
     status = await import_service.import_configuration(db=mock_db, import_data=valid_import_data, selected_entities=selected_entities, imported_by="test_user")
@@ -594,16 +588,12 @@ async def test_calculate_total_entities(import_service):
     assert total == 3
 
     # Test with selection
-    selected_entities = {
-        "tools": ["tool1"]  # Only select one tool
-    }
+    selected_entities = {"tools": ["tool1"]}  # Only select one tool
     total = import_service._calculate_total_entities(entities, selected_entities)
     assert total == 1
 
     # Test with empty selection for entity type
-    selected_entities = {
-        "tools": []  # Empty list means include all tools
-    }
+    selected_entities = {"tools": []}  # Empty list means include all tools
     total = import_service._calculate_total_entities(entities, selected_entities)
     assert total == 2
 

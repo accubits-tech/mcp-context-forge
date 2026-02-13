@@ -227,10 +227,7 @@ async def test_call_tool_with_structured_content(monkeypatch):
     # Simulate structured content being present
     mock_structured = {"status": "ok", "data": {"value": 42}}
     mock_result.structured_content = mock_structured
-    mock_result.model_dump = lambda by_alias=True: {
-        "content": [{"type": "text", "text": '{"result": "success"}'}],
-        "structuredContent": mock_structured
-    }
+    mock_result.model_dump = lambda by_alias=True: {"content": [{"type": "text", "text": '{"result": "success"}'}], "structuredContent": mock_structured}
 
     @asynccontextmanager
     async def fake_get_db():

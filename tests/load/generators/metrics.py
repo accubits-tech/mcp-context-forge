@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 """Metrics generators for load testing."""
 
+# Standard
+from datetime import datetime
 import random
-from datetime import datetime, timedelta
 from typing import Generator, List
 
+# Third-Party
 from sqlalchemy import text
 
+# First-Party
 from mcpgateway.db import (
-    ToolMetric,
-    ResourceMetric,
-    PromptMetric,
-    ServerMetric,
     A2AAgentMetric,
+    PromptMetric,
+    ResourceMetric,
+    ServerMetric,
+    ToolMetric,
 )
 
+# Local
 from ..utils.distributions import exponential_decay_temporal
 from .base import BaseGenerator
 
@@ -68,12 +72,18 @@ class ToolMetricsGenerator(BaseGenerator):
                     timestamp=timestamp,
                     response_time=round(response_time, 2),
                     is_success=is_success,
-                    error_message=None if is_success else random.choice([
-                        "Connection timeout",
-                        "Rate limit exceeded",
-                        "Invalid request",
-                        "Gateway unavailable",
-                    ]),
+                    error_message=(
+                        None
+                        if is_success
+                        else random.choice(
+                            [
+                                "Connection timeout",
+                                "Rate limit exceeded",
+                                "Invalid request",
+                                "Gateway unavailable",
+                            ]
+                        )
+                    ),
                 )
 
 
@@ -125,11 +135,17 @@ class ResourceMetricsGenerator(BaseGenerator):
                     timestamp=timestamp,
                     response_time=round(response_time, 2),
                     is_success=is_success,
-                    error_message=None if is_success else random.choice([
-                        "Resource not found",
-                        "Access denied",
-                        "Resource unavailable",
-                    ]),
+                    error_message=(
+                        None
+                        if is_success
+                        else random.choice(
+                            [
+                                "Resource not found",
+                                "Access denied",
+                                "Resource unavailable",
+                            ]
+                        )
+                    ),
                 )
 
 
@@ -279,7 +295,7 @@ class A2AAgentMetricsGenerator(BaseGenerator):
             for timestamp in timestamps:
                 is_success = random.random() < 0.94
                 response_time = random.expovariate(1 / 1200) if is_success else random.expovariate(1 / 3000)
-                tokens_used = random.randint(50, 2000) if is_success else 0
+                random.randint(50, 2000) if is_success else 0
 
                 yield A2AAgentMetric(
                     a2a_agent_id=agent_id,
@@ -287,10 +303,16 @@ class A2AAgentMetricsGenerator(BaseGenerator):
                     response_time=round(response_time, 2),
                     is_success=is_success,
                     interaction_type=random.choice(["text_generation", "code_generation", "analysis", "translation"]),
-                    error_message=None if is_success else random.choice([
-                        "API rate limit exceeded",
-                        "Authentication failed",
-                        "Model unavailable",
-                        "Request timeout",
-                    ]),
+                    error_message=(
+                        None
+                        if is_success
+                        else random.choice(
+                            [
+                                "API rate limit exceeded",
+                                "Authentication failed",
+                                "Model unavailable",
+                                "Request timeout",
+                            ]
+                        )
+                    ),
                 )

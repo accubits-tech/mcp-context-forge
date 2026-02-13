@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """Tool generator for load testing."""
 
-import random
-import uuid
+# Standard
 from datetime import datetime
+import random
 from typing import Generator, List
+import uuid
 
+# First-Party
 from mcpgateway.db import Tool
 
+# Local
 from ..utils.distributions import exponential_decay_temporal, normal_distribution
 from .base import BaseGenerator
 
@@ -31,9 +34,10 @@ class ToolGenerator(BaseGenerator):
         Yields:
             Tool instances
         """
+        # Third-Party
         from sqlalchemy import text
 
-        gateway_count = self.get_scale_config("gateways", 100)
+        self.get_scale_config("gateways", 100)
         min_tools = self.get_scale_config("tools_per_gateway_min", 10)
         max_tools = self.get_scale_config("tools_per_gateway_max", 100)
         avg_tools = self.get_scale_config("tools_per_gateway_avg", 50)
@@ -61,11 +65,7 @@ class ToolGenerator(BaseGenerator):
         tool_idx = 0
 
         # Common tool names
-        tool_names = [
-            "list_files", "read_file", "write_file", "search", "query",
-            "analyze", "transform", "validate", "process", "execute",
-            "get_data", "set_data", "create", "update", "delete"
-        ]
+        tool_names = ["list_files", "read_file", "write_file", "search", "query", "analyze", "transform", "validate", "process", "execute", "get_data", "set_data", "create", "update", "delete"]
 
         for gateway_i, gateway_id in enumerate(gateway_ids):
             if gateway_i >= len(tools_per_gateway):
@@ -96,12 +96,7 @@ class ToolGenerator(BaseGenerator):
                     integration_type="MCP",
                     request_type="POST",
                     jsonpath_filter="$",
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "input": {"type": "string"}
-                        }
-                    },
+                    input_schema={"type": "object", "properties": {"input": {"type": "string"}}},
                     annotations={},
                     tags=[],
                     version=1,

@@ -14,11 +14,17 @@ patch or provide small stand-ins to exercise only the code paths
 under test.
 """
 
-import pytest
-import httpx
+# Standard
 from unittest.mock import patch
+
+# Third-Party
+import httpx
+import pytest
+
+# First-Party
 from mcpgateway.services.gateway_service import GatewayService
 from mcpgateway.utils.retry_manager import ResilientHttpClient
+
 
 @pytest.mark.asyncio
 async def test_streamablehttp_follows_3xx_redirects_and_validates():
@@ -63,6 +69,7 @@ async def test_streamablehttp_follows_3xx_redirects_and_validates():
         headers = {}
         ok = await svc._validate_gateway_url("http://example/start", headers, transport_type="STREAMABLEHTTP")
         assert ok is True
+
 
 @pytest.mark.asyncio
 async def test_200_with_location_is_not_treated_as_redirect():

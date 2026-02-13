@@ -1063,11 +1063,13 @@ class ToolService:
 
                 # Check auth type compatibility (if provided)
                 if auth_config.auth_type and auth_config.auth_type != tool.auth_type:
-                    skipped.append({
-                        "id": tool.id,
-                        "name": tool.name,
-                        "reason": f"auth_type_mismatch: tool needs {tool.auth_type}, provided {auth_config.auth_type}",
-                    })
+                    skipped.append(
+                        {
+                            "id": tool.id,
+                            "name": tool.name,
+                            "reason": f"auth_type_mismatch: tool needs {tool.auth_type}, provided {auth_config.auth_type}",
+                        }
+                    )
                     continue
 
                 if not dry_run:

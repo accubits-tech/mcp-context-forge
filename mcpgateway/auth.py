@@ -185,6 +185,8 @@ async def get_current_user(
 
     logger.debug("Attempting authentication with token: %s...", credentials.credentials[:20])
     email = None
+    is_keycloak = False
+    payload = {}
 
     try:
         # Try JWT token first using the centralized verify_jwt_token function
@@ -193,10 +195,17 @@ async def get_current_user(
 
         logger.debug("JWT token validated successfully")
         # Extract user identifier (support both new and legacy token formats)
-        email = payload.get("sub")
-        if email is None:
-            # Try legacy format
-            email = payload.get("email")
+        is_keycloak = payload.get("_auth_source") == "keycloak"
+        if is_keycloak:
+            # Keycloak tokens: extract email from the configured claim
+            email = payload.get(settings.sso_keycloak_email_claim)
+            if email is None:
+                email = payload.get("sub")
+        else:
+            email = payload.get("sub")
+            if email is None:
+                # Try legacy format
+                email = payload.get("email")
 
         if email is None:
             logger.debug("No email/sub found in JWT payload")
@@ -324,6 +333,21 @@ async def get_current_user(
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
             )
+        elif is_keycloak and getattr(settings, "sso_auto_create_users", False):
+            # Auto-create user from Keycloak JWT claims
+            # Standard
+            import secrets  # pylint: disable=import-outside-toplevel
+
+            random_password = secrets.token_urlsafe(32)  # nosec B106 - Not used for login
+            full_name = payload.get("name") or payload.get("preferred_username") or email
+            logger.info(f"Auto-creating user from Keycloak JWT: {email}")
+            user = await auth_service.create_user(
+                email=email,
+                password=random_password,
+                full_name=full_name,
+                is_admin=False,
+                auth_provider="keycloak",
+            )
         else:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -337,5 +361,16 @@ async def get_current_user(
             detail="Account disabled",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Sync Keycloak JWT claims to gateway roles/teams on every login
+    if is_keycloak and payload:
+        try:
+            # First-Party
+            from mcpgateway.services.keycloak_role_mapping_service import KeycloakRoleMappingService  # pylint: disable=import-outside-toplevel
+
+            mapping_service = KeycloakRoleMappingService(db)
+            await mapping_service.sync_roles_from_jwt(user, payload)
+        except Exception as e:
+            logger.warning(f"Keycloak role mapping failed for {email}: {e}")
 
     return user

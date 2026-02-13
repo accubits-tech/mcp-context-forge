@@ -7,6 +7,9 @@ Authors: Mihai Criveti
 Unit tests for Output Length Guard Plugin.
 """
 
+# Third-Party
+import pytest
+
 # First-Party
 from mcpgateway.plugins.framework import (
     GlobalContext,
@@ -15,12 +18,9 @@ from mcpgateway.plugins.framework import (
     ToolHookType,
     ToolPostInvokePayload,
 )
-
 from plugins.output_length_guard.output_length_guard import (
     OutputLengthGuardPlugin,
 )
-
-import pytest
 
 
 def _mk_plugin(config: dict | None = None) -> OutputLengthGuardPlugin:

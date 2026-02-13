@@ -12,8 +12,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Third-Party
-import pytest
 from fastapi import HTTPException, status
+import pytest
 from sqlalchemy.orm import Session
 
 # First-Party
@@ -40,6 +40,7 @@ from mcpgateway.schemas import (
 )
 from mcpgateway.services.token_catalog_service import TokenScope
 
+# Local
 # Test utilities
 from tests.utils.rbac_mocks import patch_rbac_decorators, restore_rbac_decorators
 
@@ -602,7 +603,7 @@ class TestEdgeCases:
     async def test_admin_list_all_tokens_no_email(self, mock_db, mock_admin_user):
         """Test admin listing all tokens without email filter."""
         with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
-            mock_service = mock_service_class.return_value
+            mock_service_class.return_value
 
             response = await list_all_tokens(user_email=None, include_inactive=False, limit=100, offset=0, current_user=mock_admin_user, db=mock_db)
 

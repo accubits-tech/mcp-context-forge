@@ -551,7 +551,6 @@ class TestGatewayService:
         assert test_db.add.called
         assert test_db.commit.called
 
-
     @pytest.mark.asyncio
     async def test_register_gateway_same_url_different_name_succeeds(self, gateway_service, test_db, monkeypatch):
         """Test that registering gateways with same URL but different names succeeds."""
@@ -961,6 +960,7 @@ class TestGatewayService:
                 await gateway_service.update_gateway(test_db, 1, gateway_update)
             except Exception as e:
                 print(f"Exception during update_gateway: {e}")
+                # Standard
                 import traceback
 
                 traceback.print_exc()

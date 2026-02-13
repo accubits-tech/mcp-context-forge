@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 # Third-Party
-import pytest
 from fastapi import HTTPException, status
+import pytest
 from sqlalchemy.orm import Session
 
 
@@ -43,6 +43,11 @@ def mock_require_admin_permission():
 with patch("mcpgateway.middleware.rbac.require_permission", mock_require_permission_decorator):
     with patch("mcpgateway.middleware.rbac.require_admin_permission", mock_require_admin_permission):
         # Now import mcpgateway modules with mocked decorators
+        # Standard
+        # Force reload teams module to apply mocked decorators
+        import importlib
+
+        # First-Party
         from mcpgateway.db import EmailTeam, EmailTeamMember
         from mcpgateway.routers import teams
         from mcpgateway.schemas import (
@@ -52,9 +57,6 @@ with patch("mcpgateway.middleware.rbac.require_permission", mock_require_permiss
             TeamUpdateRequest,
         )
         from mcpgateway.services.team_management_service import TeamManagementService
-
-        # Force reload teams module to apply mocked decorators
-        import importlib
 
         importlib.reload(teams)
 

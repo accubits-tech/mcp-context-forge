@@ -210,6 +210,11 @@ class Settings(BaseSettings):
     sso_keycloak_email_claim: str = Field(default="email", description="JWT claim for email")
     sso_keycloak_groups_claim: str = Field(default="groups", description="JWT claim for groups/roles")
 
+    # External JWT validation (accept Keycloak JWTs directly on API endpoints)
+    external_jwt_validation_enabled: bool = Field(default=False, description="Accept external (Keycloak) JWTs directly on API endpoints")
+    external_jwt_jwks_cache_ttl: int = Field(default=300, description="JWKS cache TTL in seconds")
+    external_jwt_required_audience: Optional[str] = Field(default=None, description="Required audience for external JWTs. None = skip audience check")
+
     sso_entra_enabled: bool = Field(default=False, description="Enable Microsoft Entra ID OIDC authentication")
     sso_entra_client_id: Optional[str] = Field(default=None, description="Microsoft Entra ID client ID")
     sso_entra_client_secret: Optional[SecretStr] = Field(default=None, description="Microsoft Entra ID client secret")

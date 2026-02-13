@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
-import pytest
+# Third-Party
 from pydantic import ValidationError
+import pytest
+
+# First-Party
 from mcpgateway.config import Settings
 
 

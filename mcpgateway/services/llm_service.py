@@ -109,9 +109,7 @@ class LLMService:
             LLMAPIError: If the API request fails.
         """
         if not self.is_configured():
-            raise LLMConfigurationError(
-                "LLM service is not configured. Set LLM_API_KEY and LLM_API_BASE_URL environment variables."
-            )
+            raise LLMConfigurationError("LLM service is not configured. Set LLM_API_KEY and LLM_API_BASE_URL environment variables.")
 
         url = f"{self.base_url}/chat/completions"
         headers = {

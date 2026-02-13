@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 # File: tests/unit/mcpgateway/test_validate_env.py
+# Standard
 import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
 
+# Third-Party
 import pytest
 
+# First-Party
 # Import the validate_env script directly
 from mcpgateway.scripts import validate_env as ve
 
@@ -43,6 +46,7 @@ def test_validate_env_success_direct(valid_env: Path) -> None:
     Test a valid .env. Warnings will be printed but do NOT fail the test.
     """
     # Clear any cached settings to ensure test isolation
+    # First-Party
     from mcpgateway.config import get_settings
 
     get_settings.cache_clear()
@@ -63,6 +67,7 @@ def test_validate_env_failure_direct(invalid_env: Path) -> None:
     Test an invalid .env. Should fail due to ValidationError.
     """
     # Clear any cached settings to ensure test isolation
+    # First-Party
     from mcpgateway.config import get_settings
 
     get_settings.cache_clear()

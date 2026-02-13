@@ -9,14 +9,17 @@ This module tests all team management endpoints including CRUD operations,
 member management, invitations, and join requests.
 """
 
+# Standard
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+# Third-Party
 from fastapi import HTTPException, status
 import pytest
 from sqlalchemy.orm import Session
 
+# First-Party
 from mcpgateway.db import EmailTeam, EmailTeamInvitation, EmailTeamJoinRequest, EmailTeamMember
 from mcpgateway.schemas import (
     EmailUserResponse,
@@ -29,6 +32,7 @@ from mcpgateway.schemas import (
 from mcpgateway.services.team_invitation_service import TeamInvitationService
 from mcpgateway.services.team_management_service import TeamManagementService
 
+# Local
 from tests.utils.rbac_mocks import patch_rbac_decorators, restore_rbac_decorators
 
 
@@ -172,6 +176,7 @@ class TestTeamsRouter:
             MockService.return_value = mock_service
 
             # Import the function to test
+            # First-Party
             from mcpgateway.routers.teams import create_team
 
             result = await create_team(request, current_user_ctx=mock_user_context)
@@ -198,6 +203,7 @@ class TestTeamsRouter:
             mock_service.create_team = AsyncMock(side_effect=ValueError("Service validation error"))
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import create_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -216,6 +222,7 @@ class TestTeamsRouter:
             mock_service.create_team = AsyncMock(side_effect=Exception("Database error"))
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import create_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -235,6 +242,7 @@ class TestTeamsRouter:
             mock_service.list_teams = AsyncMock(return_value=(teams, total))
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import list_teams
 
             result = await list_teams(skip=0, limit=50, current_user_ctx=mock_admin_context)
@@ -254,6 +262,7 @@ class TestTeamsRouter:
             mock_service.get_user_teams = AsyncMock(return_value=user_teams)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import list_teams
 
             result = await list_teams(skip=0, limit=50, current_user_ctx=mock_user_context)
@@ -289,6 +298,7 @@ class TestTeamsRouter:
             mock_service.get_user_teams = AsyncMock(return_value=teams)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import list_teams
 
             # Test pagination - skip 5, limit 3
@@ -307,6 +317,7 @@ class TestTeamsRouter:
             mock_service.get_user_teams = AsyncMock(side_effect=Exception("Database error"))
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import list_teams
 
             with pytest.raises(HTTPException) as exc_info:
@@ -327,6 +338,7 @@ class TestTeamsRouter:
             MockService.return_value = mock_service
 
             # Mock the entire decorated function to bypass RBAC
+            # First-Party
             from mcpgateway.routers.teams import TeamResponse
 
             async def mock_get_team(team_id, current_user, db):
@@ -370,6 +382,7 @@ class TestTeamsRouter:
             mock_service.get_team_by_id = AsyncMock(return_value=None)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import get_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -389,6 +402,7 @@ class TestTeamsRouter:
             mock_service.get_user_role_in_team = AsyncMock(return_value=None)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import get_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -409,6 +423,7 @@ class TestTeamsRouter:
             mock_service.update_team = AsyncMock(return_value=mock_team)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import update_team
 
             result = await update_team(team_id, request, current_user=mock_current_user, db=mock_db)
@@ -427,6 +442,7 @@ class TestTeamsRouter:
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import update_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -447,6 +463,7 @@ class TestTeamsRouter:
             mock_service.update_team = AsyncMock(return_value=None)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import update_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -466,6 +483,7 @@ class TestTeamsRouter:
             mock_service.delete_team = AsyncMock(return_value=True)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import delete_team
 
             result = await delete_team(team_id, current_user=mock_current_user, db=mock_db)
@@ -483,6 +501,7 @@ class TestTeamsRouter:
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import delete_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -502,6 +521,7 @@ class TestTeamsRouter:
             mock_service.delete_team = AsyncMock(return_value=False)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import delete_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -526,6 +546,7 @@ class TestTeamsRouter:
             mock_service.get_team_members = AsyncMock(return_value=members)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import list_team_members
 
             result = await list_team_members(team_id, current_user=mock_current_user, db=mock_db)
@@ -544,6 +565,7 @@ class TestTeamsRouter:
             mock_service.get_user_role_in_team = AsyncMock(return_value=None)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import list_team_members
 
             with pytest.raises(HTTPException) as exc_info:
@@ -568,6 +590,7 @@ class TestTeamsRouter:
             mock_service.update_member_role = AsyncMock(return_value=mock_team_member)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import update_team_member
 
             result = await update_team_member(team_id, user_email, request, mock_current_user, mock_db)
@@ -588,6 +611,7 @@ class TestTeamsRouter:
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import update_team_member
 
             with pytest.raises(HTTPException) as exc_info:
@@ -610,6 +634,7 @@ class TestTeamsRouter:
             mock_service.update_member_role = AsyncMock(return_value=None)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import update_team_member
 
             with pytest.raises(HTTPException) as exc_info:
@@ -630,6 +655,7 @@ class TestTeamsRouter:
             mock_service.remove_member_from_team = AsyncMock(return_value=True)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import remove_team_member
 
             result = await remove_team_member(team_id, user_email, current_user=mock_current_user, db=mock_db)
@@ -649,6 +675,7 @@ class TestTeamsRouter:
             mock_service.remove_member_from_team = AsyncMock(return_value=True)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import remove_team_member
 
             result = await remove_team_member(team_id, user_email, current_user=mock_current_user, db=mock_db)
@@ -666,6 +693,7 @@ class TestTeamsRouter:
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import remove_team_member
 
             with pytest.raises(HTTPException) as exc_info:
@@ -694,6 +722,7 @@ class TestTeamsRouter:
             mock_invite_service.create_invitation = AsyncMock(return_value=mock_invitation)
             MockInviteService.return_value = mock_invite_service
 
+            # First-Party
             from mcpgateway.routers.teams import invite_team_member
 
             result = await invite_team_member(team_id, request, current_user=mock_current_user, db=mock_db)
@@ -714,6 +743,7 @@ class TestTeamsRouter:
             mock_team_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockTeamService.return_value = mock_team_service
 
+            # First-Party
             from mcpgateway.routers.teams import invite_team_member
 
             with pytest.raises(HTTPException) as exc_info:
@@ -738,6 +768,7 @@ class TestTeamsRouter:
             mock_invite_service.get_team_invitations = AsyncMock(return_value=invitations)
             MockInviteService.return_value = mock_invite_service
 
+            # First-Party
             from mcpgateway.routers.teams import list_team_invitations
 
             result = await list_team_invitations(team_id, current_user=mock_current_user, db=mock_db)
@@ -756,6 +787,7 @@ class TestTeamsRouter:
             mock_invite_service.accept_invitation = AsyncMock(return_value=mock_team_member)
             MockInviteService.return_value = mock_invite_service
 
+            # First-Party
             from mcpgateway.routers.teams import accept_team_invitation
 
             result = await accept_team_invitation(token, current_user=mock_current_user, db=mock_db)
@@ -774,6 +806,7 @@ class TestTeamsRouter:
             mock_invite_service.accept_invitation = AsyncMock(return_value=None)
             MockInviteService.return_value = mock_invite_service
 
+            # First-Party
             from mcpgateway.routers.teams import accept_team_invitation
 
             with pytest.raises(HTTPException) as exc_info:
@@ -803,6 +836,7 @@ class TestTeamsRouter:
             mock_invite_service.revoke_invitation = AsyncMock(return_value=True)
             MockInviteService.return_value = mock_invite_service
 
+            # First-Party
             from mcpgateway.routers.teams import cancel_team_invitation
 
             result = await cancel_team_invitation(invitation_id, current_user=mock_current_user, db=mock_db)
@@ -823,6 +857,7 @@ class TestTeamsRouter:
             mock_service.discover_public_teams = AsyncMock(return_value=public_teams)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import discover_public_teams
 
             result = await discover_public_teams(skip=0, limit=50, current_user_ctx=mock_user_context)
@@ -844,6 +879,7 @@ class TestTeamsRouter:
             mock_service.create_join_request = AsyncMock(return_value=mock_join_request)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import request_to_join_team
 
             result = await request_to_join_team(team_id, join_request, current_user=mock_current_user, db=mock_db)
@@ -863,6 +899,7 @@ class TestTeamsRouter:
             mock_service.get_team_by_id = AsyncMock(return_value=mock_team)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import request_to_join_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -883,6 +920,7 @@ class TestTeamsRouter:
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")  # Already a member
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import request_to_join_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -903,6 +941,7 @@ class TestTeamsRouter:
             mock_service.remove_member_from_team = AsyncMock(return_value=True)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import leave_team
 
             result = await leave_team(team_id, current_user=mock_current_user, db=mock_db)
@@ -921,6 +960,7 @@ class TestTeamsRouter:
             mock_service.get_team_by_id = AsyncMock(return_value=personal_team)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import leave_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -942,6 +982,7 @@ class TestTeamsRouter:
             mock_service.list_join_requests = AsyncMock(return_value=join_requests)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import list_team_join_requests
 
             result = await list_team_join_requests(team_id, current_user=mock_current_user, db=mock_db)
@@ -963,6 +1004,7 @@ class TestTeamsRouter:
             mock_service.approve_join_request = AsyncMock(return_value=mock_team_member)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import approve_join_request
 
             result = await approve_join_request(team_id, request_id, current_user=mock_current_user, db=mock_db)
@@ -983,6 +1025,7 @@ class TestTeamsRouter:
             mock_service.reject_join_request = AsyncMock(return_value=True)
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import reject_join_request
 
             result = await reject_join_request(team_id, request_id, current_user=mock_current_user, db=mock_db)
@@ -1001,6 +1044,7 @@ class TestTeamsRouter:
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import reject_join_request
 
             with pytest.raises(HTTPException) as exc_info:
@@ -1023,6 +1067,7 @@ class TestTeamsRouter:
             mock_service.get_team_by_id = AsyncMock(side_effect=Exception("Database connection lost"))
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import get_team
 
             with pytest.raises(HTTPException) as exc_info:
@@ -1050,6 +1095,7 @@ class TestTeamsRouter:
             mock_invite_service.create_invitation = AsyncMock(side_effect=ValueError("Invalid email format"))
             MockInviteService.return_value = mock_invite_service
 
+            # First-Party
             from mcpgateway.routers.teams import invite_team_member
 
             with pytest.raises(HTTPException) as exc_info:
@@ -1072,6 +1118,7 @@ class TestTeamsRouter:
             mock_service.update_member_role = AsyncMock(side_effect=ValueError("Invalid role"))
             MockService.return_value = mock_service
 
+            # First-Party
             from mcpgateway.routers.teams import update_team_member
 
             with pytest.raises(HTTPException) as exc_info:

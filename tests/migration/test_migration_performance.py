@@ -46,9 +46,9 @@ class TestMigrationPerformance:
         logger.info(f"📊 Data size: {sum(len(entities) for entities in sample_test_data.values())} records")
 
         # Measure baseline performance with standard test data
-        start_time = time.time()
+        time.time()
         result = migration_runner.test_forward_migration("0.6.0", "latest", sample_test_data)
-        end_time = time.time()
+        time.time()
 
         # Validate migration succeeded
         assert result.success, f"Baseline migration failed: {result.error_message}"
@@ -101,9 +101,9 @@ class TestMigrationPerformance:
         logger.info(f"📊 Scaled dataset: {total_records} records ({scale_factor}x multiplier)")
 
         # Run migration with scaled data
-        start_time = time.time()
+        time.time()
         result = migration_runner.test_forward_migration("0.6.0", "latest", scaled_data)
-        end_time = time.time()
+        time.time()
 
         # Validate migration succeeded
         assert result.success, f"Scalability test failed at {scale_factor}x: {result.error_message}"
@@ -144,9 +144,9 @@ class TestMigrationPerformance:
             logger.info(f"   {entity_type}: {len(entities)} records")
 
         # Run migration with timing
-        start_time = time.time()
+        time.time()
         result = migration_runner.test_forward_migration("0.6.0", "latest", large_test_data)
-        end_time = time.time()
+        time.time()
 
         # Validate migration succeeded
         assert result.success, f"Large dataset migration failed: {result.error_message}"

@@ -11,12 +11,17 @@ These tests validate the complete DCR flow with PKCE, including:
 Tests will FAIL until implementation is complete (TDD Red Phase).
 """
 
-import pytest
+# Standard
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone, timedelta
-from mcpgateway.db import RegisteredOAuthClient, OAuthState, Gateway
-from mcpgateway.services.oauth_manager import OAuthManager
+
+# Third-Party
+import pytest
+
+# First-Party
+from mcpgateway.db import Gateway, OAuthState, RegisteredOAuthClient
 from mcpgateway.services.dcr_service import DcrService
+from mcpgateway.services.oauth_manager import OAuthManager
 
 
 @pytest.mark.integration
@@ -26,10 +31,13 @@ class TestPKCEFlowIntegration:
     @pytest.mark.asyncio
     async def test_complete_pkce_flow_with_state_storage(self, test_db):
         """Test complete PKCE flow from initiation to token exchange."""
-        from mcpgateway.services.token_storage_service import TokenStorageService
-        from mcpgateway.db import OAuthState
+        # Standard
         from datetime import datetime, timedelta, timezone
         from unittest.mock import patch
+
+        # First-Party
+        from mcpgateway.db import OAuthState
+        from mcpgateway.services.token_storage_service import TokenStorageService
 
         # Mock get_db() to return the test_db session
         def mock_get_db():
@@ -254,6 +262,7 @@ class TestPKCESecurityIntegration:
     @pytest.mark.asyncio
     async def test_state_cannot_be_reused(self, test_db):
         """Test that state can only be used once (replay attack prevention)."""
+        # First-Party
         from mcpgateway.services.token_storage_service import TokenStorageService
 
         token_storage = TokenStorageService(test_db)
@@ -308,6 +317,7 @@ class TestPKCESecurityIntegration:
     @pytest.mark.asyncio
     async def test_code_verifier_matches_challenge(self, test_db):
         """Test that code_verifier correctly validates against code_challenge."""
+        # Standard
         import base64
         import hashlib
 
@@ -350,6 +360,7 @@ class TestDCRErrorHandling:
             mock_response.json = AsyncMock(return_value=mock_metadata)
             mock_get.return_value.__aenter__.return_value = mock_response
 
+            # First-Party
             from mcpgateway.services.dcr_service import DcrError
 
             with pytest.raises(DcrError, match="does not support Dynamic Client Registration"):
@@ -360,6 +371,7 @@ class TestDCRErrorHandling:
     @pytest.mark.asyncio
     async def test_dcr_handles_invalid_issuer(self, test_db):
         """Test validation of issuer in metadata."""
+        # First-Party
         from mcpgateway.services import dcr_service as dcr_module
 
         # Clear metadata cache to ensure test isolation
@@ -392,6 +404,7 @@ class TestDCRErrorHandling:
 
             mock_session_class.return_value = mock_session
 
+            # First-Party
             from mcpgateway.services.dcr_service import DcrError
 
             with pytest.raises(DcrError, match="issuer mismatch"):

@@ -8,8 +8,8 @@ Tests for tool service implementation.
 """
 
 # Standard
-import base64
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 import logging
 from unittest.mock import ANY, AsyncMock, call, MagicMock, Mock, patch
@@ -149,6 +149,7 @@ def mock_tool(mock_gateway):
     return tool
 
 
+# First-Party
 from mcpgateway.services.tool_service import ToolNameConflictError
 
 
@@ -1649,7 +1650,7 @@ class TestToolService:
         mock_gateway.enabled = True
         mock_gateway.reachable = True
         mock_gateway.id = mock_tool.gateway_id
-        mock_gateway.slug="test-gateway"
+        mock_gateway.slug = "test-gateway"
         mock_gateway.capabilities = {"tools": {"listChanged": True}}
         mock_gateway.transport = "SSE"
         mock_gateway.passthrough_headers = []
@@ -2263,8 +2264,8 @@ class TestToolService:
     async def test_invoke_tool_with_plugin_post_invoke_success(self, tool_service, mock_tool, test_db):
         """Test invoking tool with successful plugin post-invoke hook."""
         # First-Party
-        from mcpgateway.plugins.framework.models import PluginResult
         from mcpgateway.plugins.framework import ToolHookType
+        from mcpgateway.plugins.framework.models import PluginResult
 
         # Configure tool as REST
         mock_tool.integration_type = "REST"
@@ -2393,8 +2394,8 @@ class TestToolService:
         mock_post_result.modified_payload = mock_modified_payload
 
         # First-Party
-        from mcpgateway.plugins.framework.models import PluginResult
         from mcpgateway.plugins.framework import ToolHookType
+        from mcpgateway.plugins.framework.models import PluginResult
 
         tool_service._plugin_manager = Mock()
 
@@ -2439,8 +2440,8 @@ class TestToolService:
 
         # Mock plugin manager with invoke_hook that raises error on POST_INVOKE
         # First-Party
-        from mcpgateway.plugins.framework.models import PluginResult
         from mcpgateway.plugins.framework import ToolHookType
+        from mcpgateway.plugins.framework.models import PluginResult
 
         tool_service._plugin_manager = Mock()
 

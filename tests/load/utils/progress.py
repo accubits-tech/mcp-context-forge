@@ -1,28 +1,30 @@
 # -*- coding: utf-8 -*-
 """Progress tracking utilities with rich display."""
 
+# Standard
+from collections import deque
+from contextlib import contextmanager
 import sys
 import time
-from contextlib import contextmanager
 from typing import Dict, Optional
 
+# Third-Party
 from rich.console import Console, RenderableType
+from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
     Progress,
     SpinnerColumn,
-    BarColumn,
-    TextColumn,
-    TimeRemainingColumn,
-    TimeElapsedColumn,
-    MofNCompleteColumn,
     TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
 )
 from rich.table import Table
-from rich.layout import Layout
 from rich.text import Text
-from collections import deque
 
 
 class ProgressTracker:
@@ -58,11 +60,7 @@ class ProgressTracker:
             TimeRemainingColumn(),
             TextColumn("[cyan]{task.fields[rate]}/s"),
         )
-        self.task_id = self.progress.add_task(
-            self.desc,
-            total=self.total,
-            rate="0"
-        )
+        self.task_id = self.progress.add_task(self.desc, total=self.total, rate="0")
         self.progress.start()
         return self
 
@@ -81,12 +79,7 @@ class ProgressTracker:
         if self.progress and self.task_id is not None:
             self.current += n
             rate = self.get_rate()
-            self.progress.update(
-                self.task_id,
-                advance=n,
-                rate=f"{rate:,.0f}",
-                **kwargs
-            )
+            self.progress.update(self.task_id, advance=n, rate=f"{rate:,.0f}", **kwargs)
 
     def get_elapsed_time(self) -> float:
         """Get elapsed time in seconds.
@@ -153,12 +146,7 @@ class MultiProgressTracker:
             total: Total items
             desc: Description
         """
-        task_id = self.progress.add_task(
-            desc,
-            total=total,
-            rate="0",
-            visible=False
-        )
+        task_id = self.progress.add_task(desc, total=total, rate="0", visible=False)
         self.tasks[name] = task_id
         self.stats[name] = {
             "total": total,
@@ -204,11 +192,7 @@ class MultiProgressTracker:
             else:
                 rate = 0.0
 
-            self.progress.update(
-                task_id,
-                advance=n,
-                rate=f"{rate:,.0f}"
-            )
+            self.progress.update(task_id, advance=n, rate=f"{rate:,.0f}")
 
     def complete_task(self, name: str):
         """Mark a task as complete.
@@ -256,7 +240,9 @@ class MultiProgressTracker:
             return Text("No log messages yet...", style="dim italic")
 
         # Create a group of text objects to render markup properly
+        # Third-Party
         from rich.console import Group
+
         log_lines = []
         for message, style in self.log_buffer:
             # Use console.render_str to properly parse markup
@@ -315,13 +301,10 @@ class MultiProgressTracker:
             current = task_info.get("completed", 0)
 
             if current >= total and total > 0:
-                status = "completed"
                 completed.append((name, task_info))
             elif current > 0:
-                status = "in_progress"
                 in_progress.append((name, task_info))
             else:
-                status = "pending"
                 pending.append((name, task_info))
 
         # Add summary row with counts
@@ -344,12 +327,7 @@ class MultiProgressTracker:
             total = info.get("total", 0)
             pct = (current / total * 100) if total > 0 else 0
 
-            table.add_row(
-                name,
-                "[yellow]⚡ Active[/yellow]",
-                f"[yellow]{current:,}/{total:,} ({pct:.0f}%)[/yellow]",
-                f"[cyan]{rate:,.0f}/s[/cyan]"
-            )
+            table.add_row(name, "[yellow]⚡ Active[/yellow]", f"[yellow]{current:,}/{total:,} ({pct:.0f}%)[/yellow]", f"[cyan]{rate:,.0f}/s[/cyan]")
 
         # Show completed generators
         for name, info in completed:
@@ -357,23 +335,13 @@ class MultiProgressTracker:
             total = info.get("total", 0)
             current = info.get("completed", 0)
 
-            table.add_row(
-                name,
-                "[green]✓ Done[/green]",
-                f"[green]{current:,}/{total:,} (100%)[/green]",
-                f"[dim]{rate:,.0f}/s[/dim]"
-            )
+            table.add_row(name, "[green]✓ Done[/green]", f"[green]{current:,}/{total:,} (100%)[/green]", f"[dim]{rate:,.0f}/s[/dim]")
 
         # Show pending generators
         for name, info in pending:
             total = info.get("total", 0)
 
-            table.add_row(
-                name,
-                "[dim]⏳ Pending[/dim]",
-                f"[dim]0/{total:,} (0%)[/dim]",
-                "[dim]—[/dim]"
-            )
+            table.add_row(name, "[dim]⏳ Pending[/dim]", f"[dim]0/{total:,} (0%)[/dim]", "[dim]—[/dim]")
 
         return table
 
@@ -618,13 +586,7 @@ class SimpleProgressTracker:
                 duration = data.get("duration", 0)
                 rate = generated / duration if duration > 0 else 0
 
-                table.add_row(
-                    name,
-                    f"{generated:,}",
-                    f"{inserted:,}",
-                    f"{duration:.2f}s",
-                    f"{rate:,.0f}/s"
-                )
+                table.add_row(name, f"{generated:,}", f"{inserted:,}", f"{duration:.2f}s", f"{rate:,.0f}/s")
 
         self.console.print(table)
 
@@ -639,10 +601,7 @@ class SimpleProgressTracker:
         rate = total_records / duration if duration > 0 else 0
 
         panel = Panel(
-            f"[bold]Profile:[/bold] {profile}\n"
-            f"[bold]Total Records:[/bold] {total_records:,}\n"
-            f"[bold]Duration:[/bold] {duration:.2f}s\n"
-            f"[bold]Rate:[/bold] {rate:,.2f} records/second",
+            f"[bold]Profile:[/bold] {profile}\n" f"[bold]Total Records:[/bold] {total_records:,}\n" f"[bold]Duration:[/bold] {duration:.2f}s\n" f"[bold]Rate:[/bold] {rate:,.2f} records/second",
             title="[bold green]Generation Complete[/bold green]",
             border_style="green",
         )

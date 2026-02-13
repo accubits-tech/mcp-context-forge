@@ -27,9 +27,11 @@ from __future__ import annotations
 # Standard
 import base64
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 # Third-Party
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBasicCredentials
 from fastapi.testclient import TestClient
@@ -363,3 +365,130 @@ async def test_integration_docs_endpoint_both_auth_methods(test_client, monkeypa
     token = create_test_jwt_token()
     response2 = test_client.get("/docs", headers={"Authorization": f"Bearer {token}"})
     assert response2.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# External (Keycloak) JWT validation
+# ---------------------------------------------------------------------------
+
+
+def test_get_keycloak_issuer(monkeypatch):
+    """Test Keycloak issuer URL construction from settings."""
+    monkeypatch.setattr(vc.settings, "sso_keycloak_base_url", "https://keycloak.example.com", raising=False)
+    monkeypatch.setattr(vc.settings, "sso_keycloak_realm", "myrealm", raising=False)
+    assert vc._get_keycloak_issuer() == "https://keycloak.example.com/realms/myrealm"
+
+
+def test_get_keycloak_issuer_strips_trailing_slash(monkeypatch):
+    """Test that trailing slashes on the base URL are handled."""
+    monkeypatch.setattr(vc.settings, "sso_keycloak_base_url", "https://keycloak.example.com/", raising=False)
+    monkeypatch.setattr(vc.settings, "sso_keycloak_realm", "test", raising=False)
+    assert vc._get_keycloak_issuer() == "https://keycloak.example.com/realms/test"
+
+
+def test_get_keycloak_issuer_returns_none_when_unconfigured(monkeypatch):
+    """Test that None is returned when no base URL is configured."""
+    monkeypatch.setattr(vc.settings, "sso_keycloak_base_url", None, raising=False)
+    assert vc._get_keycloak_issuer() is None
+
+
+@pytest.mark.asyncio
+async def test_external_jwt_disabled_by_default(monkeypatch):
+    """Master switch: Keycloak tokens are rejected when external JWT validation is off."""
+    monkeypatch.setattr(vc.settings, "external_jwt_validation_enabled", False, raising=False)
+    monkeypatch.setattr(vc.settings, "jwt_secret_key", SECRET, raising=False)
+    monkeypatch.setattr(vc.settings, "jwt_algorithm", ALGO, raising=False)
+
+    # Create a token that looks like Keycloak (different issuer)
+    payload = {"sub": "user@example.com", "iss": "https://kc.example.com/realms/test", "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())}
+    token = jwt.encode(payload, SECRET, algorithm=ALGO)
+
+    # Should fail because issuer doesn't match internal "mcpgateway" issuer
+    with pytest.raises(HTTPException) as exc:
+        await vc.verify_jwt_token(token)
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_internal_jwt_still_works_with_external_enabled(monkeypatch):
+    """Backward compat: internal tokens validate normally even when external JWT validation is on."""
+    monkeypatch.setattr(vc.settings, "external_jwt_validation_enabled", True, raising=False)
+    monkeypatch.setattr(vc.settings, "sso_keycloak_base_url", "https://kc.example.com", raising=False)
+    monkeypatch.setattr(vc.settings, "sso_keycloak_realm", "test", raising=False)
+    monkeypatch.setattr(vc.settings, "jwt_secret_key", SECRET, raising=False)
+    monkeypatch.setattr(vc.settings, "jwt_algorithm", ALGO, raising=False)
+    monkeypatch.setattr(vc.settings, "require_token_expiration", False, raising=False)
+
+    # Internal token with iss=mcpgateway
+    tok = _token({"sub": "internal-user"})
+    result = await vc.verify_jwt_token(tok)
+    assert result["sub"] == "internal-user"
+    assert "_auth_source" not in result
+
+
+@pytest.mark.asyncio
+async def test_keycloak_issuer_rejects_hs256(monkeypatch):
+    """Keycloak path must only accept RS256 — HS256 algorithm confusion must be prevented."""
+    monkeypatch.setattr(vc.settings, "external_jwt_validation_enabled", True, raising=False)
+    monkeypatch.setattr(vc.settings, "sso_keycloak_base_url", "https://kc.example.com", raising=False)
+    monkeypatch.setattr(vc.settings, "sso_keycloak_realm", "test", raising=False)
+    monkeypatch.setattr(vc.settings, "external_jwt_required_audience", None, raising=False)
+    monkeypatch.setattr(vc.settings, "jwt_secret_key", SECRET, raising=False)
+    monkeypatch.setattr(vc.settings, "jwt_algorithm", ALGO, raising=False)
+
+    keycloak_issuer = "https://kc.example.com/realms/test"
+    # Create an HS256 token with Keycloak issuer (algorithm confusion attack)
+    payload = {
+        "sub": "attacker@example.com",
+        "iss": keycloak_issuer,
+        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+    }
+    malicious_token = jwt.encode(payload, "any-secret", algorithm="HS256")
+
+    # Mock the JWKS client — get_signing_key_from_jwt will fail because the token isn't RS256-signed
+    mock_jwks_client = MagicMock()
+    mock_jwks_client.get_signing_key_from_jwt.side_effect = Exception("No matching key found")
+    with patch.object(vc, "_get_keycloak_jwks_client", return_value=mock_jwks_client):
+        with pytest.raises(HTTPException) as exc:
+            await vc.verify_jwt_token(malicious_token)
+        assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_keycloak_jwt_validation_success(monkeypatch):
+    """Full success path: RS256 Keycloak token validated via mocked JWKS client."""
+    monkeypatch.setattr(vc.settings, "external_jwt_validation_enabled", True, raising=False)
+    monkeypatch.setattr(vc.settings, "sso_keycloak_base_url", "https://kc.example.com", raising=False)
+    monkeypatch.setattr(vc.settings, "sso_keycloak_realm", "test", raising=False)
+    monkeypatch.setattr(vc.settings, "external_jwt_required_audience", None, raising=False)
+    monkeypatch.setattr(vc.settings, "jwt_secret_key", SECRET, raising=False)
+    monkeypatch.setattr(vc.settings, "jwt_algorithm", ALGO, raising=False)
+
+    keycloak_issuer = "https://kc.example.com/realms/test"
+
+    # Generate an RSA key pair for signing
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+
+    payload = {
+        "sub": "keycloak-user-id",
+        "email": "kc_user@example.com",
+        "name": "KC User",
+        "iss": keycloak_issuer,
+        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+    }
+    private_pem = private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    token = jwt.encode(payload, private_pem, algorithm="RS256")
+
+    # Mock JWKS client to return the matching public key
+    mock_signing_key = MagicMock()
+    mock_signing_key.key = public_key
+    mock_jwks_client = MagicMock()
+    mock_jwks_client.get_signing_key_from_jwt.return_value = mock_signing_key
+
+    with patch.object(vc, "_get_keycloak_jwks_client", return_value=mock_jwks_client):
+        result = await vc.verify_jwt_token(token)
+
+    assert result["_auth_source"] == "keycloak"
+    assert result["email"] == "kc_user@example.com"
+    assert result["sub"] == "keycloak-user-id"

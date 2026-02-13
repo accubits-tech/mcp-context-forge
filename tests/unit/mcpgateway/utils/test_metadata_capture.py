@@ -12,8 +12,6 @@ audit tracking of entity creation and modification operations.
 # Standard
 from types import SimpleNamespace
 
-# Third-Party
-
 # First-Party
 from mcpgateway.utils.metadata_capture import MetadataCapture
 

@@ -9,18 +9,17 @@ Extended tests for plugin manager to achieve 100% coverage.
 
 # Standard
 import asyncio
-from unittest.mock import patch
 import re
+from unittest.mock import patch
 
 # Third-Party
 import pytest
 
 # First-Party
 from mcpgateway.common.models import Message, PromptResult, Role, TextContent
-from mcpgateway.plugins.framework.base import HookRef, Plugin
-from mcpgateway.plugins.framework.models import Config
 from mcpgateway.plugins.framework import (
     GlobalContext,
+    Plugin,
     PluginCondition,
     PluginConfig,
     PluginContext,
@@ -31,13 +30,14 @@ from mcpgateway.plugins.framework import (
     PluginViolation,
     PluginViolationError,
     PromptHookType,
-    ToolHookType,
-    Plugin,
     PromptPosthookPayload,
     PromptPrehookPayload,
+    ToolHookType,
     ToolPostInvokePayload,
     ToolPreInvokePayload,
 )
+from mcpgateway.plugins.framework.base import HookRef, Plugin
+from mcpgateway.plugins.framework.models import Config
 from mcpgateway.plugins.framework.registry import PluginRef
 
 
@@ -180,11 +180,12 @@ async def test_manager_exception_handling():
 @pytest.mark.asyncio
 async def test_manager_condition_filtering():
     """Test that plugins are filtered based on conditions across all hook types."""
+    # First-Party
     from mcpgateway.plugins.framework import (
-        ResourceHookType,
-        ResourcePreFetchPayload,
         AgentHookType,
         AgentPreInvokePayload,
+        ResourceHookType,
+        ResourcePreFetchPayload,
     )
 
     manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/valid_no_plugin.yaml")
@@ -558,7 +559,7 @@ async def test_manager_plugin_blocking():
     plugin = BlockingPlugin(config)
 
     with patch.object(manager._registry, "get_hook_refs_for_hook") as mock_get:
-        hook_ref = HookRef(PromptHookType.PROMPT_PRE_FETCH,  PluginRef(plugin))
+        hook_ref = HookRef(PromptHookType.PROMPT_PRE_FETCH, PluginRef(plugin))
         mock_get.return_value = [hook_ref]
 
         prompt = PromptPrehookPayload(prompt_id="test", args={"text": "bad content"})
@@ -653,8 +654,8 @@ async def test_manager_shutdown_behavior():
 async def test_manager_payload_size_validation():
     """Test payload size validation functionality."""
     # First-Party
-    from mcpgateway.plugins.framework.manager import MAX_PAYLOAD_SIZE, PayloadSizeError, PluginExecutor
     from mcpgateway.plugins.framework import PromptPosthookPayload, PromptPrehookPayload
+    from mcpgateway.plugins.framework.manager import MAX_PAYLOAD_SIZE, PayloadSizeError, PluginExecutor
 
     # Test payload size validation directly on executor (covers lines 252, 258)
     executor = PluginExecutor()
@@ -752,19 +753,18 @@ async def test_base_plugin_coverage():
     """Test base plugin functionality for complete coverage."""
     # First-Party
     from mcpgateway.common.models import Message, PromptResult, Role, TextContent
-    from mcpgateway.plugins.framework.base import PluginRef
     from mcpgateway.plugins.framework import (
         GlobalContext,
         PluginConfig,
         PluginContext,
         PluginMode,
         PromptHookType,
-        ToolHookType,
         PromptPosthookPayload,
         PromptPrehookPayload,
         ToolPostInvokePayload,
         ToolPreInvokePayload,
     )
+    from mcpgateway.plugins.framework.base import PluginRef
 
     # Test plugin with tags property (covers line 130)
     config = PluginConfig(
@@ -856,8 +856,8 @@ async def test_plugin_types_coverage():
 async def test_plugin_loader_return_none():
     """Test plugin loader return None case."""
     # First-Party
-    from mcpgateway.plugins.framework.loader.plugin import PluginLoader
     from mcpgateway.plugins.framework import PluginConfig
+    from mcpgateway.plugins.framework.loader.plugin import PluginLoader
 
     loader = PluginLoader()
 

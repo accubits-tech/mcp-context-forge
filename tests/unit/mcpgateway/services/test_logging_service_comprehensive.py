@@ -8,8 +8,8 @@ Comprehensive unit tests for LoggingService to improve coverage.
 """
 
 # Standard
-from logging.handlers import RotatingFileHandler
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import tempfile
 from unittest.mock import MagicMock, patch

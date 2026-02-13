@@ -9,8 +9,8 @@ Tests for TLS/mTLS certificate validation in external plugin client.
 
 # Standard
 import datetime
-import ssl
 from pathlib import Path
+import ssl
 from unittest.mock import Mock, patch
 
 # Third-Party
@@ -227,6 +227,7 @@ def test_ssl_context_rejects_invalid_certificate():
 
     This validates the actual rejection behavior mechanism.
     """
+    # Standard
     import tempfile
 
     # Create a valid self-signed CA certificate for testing

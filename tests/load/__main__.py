@@ -4,16 +4,20 @@
 Allows running as: python -m tests.load.generate
 """
 
+# Standard
 import sys
 
 if len(sys.argv) > 1 and sys.argv[1] in ["generate", "cleanup", "verify"]:
     command = sys.argv.pop(1)
 
     if command == "generate":
+        # Local
         from .generate import main
     elif command == "cleanup":
+        # Local
         from .cleanup import main
     elif command == "verify":
+        # Local
         from .verify import main
 
     main()

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
+# Standard
 import json
-import subprocess
 from pathlib import Path
+import subprocess
 
 
 def test_config_schema_prints_json():

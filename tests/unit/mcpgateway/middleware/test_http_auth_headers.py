@@ -13,7 +13,7 @@ These tests verify the low-level header modification works correctly:
 """
 
 # Standard
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 # Third-Party
 from fastapi import Depends, FastAPI, Request
@@ -24,7 +24,6 @@ import pytest
 # First-Party
 from mcpgateway.middleware.http_auth_middleware import HttpAuthMiddleware
 from mcpgateway.plugins.framework import (
-    GlobalContext,
     HttpHeaderPayload,
     HttpHookType,
     PluginResult,

@@ -9,11 +9,12 @@ This migration adds the creator_type column to the servers table
 to track whether a server was created manually, via API, or via federation.
 """
 
+# Standard
 from typing import Sequence, Union
 
+# Third-Party
 from alembic import op
 import sqlalchemy as sa
-
 
 # revision identifiers, used by Alembic.
 revision: str = "k5l6m7n8o9p0"
@@ -32,9 +33,7 @@ def upgrade() -> None:
     if "creator_type" not in columns:
         # Use batch mode for SQLite compatibility
         with op.batch_alter_table("servers", schema=None) as batch_op:
-            batch_op.add_column(
-                sa.Column("creator_type", sa.String(length=50), nullable=True)
-            )
+            batch_op.add_column(sa.Column("creator_type", sa.String(length=50), nullable=True))
         print("Added creator_type column to servers table")
     else:
         print("creator_type column already exists in servers table")

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 # Check if gRPC is available
 try:
+    # Third-Party
     import grpc  # noqa: F401
 
     GRPC_AVAILABLE = True
@@ -271,9 +272,7 @@ class TestGrpcService:
 
     @patch("mcpgateway.services.grpc_service.grpc")
     @patch("mcpgateway.services.grpc_service.reflection_pb2_grpc")
-    async def test_reflect_service_success(
-        self, mock_reflection_grpc, mock_grpc, service, mock_db, sample_db_service
-    ):
+    async def test_reflect_service_success(self, mock_reflection_grpc, mock_grpc, service, mock_db, sample_db_service):
         """Test successful service reflection."""
         # Mock gRPC channel and stub
         mock_channel = MagicMock()

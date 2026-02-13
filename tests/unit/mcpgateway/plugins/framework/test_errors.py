@@ -7,18 +7,15 @@ Authors: Mihai Criveti
 Tests for errors module.
 """
 
+# Standard
+import re
+
 # Third-Party
 import pytest
-import re
+
+# First-Party
+from mcpgateway.plugins.framework import GlobalContext, PluginError, PluginManager, PluginMode, PromptHookType, PromptPrehookPayload
 from mcpgateway.plugins.framework.errors import convert_exception_to_error
-from mcpgateway.plugins.framework import (
-    GlobalContext,
-    PluginError,
-    PluginMode,
-    PluginManager,
-    PromptHookType,
-    PromptPrehookPayload
-)
 
 
 @pytest.mark.asyncio
