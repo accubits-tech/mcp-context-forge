@@ -575,6 +575,20 @@ catalog_servers:
     documentation_url: "https://github.com/telnyx/telnyx-mcp"
     tools: ["create_assistant", "list_assistants", "make_call", "hangup_call", "send_sms", "list_phone_numbers", "buy_phone_number", "list_voice_connections", "create_storage_bucket", "list_secrets"]
 
+  - id: slack
+    name: "Slack"
+    category: "Communication"
+    url: "https://mcp.slack.com/mcp"
+    auth_type: "OAuth2.1"
+    provider: "Slack"
+    secure: true
+    description: "Slack MCP server gives AI agents secure access to workspace context and actions, including searching messages/files/channels/users, reading channels and threads, sending messages, and creating or updating canvases through OAuth-backed user authorization."
+    requires_api_key: false
+    tags: ["communication", "collaboration", "messaging", "workspace"]
+    logo_url: "https://img.logo.dev/slack.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://docs.slack.dev/ai/slack-mcp-server/"
+    tools: ["search_messages", "search_files", "search_users", "search_channels", "send_message", "read_channel", "read_thread", "create_or_update_canvas", "read_canvas", "get_user_profile"]
+
   # Analytics & Data
   - id: thoughtspot
     name: "ThoughtSpot"
