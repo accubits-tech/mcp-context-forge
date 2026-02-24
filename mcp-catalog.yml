@@ -448,7 +448,7 @@ catalog_servers:
     url: "https://api.fireflies.ai/mcp"
     auth_type: "OAuth2.1"
     provider: "Firefly"
-    description: "The Firefly MCP server connects AI assistants to Fireflies’ AI meeting assistant so they can search, extract and analyse recorded conversations. It allows agents to query meeting transcripts for sales analysis, product feedback and team productivity insights [oai_citation:0‡fireflies.ai](https://fireflies.ai/blog/fireflies-mcp-server/#:~:text=We%27re%20excited%20to%20introduce%20the,and%20tools%20you%20already%20use) [oai_citation:1‡docs.fireflies.ai](https://docs.fireflies.ai/getting-started/mcp-configuration#:~:text=The%20Fireflies%20MCP%20Server%20enables,from%20your%20AI%20coding%20tools)."
+    description: "The Firefly MCP server connects AI assistants to Fireflies’ AI meeting assistant so they can search, extract and analyse recorded conversations. It allows agents to query meeting transcripts for sales analysis, product feedback and team productivity insights."
     requires_api_key: false
     tags: ["meetings", "transcription", "ai", "productivity"]
     logo_url: "https://img.logo.dev/fireflies.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -461,7 +461,7 @@ catalog_servers:
     url: "https://mcp.listenetic.com/v1/mcp"
     auth_type: "OAuth2.1"
     provider: "Listenetic"
-    description: "Listenetic’s remote MCP server converts articles, documents, websites and videos into high‑quality AI‑generated audio. It supports multiple formats, binary content and SSML, enabling apps to add narrated audio and TTS quickly [oai_citation:2‡remote-mcp.com](https://www.remote-mcp.com/servers/listenetic#:~:text=The%20Listenetic%20MCP%20server%20enables,exercising%2C%20or%20doing%20household%20chores)."
+    description: "Listenetic’s remote MCP server converts articles, documents, websites and videos into high‑quality AI‑generated audio. It supports multiple formats, binary content and SSML, enabling apps to add narrated audio and TTS quickly."
     requires_api_key: false
     tags: ["audio", "analysis", "productivity"]
     logo_url: "https://img.logo.dev/listenetic.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -474,7 +474,7 @@ catalog_servers:
     url: "https://waystation.ai/mcp"
     auth_type: "OAuth2.1"
     provider: "WayStation"
-    description: "WayStation acts as a remote, no‑code integration hub that aggregates connections to dozens of productivity apps. It provides a single secure endpoint that allows AI models to search and fetch information from 30+ applications using OAuth, eliminating the need to run separate MCP servers [oai_citation:3‡skywork.ai](https://skywork.ai/skypage/en/waystation-mcp-server-ai-productivity/1977952683857727488) [oai_citation:4‡skywork.ai](https://skywork.ai/skypage/en/waystation-mcp-server-ai-productivity/1977952683857727488#:~:text=rated%20WayStation%20a%205%20out,purpose%20server%20might)."
+    description: "WayStation acts as a remote, no‑code integration hub that aggregates connections to dozens of productivity apps. It provides a single secure endpoint that allows AI models to search and fetch information from 30+ applications using OAuth, eliminating the need to run separate MCP servers."
     requires_api_key: false
     tags: ["ai", "productivity", "assistant"]
     logo_url: "https://img.logo.dev/waystation.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -487,7 +487,7 @@ catalog_servers:
     url: "https://www.zine.ai/mcp"
     auth_type: "OAuth2.1"
     provider: "Zine"
-    description: "Zine is a portable knowledge layer that ingests an organisation’s scattered knowledge base (emails, Slack, Notion, etc.) into a unified graph. It functions as both an MCP server and client, allowing AI agents to search and retrieve information and to connect to other servers. It uses Bearer/OAuth authentication and Graphlit foundations to securely ingest, convert and index content [oai_citation:5‡skywork.ai](https://skywork.ai/skypage/en/zine-mcp-server-ai-agent/1980527822655234048) [oai_citation:6‡pulsemcp.com](https://www.pulsemcp.com/servers/zine/serverjson#:~:text=%7B%20%22%24schema%22%3A%20%22https%3A%2F%2Fstatic.modelcontextprotocol.io%2Fschemas%2F2025,repository)."
+    description: "Zine is a portable knowledge layer that ingests an organisation’s scattered knowledge base (emails, Slack, Notion, etc.) into a unified graph. It functions as both an MCP server and client, allowing AI agents to search and retrieve information and to connect to other servers. It uses Bearer/OAuth authentication and Graphlit foundations to securely ingest, convert and index content."
     requires_api_key: false
     tags: ["knowledge", "memory", "notes"]
     logo_url: "https://img.logo.dev/zine.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -501,7 +501,7 @@ catalog_servers:
     url: "https://mcp.canva.com/mcp"
     auth_type: "OAuth2.1"
     provider: "Canva"
-    description: "Canva’s MCP server exposes graphic design tools that let AI assistants generate designs, search existing assets, import and export templates, resize, manage folders and collaborate via comments [oai_citation:7‡canva.com](https://www.canva.com/help/mcp-canva-usage/#:~:text=Generate%20design). This allows agents to create branded visuals and automate content workflows [oai_citation:8‡pulsemcp.com](https://www.pulsemcp.com/servers/canva#:~:text=Canva%20integration%20that%20enables%20creating,workflows%20and%20visual%20content%20generation)."
+    description: "Canva’s MCP server exposes graphic design tools that let AI assistants generate designs, search existing assets, import and export templates, resize, manage folders and collaborate via comments. This allows agents to create branded visuals and automate content workflows."
     requires_api_key: false
     tags: ["design", "graphics", "content-creation"]
     logo_url: "https://img.logo.dev/canva.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -514,7 +514,7 @@ catalog_servers:
     url: "https://mcp.invideo.io/sse"
     auth_type: "OAuth2.1"
     provider: "Invidio"
-    description: "The InVideo MCP server allows AI tools to generate publish‑ready videos by turning prompts into scripts and adding AI‑generated visuals, voice‑overs and subtitles [oai_citation:9‡invideo.io](https://invideo.io/ai/mcp/#:~:text=Model%20Context%20Protocol%20,connected%2C%20secure%2C%20and%20effortlessly%20scalable). It supports short‑form video creation for platforms like YouTube Shorts and Instagram reels [oai_citation:10‡invideo.io](https://invideo.io/ai/mcp/#:~:text=Generate%20YT%20shorts%20with%20the,invideo%20MCP%20server)."
+    description: "The InVideo MCP server allows AI tools to generate publish‑ready videos by turning prompts into scripts and adding AI‑generated visuals, voice‑overs and subtitles. It supports short‑form video creation for platforms like YouTube Shorts and Instagram reels."
     requires_api_key: false
     tags: ["video", "editing", "content-creation"]
     logo_url: "https://img.logo.dev/invideo.io?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -528,7 +528,7 @@ catalog_servers:
     url: "https://mcp.webflow.com/sse"
     auth_type: "OAuth2.1"
     provider: "Webflow"
-    description: "Webflow’s MCP server connects AI agents to Webflow projects so they can update designs, manage pages and collections, create elements, update styles, and handle CMS and assets using natural language [oai_citation:11‡developers.webflow.com](https://developers.webflow.com/mcp/reference/overview#:~:text=The%20Model%20Context%20Protocol%20,from%20your%20preferred%20AI%20environment). Tools are grouped into Data API (sites, pages, components, collections, fields, items, custom code) and Designer API (elements, styles, assets, variables) [oai_citation:12‡developers.webflow.com](https://developers.webflow.com/mcp/reference/how-it-works#:~:text=Available%20tools)."
+    description: "Webflow’s MCP server connects AI agents to Webflow projects so they can update designs, manage pages and collections, create elements, update styles, and handle CMS and assets using natural language. Tools are grouped into Data API (sites, pages, components, collections, fields, items, custom code) and Designer API (elements, styles, assets, variables)."
     requires_api_key: false
     tags: ["cms", "web-design", "no-code"]
     logo_url: "https://img.logo.dev/webflow.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -541,7 +541,7 @@ catalog_servers:
     url: "https://mcp.wix.com/sse"
     auth_type: "OAuth2.1"
     provider: "Wix"
-    description: "Wix’s MCP server allows AI clients to search Wix documentation, write code for the Wix platform and call Wix REST APIs—saving users from manual doc lookup [oai_citation:13‡raw.githubusercontent.com](https://raw.githubusercontent.com/wix/wix-mcp/refs/heads/master/README.md#:~:text=Wix%20now%20provides%20a%20,information%20in%20the%20documentation%20yourself). Available tools include search of design system docs, REST docs, SDK docs, headless docs and business flows, plus site management and API calls [oai_citation:14‡raw.githubusercontent.com](https://raw.githubusercontent.com/wix/wix-mcp/refs/heads/master/README.md#:~:text=)."
+    description: "Wix’s MCP server allows AI clients to search Wix documentation, write code for the Wix platform and call Wix REST APIs—saving users from manual doc lookup. Available tools include search of design system docs, REST docs, SDK docs, headless docs and business flows, plus site management and API calls."
     requires_api_key: false
     tags: ["cms", "website-builder", "hosting"]
     logo_url: "https://img.logo.dev/wix.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -555,7 +555,7 @@ catalog_servers:
     url: "https://getdialer.app/sse"
     auth_type: "OAuth2.1"
     provider: "Dialer"
-    description: "The Dialer MCP server integrates AI tools with telephony, enabling them to initiate and manage outbound calls, access contact information and handle phone numbers. It supports call session management, dialing existing contacts and maintaining call history [oai_citation:15‡marketplace.metorial.com](https://marketplace.metorial.com/marketplace/s/dialer#:~:text=Dialer%20MCP%20Server)."
+    description: "The Dialer MCP server integrates AI tools with telephony, enabling them to initiate and manage outbound calls, access contact information and handle phone numbers. It supports call session management, dialing existing contacts and maintaining call history."
     requires_api_key: false
     tags: ["phone", "calling", "communication"]
     logo_url: "https://img.logo.dev/getdialer.app?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -568,7 +568,7 @@ catalog_servers:
     url: "https://api.telnyx.com/v2/mcp"
     auth_type: "API Key"
     provider: "Telnyx"
-    description: "Telnyx’s MCP server spans telephony, messaging and connectivity APIs. It includes assistant tools, call control (outbound calling, hang up, transfer, play audio, send DTMF), messaging (SMS/MMS), phone number operations (list/buy/update), connection management, storage, embeddings and secrets management [oai_citation:16‡github.com](https://github.com/team-telnyx/telnyx-mcp-server#:~:text=Assistant%20Tools)."
+    description: "Telnyx’s MCP server spans telephony, messaging and connectivity APIs. It includes assistant tools, call control (outbound calling, hang up, transfer, play audio, send DTMF), messaging (SMS/MMS), phone number operations (list/buy/update), connection management, storage, embeddings and secrets management."
     requires_api_key: true
     tags: ["telecom", "voice", "sms", "api"]
     logo_url: "https://img.logo.dev/telnyx.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -596,7 +596,7 @@ catalog_servers:
     url: "https://agent.thoughtspot.app/mcp"
     auth_type: "OAuth2.1"
     provider: "ThoughtSpot"
-    description: "The ThoughtSpot MCP server connects AI assistants to the ThoughtSpot analytics platform. It supports tools to test connectivity, fetch relevant questions, execute queries and create Liveboards, enabling conversational access to analytics [oai_citation:17‡developers.thoughtspot.com](https://developers.thoughtspot.com/docs/mcp-integration#:~:text=ThoughtSpot%E2%80%99s%20Agentic%20Model%20Context%20Protocol,and%20its%20analytics%20capabilities%20programmatically)."
+    description: "The ThoughtSpot MCP server connects AI assistants to the ThoughtSpot analytics platform. It supports tools to test connectivity, fetch relevant questions, execute queries and create Liveboards, enabling conversational access to analytics."
     requires_api_key: false
     tags: ["analytics", "bi", "data", "search"]
     logo_url: "https://img.logo.dev/thoughtspot.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -609,7 +609,7 @@ catalog_servers:
     url: "https://scorecard-mcp.dare-d5b.workers.dev/sse"
     auth_type: "OAuth2.1"
     provider: "Scorecard"
-    description: "Scorecard transforms AI assistants into evaluation companions. It exposes tools to create projects, testsets and metrics, manage testcases, run evaluations and analyse results, enabling iterative model improvement [oai_citation:18‡docs.scorecard.io](https://docs.scorecard.io/features/mcp#:~:text=Overview) [oai_citation:19‡remote-mcp.com](https://www.remote-mcp.com/servers/scorecard#:~:text=The%20Scorecard%20MCP%20server%20provides,shipping%20AI%20products%20that%20work)."
+    description: "Scorecard transforms AI assistants into evaluation companions. It exposes tools to create projects, testsets and metrics, manage testcases, run evaluations and analyse results, enabling iterative model improvement."
     requires_api_key: false
     tags: ["ai", "evaluation", "testing", "ml"]
     logo_url: "https://img.logo.dev/scorecard.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -622,7 +622,7 @@ catalog_servers:
     url: "https://mcp.llmtxt.dev/sse"
     auth_type: "Open"
     provider: "LLM Text"
-    description: "LLM Text’s MCP server discovers and retrieves llms.txt content from websites and converts Git repositories into simple text digests, providing LLMs with codebase summaries [oai_citation:20‡hub.docker.com](https://hub.docker.com/mcp/server/llmtxt/overview#:~:text=Discovers%20and%20retrieves%20llms,websites) [oai_citation:21‡hub.docker.com](https://hub.docker.com/mcp/server/llmtxt/tools#:~:text=,text%20digest%20of%20its%20codebase)."
+    description: "LLM Text’s MCP server discovers and retrieves llms.txt content from websites and converts Git repositories into simple text digests, providing LLMs with codebase summaries."
     requires_api_key: false
     tags: ["ai", "nlm", "text-analysis"]
     logo_url: "https://img.logo.dev/llmtxt.dev?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -636,7 +636,7 @@ catalog_servers:
     url: "https://rag-mcp-2.whatsmcp.workers.dev/sse"
     auth_type: "OAuth2.1"
     provider: "OneContext"
-    description: "OneContext is a community‑driven RAG‑as‑a‑Service MCP server that handles document ingestion, chunking, vector embeddings and retrieval. It supports multi‑format ingestion (PDF, DOCX, TXT) with OCR, multi‑stage query pipelines with cross‑encoder reranking, metadata filtering and thousands of sentence‑transformer models [oai_citation:22‡skywork.ai](https://skywork.ai/skypage/en/onecontext-mcp-server-ai-engineers/1980529805644910592)."
+    description: "OneContext is a community‑driven RAG‑as‑a‑Service MCP server that handles document ingestion, chunking, vector embeddings and retrieval. It supports multi‑format ingestion (PDF, DOCX, TXT) with OCR, multi‑stage query pipelines with cross‑encoder reranking, metadata filtering and thousands of sentence‑transformer models."
     requires_api_key: false
     tags: ["rag", "ai", "search", "retrieval"]
     logo_url: "https://img.logo.dev/onecontext.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -649,7 +649,7 @@ catalog_servers:
     url: "https://mcp.needle-ai.com/mcp"
     auth_type: "API Key"
     provider: "Needle"
-    description: "Needle MCP makes data buried in PDFs, DOCX, XLSX and other formats instantly accessible to LLMs via semantic search [oai_citation:23‡docs.needle.app](https://docs.needle.app/docs/guides/mcp/needle-mcp-server/#:~:text=You%20can%20use%20Needle%20MCP,files%20instantly%20accessible%20by%20LLMs). The tool reference lists endpoints to manage collections, add or delete files and search collections [oai_citation:24‡docs.needle.app](https://docs.needle.app/docs/guides/mcp/needle-mcp-server/#:~:text=Tools%20Reference)."
+    description: "Needle MCP makes data buried in PDFs, DOCX, XLSX and other formats instantly accessible to LLMs via semantic search. The tool reference lists endpoints to manage collections, add or delete files and search collections."
     requires_api_key: true
     tags: ["rag", "ai", "search", "documents"]
     logo_url: "https://img.logo.dev/needle-ai.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -662,7 +662,7 @@ catalog_servers:
     url: "https://mcp.dappier.com/mcp"
     auth_type: "API Key"
     provider: "Dappier"
-    description: "Dappier MCP connects LLMs to real‑time, rights‑cleared data from trusted sources, covering web search, news, sports, stock market and more [oai_citation:25‡docs.dappier.com](https://docs.dappier.com/integrations/dappier-mcp-server-integration#:~:text=Dappier%20MCP%20Server%20is%20a,Image%200%3A%20GitHub). It offers tools for real‑time search and AI‑powered recommendations with flexible filtering options [oai_citation:26‡docs.dappier.com](https://docs.dappier.com/integrations/dappier-mcp-server-integration#:~:text=Real)."
+    description: "Dappier MCP connects LLMs to real‑time, rights‑cleared data from trusted sources, covering web search, news, sports, stock market and more. It offers tools for real‑time search and AI‑powered recommendations with flexible filtering options."
     requires_api_key: true
     tags: ["rag", "ai", "content", "recommendations"]
     logo_url: "https://img.logo.dev/dappier.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -675,7 +675,7 @@ catalog_servers:
     url: "https://mcp.deepwiki.com/sse"
     auth_type: "Open"
     provider: "Devin"
-    description: "DeepWiki MCP provides access to public GitHub repositories by exposing wiki structure, contents and question‑answering endpoints. It is available via HTTP and SSE endpoints, though SSE is deprecated [oai_citation:27‡docs.devin.ai](https://docs.devin.ai/work-with-devin/deepwiki-mcp#:~:text=DeepWiki%20MCP%20Server). Tools allow browsing the wiki and asking questions about repository docs [oai_citation:28‡docs.devin.ai](https://docs.devin.ai/work-with-devin/deepwiki-mcp#:~:text=DeepWiki%20MCP%20Server)."
+    description: "DeepWiki MCP provides access to public GitHub repositories by exposing wiki structure, contents and question‑answering endpoints. It is available via HTTP and SSE endpoints, though SSE is deprecated. Tools allow browsing the wiki and asking questions about repository docs."
     requires_api_key: false
     tags: ["rag", "wiki", "knowledge", "ai"]
     logo_url: "https://img.logo.dev/deepwiki.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -688,7 +688,7 @@ catalog_servers:
     url: "https://mcp.customgpt.ai"
     auth_type: "API"
     provider: "CustomGPT.ai"
-    description: "CustomGPT’s hosted MCP server lets AI agents create and manage custom chatbots. It includes tools for agent management, conversations, content, API documentation search and key validation [oai_citation:29‡github.com](https://github.com/Poll-The-People/customgpt-mcp#:~:text=%EF%B8%8F%20Available%20Tools)."
+    description: "CustomGPT’s hosted MCP server lets AI agents create and manage custom chatbots. It includes tools for agent management, conversations, content, API documentation search and key validation."
     requires_api_key: true
     tags: ["rag", "chatbot", "ai", "custom"]
     logo_url: "https://img.logo.dev/customgpt.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -702,7 +702,7 @@ catalog_servers:
     url: "https://mcp.thekollektiv.ai/sse"
     auth_type: "OAuth2.1"
     provider: "Kollektiv"
-    description: "The Kollektiv MCP server (now deprecated) was built to let users quickly create a personal LLM knowledge base by uploading data and chatting with it. It was designed to work with major MCP clients such as Cursor and Claude Desktop [oai_citation:30‡raw.githubusercontent.com](https://raw.githubusercontent.com/alexander-zuev/kollektiv-mcp/main/README.md#:~:text=,%28DEPRECATED)."
+    description: "The Kollektiv MCP server (now deprecated) was built to let users quickly create a personal LLM knowledge base by uploading data and chatting with it. It was designed to work with major MCP clients such as Cursor and Claude Desktop."
     requires_api_key: false
     tags: ["documentation", "collaboration", "knowledge"]
     logo_url: "https://img.logo.dev/thekollektiv.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -715,7 +715,7 @@ catalog_servers:
     url: "https://docs.mcp.cloudflare.com/sse"
     auth_type: "Open"
     provider: "Cloudflare"
-    description: "Cloudflare Docs MCP server provides intelligent semantic search over Cloudflare’s developer documentation. It uses vector search to deliver up‑to‑date product information and includes a guide for migrating Pages projects to Workers [oai_citation:31‡remote-mcp.com](https://www.remote-mcp.com/servers/cloudflare-docs#:~:text=The%20Cloudflare%20Documentation%20Server%20provides,Zero%20Trust%20solutions%2C%20and%20more) [oai_citation:32‡remote-mcp.com](https://www.remote-mcp.com/servers/cloudflare-docs#:~:text=The%20Cloudflare%20Docs%20MCP%20server,provides%20two%20specialized%20tools)."
+    description: "Cloudflare Docs MCP server provides intelligent semantic search over Cloudflare’s developer documentation. It uses vector search to deliver up‑to‑date product information and includes a guide for migrating Pages projects to Workers."
     requires_api_key: false
     tags: ["documentation", "cloudflare", "reference"]
     logo_url: "https://img.logo.dev/cloudflare.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -728,7 +728,7 @@ catalog_servers:
     url: "https://mcp.docs.astro.build/mcp"
     auth_type: "Open"
     provider: "Astro"
-    description: "Astro Docs MCP server offers real‑time access to the Astro framework’s documentation. It provides a single tool to search categorized resources and prompts for component architecture, content management and deployment tasks [oai_citation:33‡remote-mcp.com](https://www.remote-mcp.com/servers/astro-docs#:~:text=)."
+    description: "Astro Docs MCP server offers real‑time access to the Astro framework’s documentation. It provides a single tool to search categorized resources and prompts for component architecture, content management and deployment tasks."
     requires_api_key: false
     tags: ["documentation", "astro", "framework"]
     logo_url: "https://img.logo.dev/astro.build?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -741,7 +741,7 @@ catalog_servers:
     url: "https://gitmcp.io/docs"
     auth_type: "Open"
     provider: "GitMCP"
-    description: "GitMCP turns any GitHub repository or Pages site into an AI‑readable documentation hub to eliminate code hallucinations. It exposes dynamic endpoints to fetch and search repository documentation and code [oai_citation:34‡augmentcode.com](https://www.augmentcode.com/mcp/git-mcp#:~:text=Available%20Tools)."
+    description: "GitMCP turns any GitHub repository or Pages site into an AI‑readable documentation hub to eliminate code hallucinations. It exposes dynamic endpoints to fetch and search repository documentation and code."
     requires_api_key: false
     tags: ["git", "version-control", "development"]
     logo_url: "https://img.logo.dev/gitmcp.io?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -754,7 +754,7 @@ catalog_servers:
     url: "https://www.javadocs.dev/mcp"
     auth_type: "Open"
     provider: "Javadocs.dev"
-    description: "The Javadocs MCP server gives AI agents access to Java API documentation. It supports retrieving the latest version of any Java artifact, listing the contents of Javadoc JAR files and accessing symbol documentation [oai_citation:35‡remote-mcp.com](https://www.remote-mcp.com/servers/javadocs#:~:text=Access%20Java%20API%20documentation%20directly,and%20retrieve%20symbol%20details%20instantly)."
+    description: "The Javadocs MCP server gives AI agents access to Java API documentation. It supports retrieving the latest version of any Java artifact, listing the contents of Javadoc JAR files and accessing symbol documentation."
     requires_api_key: false
     tags: ["java", "documentation", "api", "reference"]
     logo_url: "https://img.logo.dev/javadocs.dev?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -768,7 +768,7 @@ catalog_servers:
     url: "https://mcp.simplescraper.io/mcp"
     auth_type: "OAuth2.1"
     provider: "Simplescraper"
-    description: "Simplescraper MCP provides visual web scraping capabilities via recipes and data extraction tools. It allows AI agents to manage recipes, run scrapes, perform smart extraction and fetch results and history [oai_citation:36‡simplescraper.io](https://simplescraper.io/docs/mcp-server#:~:text=Available%20Capabilities)."
+    description: "Simplescraper MCP provides visual web scraping capabilities via recipes and data extraction tools. It allows AI agents to manage recipes, run scrapes, perform smart extraction and fetch results and history."
     requires_api_key: false
     tags: ["scraping", "automation", "web-data"]
     logo_url: "https://img.logo.dev/simplescraper.io?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -781,7 +781,7 @@ catalog_servers:
     url: "https://mcp.apify.com"
     auth_type: "API Key"
     provider: "Apify"
-    description: "Apify’s MCP server lets AI agents search and run actors, fetch documentation, manage datasets and key‑value stores and monitor runs. The tool list includes actor search and execution, run inspection, docs search and storage operations [oai_citation:37‡github.com](https://github.com/apify/apify-mcp-server#:~:text=Overview%20of%20available%20tools)."
+    description: "Apify’s MCP server lets AI agents search and run actors, fetch documentation, manage datasets and key‑value stores and monitor runs. The tool list includes actor search and execution, run inspection, docs search and storage operations."
     requires_api_key: true
     tags: ["scraping", "automation", "crawling", "data-extraction"]
     logo_url: "https://img.logo.dev/apify.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -794,7 +794,7 @@ catalog_servers:
     url: "https://mcp.zapier.com/api/mcp/mcp"
     auth_type: "API Key"
     provider: "Zapier"
-    description: "Zapier’s MCP server connects AI agents to over 8,000 apps and 30,000 actions, enabling natural language automation of tasks such as sending messages, creating tasks, updating records and scheduling events [oai_citation:38‡docs.zapier.com](https://docs.zapier.com/mcp/home#:~:text=Key%20Features) [oai_citation:39‡zapier.com](https://zapier.com/mcp#:~:text=One%20connection%20point%2C%208%2C000%20apps%2C,into%20your%20personal%20command%20center)."
+    description: "Zapier’s MCP server connects AI agents to over 8,000 apps and 30,000 actions, enabling natural language automation of tasks such as sending messages, creating tasks, updating records and scheduling events."
     requires_api_key: true
     tags: ["automation", "integration", "workflow", "no-code"]
     logo_url: "https://img.logo.dev/zapier.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -808,7 +808,7 @@ catalog_servers:
     url: "https://mcp.mercadolibre.com/mcp"
     auth_type: "API Key"
     provider: "Mercado Libre MCP Server"
-    description: "Mercado Libre MCP allows AI agents to fetch product data, reviews and seller reputation. Tools include retrieving product reviews, descriptions and seller reputations; search products was deprecated due to API policy changes [oai_citation:40‡playbooks.com](https://playbooks.com/mcp/lumile/mercadolibre-mcp#:~:text=You%20can%20use%20the%20MercadoLibre,hosted%20MCP%20server) [oai_citation:41‡playbooks.com](https://playbooks.com/mcp/lumile/mercadolibre-mcp#:~:text=The%20server%20provides%20the%20following,seller_reputation%3A%20Get%20seller%20reputation)."
+    description: "Mercado Libre MCP allows AI agents to fetch product data, reviews and seller reputation. Tools include retrieving product reviews, descriptions and seller reputations; search products was deprecated due to API policy changes."
     requires_api_key: true
     tags: ["e-commerce", "marketplace", "latam"]
     logo_url: "https://img.logo.dev/mercadolibre.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -822,7 +822,7 @@ catalog_servers:
     url: "http://mcp.stytch.dev/mcp"
     auth_type: "OAuth2.1"
     provider: "Stytch"
-    description: "The Stytch MCP server lets AI agents build authentication flows via programmatic workspace actions such as creating projects, updating SDK configs, managing redirect URLs and public tokens [oai_citation:42‡stytch.com](https://stytch.com/blog/stytch-mcp-server/#:~:text=The%20Stytch%20MCP%20Server%20can,an%20agent%20calling%20this%20tool)."
+    description: "The Stytch MCP server lets AI agents build authentication flows via programmatic workspace actions such as creating projects, updating SDK configs, managing redirect URLs and public tokens."
     requires_api_key: false
     tags: ["auth", "security", "identity"]
     logo_url: "https://img.logo.dev/stytch.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -835,7 +835,7 @@ catalog_servers:
     url: "https://mcp.www.zenable.app/"
     auth_type: "OAuth2.1"
     provider: "Zenable"
-    description: "Zenable’s Zen MCP server offers AI‑powered code analysis and workflow tools. It supports a range of operations such as planning, analysing, code review, refactoring, debugging, pre‑commit checks, test generation, security audits and documentation generation [oai_citation:43‡mcpservers.org](https://mcpservers.org/servers/jray2123/zen-mcp-server#:~:text=perspectives%20from%20the%20best%20AI,with%20context%20carrying%20forward%20seamlessly)."
+    description: "Zenable’s Zen MCP server offers AI‑powered code analysis and workflow tools. It supports a range of operations such as planning, analysing, code review, refactoring, debugging, pre‑commit checks, test generation, security audits and documentation generation."
     requires_api_key: false
     tags: ["security", "compliance", "automation"]
     logo_url: "https://img.logo.dev/zenable.app?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -849,7 +849,7 @@ catalog_servers:
     url: "https://api.findadomain.dev/mcp"
     auth_type: "Open"
     provider: "Find-A-Domain"
-    description: "Find‑A‑Domain MCP server provides domain search and availability checking, including WHOIS lookups. It offers tools to check a specific domain’s availability and list all supported TLDs [oai_citation:44‡findadomain.dev](https://findadomain.dev/mcp#:~:text=Find%20a%20Domain)."
+    description: "Find‑A‑Domain MCP server provides domain search and availability checking, including WHOIS lookups. It offers tools to check a specific domain’s availability and list all supported TLDs."
     requires_api_key: false
     tags: ["domains", "dns", "search"]
     logo_url: "https://img.logo.dev/findadomain.dev?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -862,7 +862,7 @@ catalog_servers:
     url: "https://hiveintelligence.xyz/mcp"
     auth_type: "OAuth2.1"
     provider: "Hive Intelligence"
-    description: "Hive Intelligence MCP server offers a suite of blockchain analytics tools across 10+ categories. It includes endpoints to retrieve schemas and invoke analytics on markets, on‑chain DEX pools, portfolios, tokens, DeFi protocols, NFTs, security, network monitoring and more [oai_citation:45‡mcpshowcase.com](https://mcpshowcase.com/p/mcp-server-directory/hive-intelligence-mcp-server#:~:text=Introduction) [oai_citation:46‡mcpshowcase.com](https://mcpshowcase.com/p/mcp-server-directory/hive-intelligence-mcp-server#:~:text=get_api_endpoint_schema)."
+    description: "Hive Intelligence MCP server offers a suite of blockchain analytics tools across 10+ categories. It includes endpoints to retrieve schemas and invoke analytics on markets, on‑chain DEX pools, portfolios, tokens, DeFi protocols, NFTs, security, network monitoring and more."
     requires_api_key: false
     tags: ["crypto", "blockchain", "analytics"]
     logo_url: "https://img.logo.dev/hiveintelligence.xyz?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -875,7 +875,7 @@ catalog_servers:
     url: "https://mcp.octagonagents.com/mcp"
     auth_type: "OAuth2.1"
     provider: "Octagon"
-    description: "Octagon’s MCP server connects to a market‑research API for public and private company intelligence. It powers AI agents to analyse SEC filings, earnings call transcripts, financial metrics and ratios, stock data, private company research, funding rounds, M&A and IPO transactions, debt transactions and deep research via web scraping [oai_citation:47‡docs.octagonagents.com](https://docs.octagonagents.com/guide/mcp-server.html#:~:text=The%20Octagon%20MCP%20server%20provides,and%20other%20popular%20MCP%20clients)."
+    description: "Octagon’s MCP server connects to a market‑research API for public and private company intelligence. It powers AI agents to analyse SEC filings, earnings call transcripts, financial metrics and ratios, stock data, private company research, funding rounds, M&A and IPO transactions, debt transactions and deep research via web scraping."
     requires_api_key: false
     tags: ["market-research", "intelligence", "analytics"]
     logo_url: "https://img.logo.dev/octagonagents.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -888,7 +888,7 @@ catalog_servers:
     url: "https://mcp.pipeboard.co/meta-ads-mcp"
     auth_type: "OAuth2.1"
     provider: "Pipeboard"
-    description: "Pipeboard’s Meta Ads MCP server exposes 31 tools for managing Facebook/Instagram ad accounts. It covers account management, campaign and ad set operations, ad creation and creative management, targeting optimisation, and analytics such as insights and budget scheduling [oai_citation:48‡remote-mcp.com](https://www.remote-mcp.com/servers/meta-ads-by-pipeboard#:~:text=) [oai_citation:49‡remote-mcp.com](https://www.remote-mcp.com/servers/meta-ads-by-pipeboard#:~:text=,Tools)."
+    description: "Pipeboard’s Meta Ads MCP server exposes 31 tools for managing Facebook/Instagram ad accounts. It covers account management, campaign and ad set operations, ad creation and creative management, targeting optimisation, and analytics such as insights and budget scheduling."
     requires_api_key: false
     tags: ["advertising", "marketing", "social-media", "meta"]
     logo_url: "https://img.logo.dev/pipeboard.co?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -901,7 +901,7 @@ catalog_servers:
     url: "https://ai-assistant.short.io/mcp"
     auth_type: "API Key"
     provider: "Short.io"
-    description: "Short.io MCP server enables creation and management of branded short links, advanced analytics, real‑time tracking, geographic targeting and lifecycle management. It offers nine tools for link creation, retrieval, analytics and domain management [oai_citation:50‡remote-mcp.com](https://www.remote-mcp.com/servers/shortio#:~:text=The%20Short,signup%2C%20analytics%20and%20API%20access) [oai_citation:51‡remote-mcp.com](https://www.remote-mcp.com/servers/shortio#:~:text=,Proposition)."
+    description: "Short.io MCP server enables creation and management of branded short links, advanced analytics, real‑time tracking, geographic targeting and lifecycle management. It offers nine tools for link creation, retrieval, analytics and domain management."
     requires_api_key: true
     tags: ["urls", "links", "analytics"]
     logo_url: "https://img.logo.dev/short.io?token=pk_IQgnPY69T4mLXixm3ohN9A"
@@ -914,7 +914,7 @@ catalog_servers:
     url: "https://mcp.turkishtechlab.com/mcp"
     auth_type: "OAuth2.1"
     provider: "Turkish Technology"
-    description: "Turkish Airlines’ MCP server offers 14 specialised tools covering flight operations and personalised services. Flight tools include real‑time flight status, flight search and booking, booking management, check‑in status and baggage allowances; personalised services include Miles & Smiles profile management, expiring miles tracking, promotions and city travel guides [oai_citation:52‡remote-mcp.com](https://www.remote-mcp.com/servers/turkish-airlines#:~:text=The%20Turkish%20Airlines%20MCP%20server,every%20aspect%20of%20air%20travel)."
+    description: "Turkish Airlines’ MCP server offers 14 specialised tools covering flight operations and personalised services. Flight tools include real‑time flight status, flight search and booking, booking management, check‑in status and baggage allowances; personalised services include Miles & Smiles profile management, expiring miles tracking, promotions and city travel guides."
     requires_api_key: false
     tags: ["travel", "airlines", "booking"]
     logo_url: "https://img.logo.dev/turkishairlines.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
