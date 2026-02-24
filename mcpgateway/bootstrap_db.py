@@ -157,6 +157,25 @@ async def bootstrap_default_roles() -> None:
                     "permissions": ["teams.join", "tools.read", "resources.read", "prompts.read"],
                     "is_system_role": True,
                 },
+                {
+                    "name": "client",
+                    "description": "Default role for SSO users with gateway, server, tool, and token access",
+                    "scope": "global",
+                    "permissions": [
+                        "gateways.read",
+                        "servers.read",
+                        "servers.use",
+                        "tools.read",
+                        "tools.execute",
+                        "tokens.create",
+                        "tokens.read",
+                        "resources.read",
+                        "prompts.read",
+                        "teams.read",
+                        "teams.join",
+                    ],
+                    "is_system_role": True,
+                },
             ]
 
             # Create default roles

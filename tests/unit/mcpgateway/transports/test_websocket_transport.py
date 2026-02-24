@@ -10,7 +10,7 @@ Tests for the MCP Gateway WebSocket transport implementation.
 # Standard
 import asyncio
 import logging
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 # Third-Party
 from fastapi import WebSocket, WebSocketDisconnect

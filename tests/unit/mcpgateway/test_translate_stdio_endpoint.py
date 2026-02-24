@@ -9,6 +9,7 @@ Authors: Manav Gupta
 Tests for StdIOEndpoint class modifications to support dynamic environment variables.
 """
 
+# Standard
 import asyncio
 import json
 import logging
@@ -17,6 +18,7 @@ import sys
 import tempfile
 from unittest.mock import Mock, patch
 
+# Third-Party
 import pytest
 
 # First-Party
@@ -279,7 +281,7 @@ sys.stdout.flush()
             "DEBUG": "false",
         }
 
-        endpoint = StdIOEndpoint( "jq -cMn env", pubsub, env_vars)
+        endpoint = StdIOEndpoint("jq -cMn env", pubsub, env_vars)
 
         await endpoint.start()
 

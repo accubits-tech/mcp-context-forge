@@ -8,9 +8,10 @@ Authors: Mihai Criveti
 Context plugin.
 """
 
+# First-Party
 from mcpgateway.plugins.framework import (
-    PluginContext,
     Plugin,
+    PluginContext,
     PromptPosthookPayload,
     PromptPosthookResult,
     PromptPrehookPayload,

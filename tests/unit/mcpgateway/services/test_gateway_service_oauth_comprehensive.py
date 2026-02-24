@@ -23,11 +23,11 @@ import pytest
 
 # First-Party
 from mcpgateway.db import Gateway as DbGateway
+from mcpgateway.schemas import ToolCreate
 from mcpgateway.services.gateway_service import (
     GatewayConnectionError,
     GatewayService,
 )
-from mcpgateway.schemas import ToolCreate
 
 
 def _make_execute_result(*, scalar=None, scalars_list=None):
@@ -397,7 +397,7 @@ class TestGatewayServiceOAuthComprehensive:
         with pytest.raises(GatewayConnectionError) as exc_info:
             # Simulate the actual OAuth error handling in _forward_request_to_gateway
             try:
-                access_token = await gateway_service.oauth_manager.get_access_token(mock_oauth_gateway.oauth_config)
+                await gateway_service.oauth_manager.get_access_token(mock_oauth_gateway.oauth_config)
             except Exception as oauth_error:
                 raise GatewayConnectionError(f"Failed to obtain OAuth token for gateway {mock_oauth_gateway.name}: {oauth_error}")
 
@@ -489,7 +489,7 @@ class TestGatewayServiceOAuthComprehensive:
             if getattr(mock_oauth_gateway, "auth_type", None) == "oauth" and mock_oauth_gateway.oauth_config:
                 grant_type = mock_oauth_gateway.oauth_config.get("grant_type", "client_credentials")
                 if grant_type == "client_credentials":
-                    access_token = await gateway_service.oauth_manager.get_access_token(mock_oauth_gateway.oauth_config)
+                    await gateway_service.oauth_manager.get_access_token(mock_oauth_gateway.oauth_config)
         except Exception as oauth_error:
             # Simulate logging and error collection
             warning_logged = True

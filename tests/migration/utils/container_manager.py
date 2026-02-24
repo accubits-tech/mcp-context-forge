@@ -202,7 +202,7 @@ class ContainerManager:
                     logger.warning(f"⚠️ Could not set permissions on {temp_dir}: {e}")
             except Exception as e:
                 logger.warning(f"⚠️ Could not set ownership on {temp_dir}: {e}")
-        db_path = Path(temp_dir) / db_file
+        Path(temp_dir) / db_file
 
         config = ContainerConfig(
             image=f"ghcr.io/ibm/mcp-context-forge:{version}",

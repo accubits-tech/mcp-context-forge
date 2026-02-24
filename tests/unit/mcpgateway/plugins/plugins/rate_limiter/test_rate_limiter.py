@@ -7,16 +7,11 @@ Authors: Mihai Criveti
 Tests for RateLimiterPlugin.
 """
 
+# Third-Party
 import pytest
 
-from mcpgateway.plugins.framework import (
-    GlobalContext,
-    PluginConfig,
-    PluginContext,
-    PromptHookType,
-    PromptPrehookPayload,
-    ToolHookType
-)
+# First-Party
+from mcpgateway.plugins.framework import GlobalContext, PluginConfig, PluginContext, PromptHookType, PromptPrehookPayload, ToolHookType
 from plugins.rate_limiter.rate_limiter import RateLimiterPlugin
 
 

@@ -1,22 +1,25 @@
 # -*- coding: utf-8 -*-
 """Workflow state generators for load testing."""
 
+# Standard
+from datetime import datetime, timedelta
 import random
 import secrets
-import uuid
-from datetime import datetime, timedelta
 from typing import Generator, List
+import uuid
 
+# Third-Party
 from sqlalchemy import text
 
+# First-Party
 from mcpgateway.db import (
     EmailTeamInvitation,
     EmailTeamJoinRequest,
-    TokenRevocation,
     OAuthToken,
+    TokenRevocation,
 )
 
-from ..utils.distributions import exponential_decay_temporal
+# Local
 from .base import BaseGenerator
 
 
@@ -172,7 +175,7 @@ class TokenRevocationGenerator(BaseGenerator):
             return
 
         user_result = self.db.execute(text("SELECT email FROM email_users ORDER BY created_at"))
-        user_emails = [row[0] for row in user_result.fetchall()]
+        [row[0] for row in user_result.fetchall()]
 
         revocation_rate = self.get_scale_config("token_revocation_rate", 0.05)
         tokens_to_revoke = random.sample(tokens, int(len(tokens) * revocation_rate))
@@ -185,13 +188,15 @@ class TokenRevocationGenerator(BaseGenerator):
                 jti=jti,
                 revoked_at=revoked_at,
                 revoked_by=user_email,  # Usually self-revoked
-                reason=random.choice([
-                    "User requested",
-                    "Security policy",
-                    "Token compromised",
-                    "Administrative action",
-                    None,
-                ]),
+                reason=random.choice(
+                    [
+                        "User requested",
+                        "Security policy",
+                        "Token compromised",
+                        "Administrative action",
+                        None,
+                    ]
+                ),
             )
 
 

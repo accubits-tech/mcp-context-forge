@@ -9,13 +9,13 @@ Tests for gRPC to MCP translation module.
 
 # Standard
 from unittest.mock import AsyncMock, MagicMock, patch
-import asyncio
 
 # Third-Party
 import pytest
 
 # Check if gRPC is available
 try:
+    # Third-Party
     import grpc  # noqa: F401
 
     GRPC_AVAILABLE = True
@@ -27,9 +27,9 @@ pytestmark = pytest.mark.skipif(not GRPC_AVAILABLE, reason="gRPC packages not in
 
 # First-Party
 from mcpgateway.translate_grpc import (
+    expose_grpc_via_sse,
     GrpcEndpoint,
     GrpcToMcpTranslator,
-    expose_grpc_via_sse,
 )
 
 
@@ -139,9 +139,7 @@ class TestGrpcEndpoint:
     @patch("mcpgateway.translate_grpc.grpc")
     @patch("mcpgateway.translate_grpc.reflection_pb2_grpc")
     @patch("mcpgateway.translate_grpc.reflection_pb2")
-    async def test_discover_services_success(
-        self, mock_reflection_pb2, mock_reflection_grpc, mock_grpc, endpoint
-    ):
+    async def test_discover_services_success(self, mock_reflection_pb2, mock_reflection_grpc, mock_grpc, endpoint):
         """Test successful service discovery."""
         # Setup mocks
         mock_channel = MagicMock()
@@ -165,11 +163,13 @@ class TestGrpcEndpoint:
 
         # Mock _discover_service_details to populate services
         with patch.object(endpoint, "_discover_service_details", new_callable=AsyncMock) as mock_details:
+
             async def populate_service(stub, service_name):
                 endpoint._services[service_name] = {
                     "name": service_name,
                     "methods": [],
                 }
+
             mock_details.side_effect = populate_service
 
             await endpoint._discover_services()
@@ -179,9 +179,7 @@ class TestGrpcEndpoint:
 
     @patch("mcpgateway.translate_grpc.grpc")
     @patch("mcpgateway.translate_grpc.reflection_pb2_grpc")
-    async def test_discover_services_skip_reflection_service(
-        self, mock_reflection_grpc, mock_grpc, endpoint
-    ):
+    async def test_discover_services_skip_reflection_service(self, mock_reflection_grpc, mock_grpc, endpoint):
         """Test that ServerReflection service is skipped."""
         mock_channel = MagicMock()
         endpoint._channel = mock_channel
@@ -207,11 +205,13 @@ class TestGrpcEndpoint:
 
         # Mock _discover_service_details to populate only non-reflection services
         with patch.object(endpoint, "_discover_service_details", new_callable=AsyncMock) as mock_details:
+
             async def populate_service(stub, service_name):
                 endpoint._services[service_name] = {
                     "name": service_name,
                     "methods": [],
                 }
+
             mock_details.side_effect = populate_service
 
             await endpoint._discover_services()
@@ -319,7 +319,7 @@ class TestGrpcToMcpTranslator:
                 "methods": [
                     {"name": "Method1", "input_type": ".test.Request1", "output_type": ".test.Response1"},
                     {"name": "Method2", "input_type": ".test.Request2", "output_type": ".test.Response2"},
-                ]
+                ],
             }
         }
         endpoint._pool = MagicMock()

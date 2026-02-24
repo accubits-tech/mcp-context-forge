@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """Association table generators for load testing."""
 
-import random
+# Standard
 from abc import abstractmethod
+import random
 from typing import Generator, List
 
+# Third-Party
 from sqlalchemy import text
 
+# Local
 from .base import BaseGenerator
 
 
@@ -16,7 +19,6 @@ class AssociationGenerator(BaseGenerator):
     @abstractmethod
     def get_table_name(self) -> str:
         """Get the database table name for this association."""
-        pass
 
     def run(self) -> dict:
         """Run the generator with custom table-based insertion."""
@@ -242,7 +244,7 @@ class ServerA2AAssociationGenerator(AssociationGenerator):
             self.logger.info("No A2A agents found - skipping A2A associations")
             return
 
-        min_agents = self.get_scale_config("a2a_agents_per_server_min", 0)
+        self.get_scale_config("a2a_agents_per_server_min", 0)
         max_agents = self.get_scale_config("a2a_agents_per_server_max", 3)
         avg_agents = self.get_scale_config("a2a_agents_per_server_avg", 1)
 

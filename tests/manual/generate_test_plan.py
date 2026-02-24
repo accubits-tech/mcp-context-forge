@@ -14,15 +14,18 @@ Usage:
     python3 generate_test_plan.py
 """
 
-import sys
-import yaml
+# Standard
 from pathlib import Path
+import sys
+
+# Third-Party
+import yaml
 
 try:
+    # Third-Party
     import openpyxl
-    from openpyxl.styles import PatternFill, Font
+    from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
-    from openpyxl.worksheet.table import Table, TableStyleInfo
 except ImportError:
     print("❌ Install: pip install openpyxl pyyaml")
     sys.exit(1)

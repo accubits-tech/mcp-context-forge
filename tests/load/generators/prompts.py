@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """Prompt generator for load testing."""
 
-import random
+# Standard
 from datetime import datetime
+import random
 from typing import Generator, List
 
+# First-Party
 from mcpgateway.db import Prompt
 
+# Local
 from ..utils.distributions import exponential_decay_temporal, normal_distribution
 from .base import BaseGenerator
 
@@ -65,13 +68,7 @@ class PromptGenerator(BaseGenerator):
                     name=name,
                     description=self.faker.sentence(),
                     template=f"Perform {category} on: {{input}}",
-                    argument_schema={
-                        "type": "object",
-                        "properties": {
-                            "input": {"type": "string", "description": "Input data"}
-                        },
-                        "required": ["input"]
-                    },
+                    argument_schema={"type": "object", "properties": {"input": {"type": "string", "description": "Input data"}}, "required": ["input"]},
                     created_by=user_email,
                     is_active=True,
                     tags=[],

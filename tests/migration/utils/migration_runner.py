@@ -432,7 +432,6 @@ class MigrationTestRunner:
 
             # Test that we can read from all main tables via API
             test_endpoints = ["tools", "servers", "gateways", "resources", "prompts"]
-            api_working = True
 
             for endpoint in test_endpoints:
                 try:

@@ -810,16 +810,14 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             # Normalize the gateway URL
             normalized_url = self.normalize_url(str(gateway.url))
 
-            decoded_auth_value = None
             if gateway.auth_value:
                 if isinstance(gateway.auth_value, str):
                     try:
-                        decoded_auth_value = decode_auth(gateway.auth_value)
+                        decode_auth(gateway.auth_value)
                     except Exception as e:
                         logger.warning(f"Failed to decode provided auth_value: {e}")
-                        decoded_auth_value = None
                 elif isinstance(gateway.auth_value, dict):
-                    decoded_auth_value = gateway.auth_value
+                    gateway.auth_value
 
             # NOTE: Duplicate URL+credentials check removed to allow gateway aliases.
             # Users can register the same gateway URL with different names for organizational purposes.

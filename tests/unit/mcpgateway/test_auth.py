@@ -686,3 +686,150 @@ class TestGetCurrentUser:
                         assert f"Generated token hash: {token_hash}" in caplog.text
                         assert "Found API token for user: api_user@example.com" in caplog.text
                         assert "API token authentication successful for email: api_user@example.com" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_keycloak_jwt_auto_creates_user(self):
+        """Test that a Keycloak JWT auto-creates a user when sso_auto_create_users is enabled."""
+        mock_db = MagicMock(spec=Session)
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="keycloak_jwt_token")
+
+        # Simulate Keycloak JWT payload (tagged by verify_jwt_token)
+        jwt_payload = {
+            "sub": "kc-user-id",
+            "email": "kc_user@example.com",
+            "name": "KC User",
+            "_auth_source": "keycloak",
+            "exp": (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp(),
+        }
+
+        # The user that will be "created"
+        created_user = EmailUser(
+            email="kc_user@example.com",
+            password_hash="hashed",
+            full_name="KC User",
+            is_admin=False,
+            is_active=True,
+            is_email_verified=True,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        with patch("mcpgateway.auth.verify_jwt_token", AsyncMock(return_value=jwt_payload)):
+            with patch("mcpgateway.auth.settings") as mock_settings:
+                mock_settings.sso_keycloak_email_claim = "email"
+                mock_settings.sso_auto_create_users = True
+                mock_settings.platform_admin_email = "admin@example.com"
+
+                with patch("mcpgateway.services.email_auth_service.EmailAuthService") as mock_auth_service_class:
+                    mock_auth_service = MagicMock()
+                    mock_auth_service.get_user_by_email = AsyncMock(return_value=None)  # User not found
+                    mock_auth_service.create_user = AsyncMock(return_value=created_user)
+                    mock_auth_service_class.return_value = mock_auth_service
+
+                    user = await get_current_user(credentials=credentials, db=mock_db)
+
+                    assert user.email == "kc_user@example.com"
+                    assert user.full_name == "KC User"
+                    mock_auth_service.create_user.assert_called_once()
+                    call_kwargs = mock_auth_service.create_user.call_args
+                    assert call_kwargs.kwargs["email"] == "kc_user@example.com"
+                    assert call_kwargs.kwargs["auth_provider"] == "keycloak"
+                    assert call_kwargs.kwargs["full_name"] == "KC User"
+                    assert call_kwargs.kwargs["is_admin"] is False
+
+    @pytest.mark.asyncio
+    async def test_keycloak_login_triggers_role_sync(self):
+        """Keycloak login calls KeycloakRoleMappingService.sync_roles_from_jwt."""
+        mock_db = MagicMock(spec=Session)
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="keycloak_jwt_token")
+
+        jwt_payload = {
+            "sub": "kc-user-id",
+            "email": "kc_sync@example.com",
+            "name": "KC Sync User",
+            "_auth_source": "keycloak",
+            "realm_access": {"roles": ["admin", "developer"]},
+            "exp": (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp(),
+        }
+
+        existing_user = EmailUser(
+            email="kc_sync@example.com",
+            password_hash="hashed",
+            full_name="KC Sync User",
+            is_admin=False,
+            is_active=True,
+            is_email_verified=True,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        with patch("mcpgateway.auth.verify_jwt_token", AsyncMock(return_value=jwt_payload)):
+            with patch("mcpgateway.auth.settings") as mock_settings:
+                mock_settings.sso_keycloak_email_claim = "email"
+                mock_settings.sso_auto_create_users = True
+                mock_settings.platform_admin_email = "admin@example.com"
+
+                with patch("mcpgateway.services.email_auth_service.EmailAuthService") as mock_auth_service_class:
+                    mock_auth_service = MagicMock()
+                    mock_auth_service.get_user_by_email = AsyncMock(return_value=existing_user)
+                    mock_auth_service_class.return_value = mock_auth_service
+
+                    with patch("mcpgateway.services.keycloak_role_mapping_service.KeycloakRoleMappingService") as mock_mapping_class:
+                        mock_mapping = MagicMock()
+                        mock_mapping.sync_roles_from_jwt = AsyncMock()
+                        mock_mapping_class.return_value = mock_mapping
+
+                        user = await get_current_user(credentials=credentials, db=mock_db)
+
+                        assert user.email == "kc_sync@example.com"
+                        mock_mapping_class.assert_called_once_with(mock_db)
+                        mock_mapping.sync_roles_from_jwt.assert_called_once_with(existing_user, jwt_payload)
+
+    @pytest.mark.asyncio
+    async def test_keycloak_role_sync_failure_doesnt_block_auth(self, caplog):
+        """Exception in role sync is logged but user is still returned."""
+        mock_db = MagicMock(spec=Session)
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="keycloak_jwt_token")
+
+        jwt_payload = {
+            "sub": "kc-user-id",
+            "email": "kc_fail@example.com",
+            "name": "KC Fail User",
+            "_auth_source": "keycloak",
+            "exp": (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp(),
+        }
+
+        existing_user = EmailUser(
+            email="kc_fail@example.com",
+            password_hash="hashed",
+            full_name="KC Fail User",
+            is_admin=False,
+            is_active=True,
+            is_email_verified=True,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        caplog.set_level(logging.WARNING, logger="mcpgateway.auth")
+
+        with patch("mcpgateway.auth.verify_jwt_token", AsyncMock(return_value=jwt_payload)):
+            with patch("mcpgateway.auth.settings") as mock_settings:
+                mock_settings.sso_keycloak_email_claim = "email"
+                mock_settings.sso_auto_create_users = True
+                mock_settings.platform_admin_email = "admin@example.com"
+
+                with patch("mcpgateway.services.email_auth_service.EmailAuthService") as mock_auth_service_class:
+                    mock_auth_service = MagicMock()
+                    mock_auth_service.get_user_by_email = AsyncMock(return_value=existing_user)
+                    mock_auth_service_class.return_value = mock_auth_service
+
+                    with patch("mcpgateway.services.keycloak_role_mapping_service.KeycloakRoleMappingService") as mock_mapping_class:
+                        mock_mapping = MagicMock()
+                        mock_mapping.sync_roles_from_jwt = AsyncMock(side_effect=RuntimeError("DB connection lost"))
+                        mock_mapping_class.return_value = mock_mapping
+
+                        user = await get_current_user(credentials=credentials, db=mock_db)
+
+                        # User is still returned despite the mapping failure
+                        assert user.email == "kc_fail@example.com"
+                        assert "Keycloak role mapping failed" in caplog.text

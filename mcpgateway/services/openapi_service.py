@@ -18,12 +18,11 @@ It handles:
 import json
 import re
 from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 # Third-Party
-import yaml
 from openapi_spec_validator import validate_spec
-from pydantic import ValidationError
+import yaml
 
 # First-Party
 from mcpgateway.schemas import ToolCreate
@@ -79,7 +78,7 @@ class OpenAPIService:
             # Validate OpenAPI specification
             await self._validate_openapi_spec(spec)
             logger.info(f"Successfully parsed OpenAPI spec with {len(spec.get('paths', {}))} endpoints")
-            
+
             return spec
 
         except yaml.YAMLError as e:
@@ -103,23 +102,17 @@ class OpenAPIService:
             version = spec.get("openapi", "")
             if not version:
                 raise OpenAPIValidationError("Missing 'openapi' version field")
-            
+
             if version not in self.supported_versions:
                 logger.warning(f"OpenAPI version {version} may not be fully supported")
 
             # Use openapi-spec-validator to validate
             validate_spec(spec)
-            
+
         except Exception as e:
             raise OpenAPIValidationError(f"OpenAPI specification validation failed: {str(e)}")
 
-    async def generate_tools_from_spec(
-        self, 
-        spec: Dict[str, Any], 
-        base_url: Optional[str] = None,
-        gateway_id: Optional[str] = None,
-        tags: Optional[List[str]] = None
-    ) -> List[ToolCreate]:
+    async def generate_tools_from_spec(self, spec: Dict[str, Any], base_url: Optional[str] = None, gateway_id: Optional[str] = None, tags: Optional[List[str]] = None) -> List[ToolCreate]:
         """Generate MCP Gateway tools from OpenAPI specification.
 
         Args:
@@ -136,39 +129,37 @@ class OpenAPIService:
         """
         try:
             tools = []
-            
+
             # Get base URL
             if not base_url:
                 base_url = self._get_base_url(spec)
                 logger.info(f"Extracted base URL from OpenAPI spec: {base_url}")
-            
+
             # Validate base URL has proper scheme
-            if not base_url.startswith(('http://', 'https://', 'ws://', 'wss://')):
+            if not base_url.startswith(("http://", "https://", "ws://", "wss://")):
                 error_msg = (
-                    f"Base URL '{base_url}' does not have a valid scheme. "
-                    "Please provide a base_url parameter with a valid scheme "
-                    "(http://, https://, ws://, or wss://) when calling this method."
+                    f"Base URL '{base_url}' does not have a valid scheme. " "Please provide a base_url parameter with a valid scheme " "(http://, https://, ws://, or wss://) when calling this method."
                 )
                 logger.error(error_msg)
                 raise OpenAPIParsingError(error_msg)
-            
+
             # Get global security schemes
             security_schemes = spec.get("components", {}).get("securitySchemes", {})
             global_security = spec.get("security", [])
-            
+
             # Parse paths and operations
             paths = spec.get("paths", {})
             for path, path_item in paths.items():
                 if not isinstance(path_item, dict):
                     continue
-                
+
                 for method, operation in path_item.items():
                     if method.startswith("x-") or not isinstance(operation, dict):
                         continue
-                    
+
                     if method.upper() not in ["GET", "POST", "PUT", "DELETE", "PATCH"]:
                         continue
-                    
+
                     tool = await self._create_tool_from_operation(
                         path=path,
                         method=method.upper(),
@@ -177,15 +168,15 @@ class OpenAPIService:
                         security_schemes=security_schemes,
                         global_security=global_security,
                         gateway_id=gateway_id,
-                        additional_tags=tags or []
+                        additional_tags=tags or [],
                     )
-                    
+
                     if tool:
                         tools.append(tool)
-            
+
             logger.info(f"Generated {len(tools)} tools from OpenAPI specification")
             return tools
-            
+
         except Exception as e:
             raise OpenAPIParsingError(f"Failed to generate tools: {str(e)}")
 
@@ -203,18 +194,18 @@ class OpenAPIService:
             server_url = servers[0].get("url", "")
             if server_url:
                 # Check if the server URL is relative (no scheme)
-                if not server_url.startswith(('http://', 'https://', 'ws://', 'wss://')):
+                if not server_url.startswith(("http://", "https://", "ws://", "wss://")):
                     # If it starts with //, it's protocol-relative - add https
-                    if server_url.startswith('//'):
+                    if server_url.startswith("//"):
                         return f"https:{server_url}"
                     # If it starts with /, it's host-relative - use localhost
-                    elif server_url.startswith('/'):
+                    elif server_url.startswith("/"):
                         return f"http://localhost{server_url}"
                     # Otherwise, assume it's a hostname without protocol
                     else:
                         return f"https://{server_url}"
                 return server_url
-        
+
         # Fallback to localhost for local development
         return "http://localhost"
 
@@ -227,7 +218,7 @@ class OpenAPIService:
         security_schemes: Dict[str, Any],
         global_security: List[Dict[str, Any]],
         gateway_id: Optional[str],
-        additional_tags: List[str]
+        additional_tags: List[str],
     ) -> Optional[ToolCreate]:
         """Create a tool from an OpenAPI operation.
 
@@ -250,36 +241,36 @@ class OpenAPIService:
             if not operation_id:
                 # Generate operation ID from path and method
                 operation_id = self._generate_operation_id(path, method)
-            
+
             # Sanitize tool name
-            tool_name = re.sub(r'[^a-zA-Z0-9_]', '_', operation_id)
-            
+            tool_name = re.sub(r"[^a-zA-Z0-9_]", "_", operation_id)
+
             # Build full URL
-            full_url = urljoin(base_url.rstrip('/') + '/', path.lstrip('/'))
-            
+            full_url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+
             # Validate that the constructed URL is absolute and has a valid scheme
-            if not full_url.startswith(('http://', 'https://', 'ws://', 'wss://')):
+            if not full_url.startswith(("http://", "https://", "ws://", "wss://")):
                 logger.error(f"Constructed URL '{full_url}' for operation {method} {path} does not have a valid scheme")
                 # Try to construct a proper URL with localhost fallback
-                if path.startswith('/'):
+                if path.startswith("/"):
                     full_url = f"http://localhost{path}"
                 else:
                     full_url = f"http://localhost/{path}"
                 logger.info(f"Using fallback URL: {full_url}")
-            
+
             # Generate description
             description = operation.get("summary") or operation.get("description") or f"{method} {path}"
-            
+
             # Generate input schema
             input_schema = await self._generate_input_schema(operation, path)
-            
+
             # Extract authentication
             auth = await self._extract_auth_from_operation(operation, security_schemes, global_security)
-            
+
             # Generate tags
             op_tags = operation.get("tags", [])
             all_tags = additional_tags + op_tags + ["openapi", "auto-generated"]
-            
+
             # Create annotations
             annotations = {
                 "title": operation.get("summary", tool_name),
@@ -287,12 +278,12 @@ class OpenAPIService:
                 "openapi_method": method,
                 "openapi_operation_id": operation_id,
                 "destructiveHint": method in ["DELETE", "POST", "PUT", "PATCH"],
-                "idempotentHint": method in ["GET", "PUT", "DELETE"]
+                "idempotentHint": method in ["GET", "PUT", "DELETE"],
             }
-            
+
             if operation.get("deprecated"):
                 annotations["deprecated"] = True
-            
+
             tool = ToolCreate(
                 name=tool_name,
                 url=full_url,
@@ -303,11 +294,11 @@ class OpenAPIService:
                 annotations=annotations,
                 auth=auth,
                 gateway_id=gateway_id,
-                tags=all_tags
+                tags=all_tags,
             )
-            
+
             return tool
-            
+
         except Exception as e:
             logger.error(f"Failed to create tool from operation {method} {path}: {str(e)}")
             return None
@@ -323,15 +314,15 @@ class OpenAPIService:
             Generated operation ID
         """
         # Remove path parameters and convert to camelCase
-        clean_path = re.sub(r'\{[^}]+\}', '', path)
-        path_parts = [part for part in clean_path.split('/') if part]
-        
+        clean_path = re.sub(r"\{[^}]+\}", "", path)
+        path_parts = [part for part in clean_path.split("/") if part]
+
         # Convert to camelCase
         if path_parts:
-            operation_id = method.lower() + ''.join(word.capitalize() for word in path_parts)
+            operation_id = method.lower() + "".join(word.capitalize() for word in path_parts)
         else:
-            operation_id = method.lower() + 'Root'
-        
+            operation_id = method.lower() + "Root"
+
         return operation_id
 
     async def _generate_input_schema(self, operation: Dict[str, Any], path: str) -> Dict[str, Any]:
@@ -344,45 +335,38 @@ class OpenAPIService:
         Returns:
             JSON schema for tool input
         """
-        schema = {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-        
+        schema = {"type": "object", "properties": {}, "required": []}
+
         # Handle parameters
         parameters = operation.get("parameters", [])
         for param in parameters:
             if not isinstance(param, dict):
                 continue
-            
+
             param_name = param.get("name")
             if not param_name:
                 continue
-            
+
             param_schema = param.get("schema", {"type": "string"})
             param_description = param.get("description", "")
             param_in = param.get("in", "query")
-            
+
             # Add parameter location to description
             if param_description:
                 param_description += f" ({param_in} parameter)"
             else:
                 param_description = f"{param_in} parameter"
-            
-            schema["properties"][param_name] = {
-                **param_schema,
-                "description": param_description
-            }
-            
+
+            schema["properties"][param_name] = {**param_schema, "description": param_description}
+
             if param.get("required", False):
                 schema["required"].append(param_name)
-        
+
         # Handle request body
         request_body = operation.get("requestBody")
         if request_body:
             content = request_body.get("content", {})
-            
+
             # Look for JSON content
             json_content = content.get("application/json") or content.get("application/json; charset=utf-8")
             if json_content:
@@ -392,38 +376,27 @@ class OpenAPIService:
                     if body_schema.get("type") == "object":
                         body_props = body_schema.get("properties", {})
                         schema["properties"].update(body_props)
-                        
+
                         # Add required fields
                         body_required = body_schema.get("required", [])
                         schema["required"].extend(body_required)
                     else:
                         # Add as a single 'body' parameter
-                        schema["properties"]["body"] = {
-                            **body_schema,
-                            "description": "Request body"
-                        }
-                        
+                        schema["properties"]["body"] = {**body_schema, "description": "Request body"}
+
                         if request_body.get("required", False):
                             schema["required"].append("body")
-        
+
         # Extract path parameters
-        path_params = re.findall(r'\{([^}]+)\}', path)
+        path_params = re.findall(r"\{([^}]+)\}", path)
         for param_name in path_params:
             if param_name not in schema["properties"]:
-                schema["properties"][param_name] = {
-                    "type": "string",
-                    "description": f"Path parameter: {param_name}"
-                }
+                schema["properties"][param_name] = {"type": "string", "description": f"Path parameter: {param_name}"}
                 schema["required"].append(param_name)
-        
+
         return schema
 
-    async def _extract_auth_from_operation(
-        self, 
-        operation: Dict[str, Any], 
-        security_schemes: Dict[str, Any], 
-        global_security: List[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
+    async def _extract_auth_from_operation(self, operation: Dict[str, Any], security_schemes: Dict[str, Any], global_security: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Extract authentication configuration from operation.
 
         Args:
@@ -436,44 +409,33 @@ class OpenAPIService:
         """
         # Check operation-level security first
         security = operation.get("security", global_security)
-        
+
         if not security:
             return None
-        
+
         # Take the first security requirement
         for security_req in security:
             if not security_req:  # Empty security requirement means no auth
                 continue
-                
+
             # Get the first security scheme
             scheme_name = next(iter(security_req.keys()), None)
             if not scheme_name or scheme_name not in security_schemes:
                 continue
-            
+
             scheme = security_schemes[scheme_name]
             scheme_type = scheme.get("type", "").lower()
-            
+
             if scheme_type == "http":
                 http_scheme = scheme.get("scheme", "").lower()
                 if http_scheme == "bearer":
-                    return {
-                        "auth_type": "bearer",
-                        "auth_value": "REPLACE_WITH_BEARER_TOKEN"
-                    }
+                    return {"auth_type": "bearer", "auth_value": "REPLACE_WITH_BEARER_TOKEN"}
                 elif http_scheme == "basic":
-                    return {
-                        "auth_type": "basic", 
-                        "username": "REPLACE_WITH_USERNAME",
-                        "password": "REPLACE_WITH_PASSWORD"
-                    }
+                    return {"auth_type": "basic", "username": "REPLACE_WITH_USERNAME", "password": "REPLACE_WITH_PASSWORD"}
             elif scheme_type == "apikey":
                 header_name = scheme.get("name", "X-API-Key")
-                return {
-                    "auth_type": "authheaders",
-                    "auth_header_key": header_name,
-                    "auth_header_value": "REPLACE_WITH_API_KEY"
-                }
-        
+                return {"auth_type": "authheaders", "auth_header_key": header_name, "auth_header_value": "REPLACE_WITH_API_KEY"}
+
         return None
 
     async def preview_tools(self, spec_content: Union[str, Dict[str, Any]], content_type: str = "json") -> List[Dict[str, Any]]:
@@ -492,7 +454,7 @@ class OpenAPIService:
         """
         spec = await self.parse_openapi_spec(spec_content, content_type)
         tools = await self.generate_tools_from_spec(spec)
-        
+
         # Convert to preview format
         previews = []
         for tool in tools:
@@ -507,8 +469,8 @@ class OpenAPIService:
                 "requires_auth": tool.auth is not None,
                 "auth_type": tool.auth.auth_type if tool.auth else None,
                 "parameter_count": len(tool.input_schema.get("properties", {})),
-                "required_parameters": tool.input_schema.get("required", [])
+                "required_parameters": tool.input_schema.get("required", []),
             }
             previews.append(preview)
-        
+
         return previews

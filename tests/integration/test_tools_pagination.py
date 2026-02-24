@@ -12,22 +12,22 @@ with correct metadata, links, and team-based access control.
 # Standard
 import os
 import tempfile
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 # Third-Party
+from _pytest.monkeypatch import MonkeyPatch
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from _pytest.monkeypatch import MonkeyPatch
 
 # First-Party
 from mcpgateway.auth import get_current_user
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.main import app, require_auth
-from mcpgateway.middleware.rbac import get_current_user_with_permissions, get_db as rbac_get_db
+from mcpgateway.middleware.rbac import get_current_user_with_permissions
+from mcpgateway.middleware.rbac import get_db as rbac_get_db
 
 # Local
 from tests.utils.rbac_mocks import patch_rbac_decorators, restore_rbac_decorators
@@ -43,10 +43,12 @@ def test_db_and_client():
     url = f"sqlite:///{path}"
 
     # Patch settings
+    # First-Party
     from mcpgateway.config import settings
 
     mp.setattr(settings, "database_url", url, raising=False)
 
+    # First-Party
     import mcpgateway.db as db_mod
     import mcpgateway.main as main_mod
 

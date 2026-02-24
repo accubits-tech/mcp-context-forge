@@ -10,13 +10,10 @@ import pytest
 # First-Party
 from mcpgateway.plugins.framework.hooks.http import (
     HttpAuthResolveUserPayload,
-    HttpAuthResolveUserResult,
     HttpHeaderPayload,
     HttpHookType,
     HttpPostRequestPayload,
-    HttpPostRequestResult,
     HttpPreRequestPayload,
-    HttpPreRequestResult,
 )
 from mcpgateway.plugins.framework.hooks.registry import get_hook_registry
 from mcpgateway.plugins.framework.models import PluginResult
@@ -278,10 +275,12 @@ class TestHttpAuthResolveUserPayload:
 
     def test_auth_resolve_payload_with_mtls_cert_header(self):
         """Test auth resolve payload with mTLS certificate header."""
-        headers = HttpHeaderPayload({
-            "X-SSL-Client-Cert": "-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----",
-            "X-SSL-Client-DN": "CN=user@example.com,O=Example Corp",
-        })
+        headers = HttpHeaderPayload(
+            {
+                "X-SSL-Client-Cert": "-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----",
+                "X-SSL-Client-DN": "CN=user@example.com,O=Example Corp",
+            }
+        )
 
         payload = HttpAuthResolveUserPayload(
             credentials=None,
@@ -382,6 +381,7 @@ class TestHttpResults:
 
     def test_result_with_violation(self):
         """Test result with a violation (blocking)."""
+        # First-Party
         from mcpgateway.plugins.framework.models import PluginViolation
 
         violation = PluginViolation(

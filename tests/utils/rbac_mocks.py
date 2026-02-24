@@ -19,8 +19,6 @@ barriers while preserving the ability to test RBAC functionality when needed.
 from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-# Third-Party
-
 
 def create_mock_user_context(
     email: str = "test@example.com",

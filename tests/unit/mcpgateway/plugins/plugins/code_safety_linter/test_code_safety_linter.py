@@ -7,8 +7,10 @@ Authors: Mihai Criveti
 Tests for CodeSafetyLinterPlugin.
 """
 
+# Third-Party
 import pytest
 
+# First-Party
 from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginConfig,

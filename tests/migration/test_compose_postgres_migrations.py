@@ -17,8 +17,6 @@ import time
 # Third-Party
 import pytest
 
-# Local
-
 logger = logging.getLogger(__name__)
 
 
@@ -106,7 +104,7 @@ class TestPostgreSQLMigrations:
 
             # Capture post-migration state
             logger.info("📋 Capturing post-migration state")
-            schema_after = container_manager.get_database_schema(postgres_container, "postgresql")
+            container_manager.get_database_schema(postgres_container, "postgresql")
             records_after = self._count_postgres_records(container_manager, gateway_container)
 
             logger.info(f"📊 Records after migration: {records_after}")
@@ -210,8 +208,6 @@ class TestPostgreSQLMigrations:
             # Simulate concurrent connections by running multiple operations
             logger.info("🔀 Simulating concurrent database operations")
 
-            concurrent_operations = []
-
             # Operation 1: Count records
             def count_operation():
                 return self._count_postgres_records(container_manager, gateway_container)
@@ -270,7 +266,7 @@ class TestPostgreSQLMigrations:
 
             # Capture initial state
             records_initial = self._count_postgres_records(container_manager, gateway_container)
-            schema_initial = container_manager.get_database_schema(postgres_container, "postgresql")
+            container_manager.get_database_schema(postgres_container, "postgresql")
 
             logger.info(f"📊 Initial state captured: {sum(records_initial.values())} records")
 
@@ -342,7 +338,7 @@ class TestPostgreSQLMigrations:
             self._seed_compose_test_data(container_manager, gateway_container, sample_test_data)
 
             records_v060 = self._count_postgres_records(container_manager, gateway_container)
-            schema_v060 = container_manager.get_database_schema(postgres_container, "postgresql")
+            container_manager.get_database_schema(postgres_container, "postgresql")
 
             logger.info(f"📊 Version 0.6.0 state: {sum(records_v060.values())} records")
 

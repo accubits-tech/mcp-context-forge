@@ -377,6 +377,13 @@ class Permissions:
     SERVERS_UPDATE = "servers.update"
     SERVERS_DELETE = "servers.delete"
     SERVERS_MANAGE = "servers.manage"
+    SERVERS_USE = "servers.use"
+
+    # Gateway permissions
+    GATEWAYS_CREATE = "gateways.create"
+    GATEWAYS_READ = "gateways.read"
+    GATEWAYS_UPDATE = "gateways.update"
+    GATEWAYS_DELETE = "gateways.delete"
 
     # Token permissions
     TOKENS_CREATE = "tokens.create"

@@ -6,25 +6,24 @@ Usage:
     python -m tests.load.cleanup --all --confirm
 """
 
+# Standard
 import argparse
 import logging
 import sys
 import time
-from pathlib import Path
 
+# Third-Party
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+# First-Party
 from mcpgateway.config import settings
 
+# Local
 from .utils.progress import ProgressTracker
 
-
 # Logger setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -102,13 +101,7 @@ def get_test_data_count(db, table: str, email_domain: str = "loadtest.example.co
         return 0
 
 
-def delete_test_data(
-    db,
-    table: str,
-    email_domain: str = "loadtest.example.com",
-    batch_size: int = 1000,
-    dry_run: bool = False
-) -> int:
+def delete_test_data(db, table: str, email_domain: str = "loadtest.example.com", batch_size: int = 1000, dry_run: bool = False) -> int:
     """Delete test data from a table.
 
     Args:
@@ -138,25 +131,13 @@ def delete_test_data(
         with ProgressTracker(count, f"Deleting {table}", "records") as progress:
             # Delete all matching records at once
             if table in ["email_users"]:
-                result = db.execute(
-                    text(f"DELETE FROM {table} WHERE email LIKE :domain"),
-                    {"domain": f"%{email_domain}"}
-                )
+                result = db.execute(text(f"DELETE FROM {table} WHERE email LIKE :domain"), {"domain": f"%{email_domain}"})
             elif table in ["email_api_tokens"]:
-                result = db.execute(
-                    text(f"DELETE FROM {table} WHERE user_email LIKE :domain"),
-                    {"domain": f"%{email_domain}"}
-                )
+                result = db.execute(text(f"DELETE FROM {table} WHERE user_email LIKE :domain"), {"domain": f"%{email_domain}"})
             elif table in ["email_teams"]:
-                result = db.execute(
-                    text(f"DELETE FROM {table} WHERE created_by LIKE :domain"),
-                    {"domain": f"%{email_domain}"}
-                )
+                result = db.execute(text(f"DELETE FROM {table} WHERE created_by LIKE :domain"), {"domain": f"%{email_domain}"})
             elif table in ["tools", "resources", "prompts", "servers"]:
-                result = db.execute(
-                    text(f"DELETE FROM {table} WHERE created_by LIKE :domain"),
-                    {"domain": f"%{email_domain}"}
-                )
+                result = db.execute(text(f"DELETE FROM {table} WHERE created_by LIKE :domain"), {"domain": f"%{email_domain}"})
             else:
                 # Delete all from table (assumes test environment)
                 result = db.execute(text(f"DELETE FROM {table}"))
@@ -213,50 +194,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument(
-        "--profile",
-        type=str,
-        choices=["small", "medium", "large", "production", "massive"],
-        help="Profile that was used for generation"
-    )
+    parser.add_argument("--profile", type=str, choices=["small", "medium", "large", "production", "massive"], help="Profile that was used for generation")
 
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Delete all test data (matches email domain)"
-    )
+    parser.add_argument("--all", action="store_true", help="Delete all test data (matches email domain)")
 
-    parser.add_argument(
-        "--truncate",
-        action="store_true",
-        help="Truncate all tables (DANGEROUS - deletes everything!)"
-    )
+    parser.add_argument("--truncate", action="store_true", help="Truncate all tables (DANGEROUS - deletes everything!)")
 
-    parser.add_argument(
-        "--confirm",
-        action="store_true",
-        help="Confirm deletion (required for safety)"
-    )
+    parser.add_argument("--confirm", action="store_true", help="Confirm deletion (required for safety)")
 
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be deleted without deleting"
-    )
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be deleted without deleting")
 
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=1000,
-        help="Batch delete size (default: 1000)"
-    )
+    parser.add_argument("--batch-size", type=int, default=1000, help="Batch delete size (default: 1000)")
 
-    parser.add_argument(
-        "--email-domain",
-        type=str,
-        default="loadtest.example.com",
-        help="Email domain for test data (default: loadtest.example.com)"
-    )
+    parser.add_argument("--email-domain", type=str, default="loadtest.example.com", help="Email domain for test data (default: loadtest.example.com)")
 
     args = parser.parse_args()
 
@@ -293,13 +243,13 @@ def main():
 
         elapsed_time = time.time() - start_time
 
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("Cleanup Summary")
-        print("="*80)
+        print("=" * 80)
         print(f"Duration: {elapsed_time:.2f} seconds")
         print(f"Records Deleted: {total_deleted:,}")
         print(f"Dry Run: {args.dry_run}")
-        print("="*80)
+        print("=" * 80)
 
         logger.info("Cleanup complete!")
         sys.exit(0)

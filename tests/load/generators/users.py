@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """User generator for load testing."""
 
-import hashlib
+# Standard
 from datetime import datetime
+import hashlib
 from typing import Generator, List
 
+# First-Party
 from mcpgateway.db import EmailUser
 
+# Local
 from ..utils.distributions import exponential_decay_temporal
 from .base import BaseGenerator
 
@@ -41,8 +44,8 @@ class UserGenerator(BaseGenerator):
 
         for i in range(count):
             email = f"user{i+1}@{self.email_domain}"
-            is_admin = (i < count * admin_percent / 100)
-            is_active = (i < count * active_percent / 100)
+            is_admin = i < count * admin_percent / 100
+            is_active = i < count * active_percent / 100
 
             user = EmailUser(
                 email=email,

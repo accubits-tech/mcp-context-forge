@@ -119,7 +119,7 @@ def test_server_header_removal_configurable():
     # Test with server header removal disabled
     with patch.multiple(settings, security_headers_enabled=True, remove_server_headers=False):
         client = TestClient(app)
-        response = client.get("/test")
+        client.get("/test")
 
         # Server headers should not be removed when disabled
         # Note: FastAPI/Starlette might not add these headers in test mode,

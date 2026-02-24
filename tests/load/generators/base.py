@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """Base generator class for all data generators."""
 
+# Standard
+from abc import ABC, abstractmethod
 import logging
 import time
-from abc import ABC, abstractmethod
 from typing import Any, Dict, Generator, List, Optional
 
+# Third-Party
 from faker import Faker
 from sqlalchemy.orm import Session
 
@@ -60,7 +62,6 @@ class BaseGenerator(ABC):
         Yields:
             Model instances ready to be inserted
         """
-        pass
 
     @abstractmethod
     def get_count(self) -> int:
@@ -69,7 +70,6 @@ class BaseGenerator(ABC):
         Returns:
             Expected number of records
         """
-        pass
 
     @abstractmethod
     def get_dependencies(self) -> List[str]:
@@ -78,7 +78,6 @@ class BaseGenerator(ABC):
         Returns:
             List of generator class names (e.g., ['UserGenerator', 'TeamGenerator'])
         """
-        pass
 
     def get_name(self) -> str:
         """Get the name of this generator.
@@ -103,7 +102,9 @@ class BaseGenerator(ABC):
             if records and isinstance(records[0], dict):
                 if not table_name:
                     raise ValueError("table_name required for dict-based inserts")
+                # Third-Party
                 from sqlalchemy import text
+
                 # Build bulk insert statement
                 columns = list(records[0].keys())
                 placeholders = ", ".join([f":{col}" for col in columns])
@@ -198,9 +199,7 @@ class BaseGenerator(ABC):
         # Log completion
         if self.progress_tracker:
             self.progress_tracker.log(
-                f"[green]✓[/green] Completed [cyan]{self.get_name()}[/cyan]: "
-                f"[yellow]{self.generated_count:,}[/yellow] records in [magenta]{duration:.2f}s[/magenta]",
-                style=""
+                f"[green]✓[/green] Completed [cyan]{self.get_name()}[/cyan]: " f"[yellow]{self.generated_count:,}[/yellow] records in [magenta]{duration:.2f}s[/magenta]", style=""
             )
             # Live display will auto-refresh the log
         else:

@@ -23,8 +23,8 @@ import jwt
 import pytest
 
 # First-Party
-from mcpgateway.config import settings
 from mcpgateway.common.models import InitializeResult, ResourceContent, ServerCapabilities
+from mcpgateway.config import settings
 from mcpgateway.schemas import (
     PromptRead,
     ResourceRead,
@@ -198,8 +198,6 @@ def test_client(app):
 
     # Third-Party
     from fastapi import HTTPException, status
-
-    # First-Party
 
     # Create a mock that validates JWT tokens properly
     async def mock_require_auth_override(auth_header=None, jwt_token=None):
@@ -691,6 +689,7 @@ class TestResourceEndpoints:
     def test_read_resource_endpoint(self, mock_read_resource, test_client, auth_headers):
         """Test reading resource content."""
         # Clear the resource cache to avoid stale/cached values
+        # First-Party
         from mcpgateway import main as mcpgateway_main
 
         mcpgateway_main.resource_cache.clear()

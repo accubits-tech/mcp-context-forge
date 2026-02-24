@@ -6,25 +6,25 @@ Usage:
     python -m tests.load.verify --checks foreign_keys,uniqueness
 """
 
+# Standard
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
+import sys
 
+# Third-Party
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+# First-Party
 from mcpgateway.config import settings
 
+# Local
 from .utils.validation import DataValidator
 
-
 # Logger setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -46,30 +46,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument(
-        "--profile",
-        type=str,
-        choices=["small", "medium", "large", "production", "massive"],
-        help="Profile to verify"
-    )
+    parser.add_argument("--profile", type=str, choices=["small", "medium", "large", "production", "massive"], help="Profile to verify")
 
-    parser.add_argument(
-        "--checks",
-        type=str,
-        help="Comma-separated list of checks (foreign_keys,uniqueness,required_fields,email_formats)"
-    )
+    parser.add_argument("--checks", type=str, help="Comma-separated list of checks (foreign_keys,uniqueness,required_fields,email_formats)")
 
-    parser.add_argument(
-        "--output",
-        type=str,
-        help="Output report path (JSON)"
-    )
+    parser.add_argument("--output", type=str, help="Output report path (JSON)")
 
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Verbose output"
-    )
+    parser.add_argument("--verbose", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
 
@@ -93,9 +76,9 @@ def main():
         results["table_counts"] = table_counts
 
         # Print results
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("Verification Results")
-        print("="*80)
+        print("=" * 80)
 
         for check_name, check_result in results.items():
             if check_name in ["all_passed", "table_counts"]:
@@ -111,23 +94,23 @@ def main():
                 if "error" in check_result:
                     print(f"  Error: {check_result['error']}")
 
-        print("\n" + "-"*80)
+        print("\n" + "-" * 80)
         print("Table Counts:")
-        print("-"*80)
+        print("-" * 80)
         for table, count in sorted(table_counts.items()):
             print(f"  {table:40s} {count:>15,}")
 
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         overall = "✓ ALL CHECKS PASSED" if results.get("all_passed", False) else "✗ SOME CHECKS FAILED"
         print(f"Overall: {overall}")
-        print("="*80)
+        print("=" * 80)
 
         # Save report
         if args.output:
             output_file = Path(args.output)
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(output_file, 'w') as f:
+            with open(output_file, "w") as f:
                 json.dump(results, f, indent=2, default=str)
 
             logger.info(f"Report saved to: {output_file}")

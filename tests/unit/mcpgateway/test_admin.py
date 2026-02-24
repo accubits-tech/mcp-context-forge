@@ -1486,7 +1486,10 @@ class TestAdminUIRoute:
         mock_db,
     ):
         """Test admin UI when some services fail."""
+        # Standard
         from unittest.mock import patch
+
+        # Third-Party
         from fastapi.responses import HTMLResponse
 
         # Some services succeed
@@ -1854,6 +1857,7 @@ class TestA2AAgentManagement:
 
         result = await admin_add_a2a_agent(mock_request, mock_db, "test-user")
 
+        # Third-Party
         from starlette.responses import JSONResponse
 
         assert isinstance(result, JSONResponse)

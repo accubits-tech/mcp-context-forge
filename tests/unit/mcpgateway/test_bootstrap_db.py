@@ -643,6 +643,7 @@ class TestModuleLevel:
 
     def test_module_imports(self):
         """Test that module imports work correctly."""
+        # First-Party
         from mcpgateway.bootstrap_db import Base, logger, logging_service
 
         assert logging_service is not None
@@ -654,6 +655,7 @@ class TestModuleLevel:
     def test_main_entrypoint(self):
         """Test that main can be called as a module."""
         # Just verify the module structure is correct
+        # First-Party
         from mcpgateway.bootstrap_db import main
 
         assert asyncio.iscoroutinefunction(main)

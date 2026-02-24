@@ -16,14 +16,13 @@ This module tests pagination functionality including:
 
 # Standard
 import base64
-import json
 from datetime import datetime, timezone
-from typing import Any, Dict
+import json
 from unittest.mock import MagicMock
 
 # Third-Party
-import pytest
 from fastapi import Request
+import pytest
 from sqlalchemy import select
 
 # First-Party
@@ -190,6 +189,7 @@ class TestPaginationLinks:
         )
 
         # The cursor will be URL-encoded, so check for the decoded value
+        # Standard
         from urllib.parse import unquote
 
         assert cursor in unquote(links.self)
@@ -655,11 +655,10 @@ class TestPaginationSchemas:
 def db_session():
     """Create a test database session."""
     # Standard
-    from unittest.mock import MagicMock
 
     # Third-Party
     from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session, sessionmaker
+    from sqlalchemy.orm import sessionmaker
 
     # First-Party
     from mcpgateway.db import Base

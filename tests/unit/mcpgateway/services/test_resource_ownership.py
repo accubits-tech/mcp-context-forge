@@ -16,14 +16,14 @@ import pytest
 from sqlalchemy.orm import Session
 
 # First-Party
-from mcpgateway.db import Gateway, Server, Tool, Resource, Prompt, A2AAgent
-from mcpgateway.services.permission_service import PermissionService
+from mcpgateway.db import A2AAgent, Gateway, Prompt, Resource, Server, Tool
+from mcpgateway.services.a2a_service import A2AAgentService
 from mcpgateway.services.gateway_service import GatewayService
+from mcpgateway.services.permission_service import PermissionService
+from mcpgateway.services.prompt_service import PromptService
+from mcpgateway.services.resource_service import ResourceService
 from mcpgateway.services.server_service import ServerService
 from mcpgateway.services.tool_service import ToolService
-from mcpgateway.services.resource_service import ResourceService
-from mcpgateway.services.prompt_service import PromptService
-from mcpgateway.services.a2a_service import A2AAgentService
 
 
 @pytest.fixture
@@ -345,6 +345,7 @@ class TestUpdateOperationsOwnership:
     @pytest.mark.asyncio
     async def test_update_gateway_non_owner_denied(self, gateway_service, mock_db_session):
         """Test non-owner cannot update gateway."""
+        # First-Party
         from mcpgateway.schemas import GatewayUpdate
 
         mock_gateway = MagicMock(spec=Gateway)

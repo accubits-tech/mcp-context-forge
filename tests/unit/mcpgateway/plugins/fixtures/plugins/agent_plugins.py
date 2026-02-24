@@ -8,23 +8,21 @@ Test agent plugins for unit testing.
 """
 
 # First-Party
-from mcpgateway.common.models import Message, Role, TextContent
+from mcpgateway.common.models import TextContent
 from mcpgateway.plugins.framework import (
-    Plugin,
-    PluginContext,
-    AgentPreInvokePayload,
-    AgentPreInvokeResult,
     AgentPostInvokePayload,
     AgentPostInvokeResult,
+    AgentPreInvokePayload,
+    AgentPreInvokeResult,
+    Plugin,
+    PluginContext,
 )
 
 
 class PassThroughAgentPlugin(Plugin):
     """A simple pass-through agent plugin that doesn't modify anything."""
 
-    async def agent_pre_invoke(
-        self, payload: AgentPreInvokePayload, context: PluginContext
-    ) -> AgentPreInvokeResult:
+    async def agent_pre_invoke(self, payload: AgentPreInvokePayload, context: PluginContext) -> AgentPreInvokeResult:
         """Pass through without modification.
 
         Args:
@@ -36,9 +34,7 @@ class PassThroughAgentPlugin(Plugin):
         """
         return AgentPreInvokeResult(continue_processing=True)
 
-    async def agent_post_invoke(
-        self, payload: AgentPostInvokePayload, context: PluginContext
-    ) -> AgentPostInvokeResult:
+    async def agent_post_invoke(self, payload: AgentPostInvokePayload, context: PluginContext) -> AgentPostInvokeResult:
         """Pass through without modification.
 
         Args:
@@ -54,9 +50,7 @@ class PassThroughAgentPlugin(Plugin):
 class MessageFilterAgentPlugin(Plugin):
     """An agent plugin that filters messages containing blocked words."""
 
-    async def agent_pre_invoke(
-        self, payload: AgentPreInvokePayload, context: PluginContext
-    ) -> AgentPreInvokeResult:
+    async def agent_pre_invoke(self, payload: AgentPreInvokePayload, context: PluginContext) -> AgentPreInvokeResult:
         """Filter messages containing blocked words.
 
         Args:
@@ -80,14 +74,11 @@ class MessageFilterAgentPlugin(Plugin):
 
         # If all messages were blocked, return violation
         if not filtered_messages and payload.messages:
+            # First-Party
             from mcpgateway.plugins.framework import PluginViolation
+
             return AgentPreInvokeResult(
-                continue_processing=False,
-                violation=PluginViolation(
-                    code="BLOCKED_CONTENT",
-                    reason="All messages contained blocked content",
-                    description="This is a test of content blocking"
-                )
+                continue_processing=False, violation=PluginViolation(code="BLOCKED_CONTENT", reason="All messages contained blocked content", description="This is a test of content blocking")
             )
 
         # Return modified payload if messages were filtered
@@ -99,15 +90,13 @@ class MessageFilterAgentPlugin(Plugin):
                 headers=payload.headers,
                 model=payload.model,
                 system_prompt=payload.system_prompt,
-                parameters=payload.parameters
+                parameters=payload.parameters,
             )
             return AgentPreInvokeResult(modified_payload=modified_payload)
 
         return AgentPreInvokeResult(continue_processing=True)
 
-    async def agent_post_invoke(
-        self, payload: AgentPostInvokePayload, context: PluginContext
-    ) -> AgentPostInvokeResult:
+    async def agent_post_invoke(self, payload: AgentPostInvokePayload, context: PluginContext) -> AgentPostInvokeResult:
         """Filter response messages containing blocked words.
 
         Args:
@@ -131,23 +120,16 @@ class MessageFilterAgentPlugin(Plugin):
 
         # If all messages were blocked, return violation
         if not filtered_messages and payload.messages:
+            # First-Party
             from mcpgateway.plugins.framework import PluginViolation
+
             return AgentPostInvokeResult(
-                continue_processing=False,
-                violation=PluginViolation(
-                    code="BLOCKED_CONTENT",
-                    reason="All response messages contained blocked content",
-                    description="This is a test of content blocking"
-                )
+                continue_processing=False, violation=PluginViolation(code="BLOCKED_CONTENT", reason="All response messages contained blocked content", description="This is a test of content blocking")
             )
 
         # Return modified payload if messages were filtered
         if len(filtered_messages) != len(payload.messages):
-            modified_payload = AgentPostInvokePayload(
-                agent_id=payload.agent_id,
-                messages=filtered_messages,
-                tool_calls=payload.tool_calls
-            )
+            modified_payload = AgentPostInvokePayload(agent_id=payload.agent_id, messages=filtered_messages, tool_calls=payload.tool_calls)
             return AgentPostInvokeResult(modified_payload=modified_payload)
 
         return AgentPostInvokeResult(continue_processing=True)
@@ -156,9 +138,7 @@ class MessageFilterAgentPlugin(Plugin):
 class ContextTrackingAgentPlugin(Plugin):
     """An agent plugin that tracks state in local context."""
 
-    async def agent_pre_invoke(
-        self, payload: AgentPreInvokePayload, context: PluginContext
-    ) -> AgentPreInvokeResult:
+    async def agent_pre_invoke(self, payload: AgentPreInvokePayload, context: PluginContext) -> AgentPreInvokeResult:
         """Track invocation count in local context.
 
         Args:
@@ -175,9 +155,7 @@ class ContextTrackingAgentPlugin(Plugin):
 
         return AgentPreInvokeResult(continue_processing=True)
 
-    async def agent_post_invoke(
-        self, payload: AgentPostInvokePayload, context: PluginContext
-    ) -> AgentPostInvokeResult:
+    async def agent_post_invoke(self, payload: AgentPostInvokePayload, context: PluginContext) -> AgentPostInvokeResult:
         """Verify context persists from pre-invoke.
 
         Args:

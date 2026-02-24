@@ -7,8 +7,11 @@ Authors: Mihai Criveti
 Tests for ClamAVRemotePlugin (direct import, eicar_only mode).
 """
 
+# Third-Party
 import pytest
 
+# First-Party
+from mcpgateway.common.models import Message, PromptResult, ResourceContent, TextContent
 from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginConfig,
@@ -17,11 +20,7 @@ from mcpgateway.plugins.framework import (
     ResourcePostFetchPayload,
     ResourcePreFetchPayload,
 )
-from mcpgateway.common.models import ResourceContent
-from mcpgateway.common.models import Message, PromptResult, Role, TextContent
-
 from plugins.external.clamav_server.clamav_plugin import ClamAVRemotePlugin
-
 
 EICAR = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 
@@ -78,6 +77,7 @@ async def test_non_blocking_mode_reports_metadata(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_post_fetch_blocks_on_eicar_text():
     plugin = _mk_plugin(True)
+    # First-Party
     from mcpgateway.plugins.framework import PromptPosthookPayload
 
     pr = PromptResult(
@@ -98,6 +98,7 @@ async def test_prompt_post_fetch_blocks_on_eicar_text():
 @pytest.mark.asyncio
 async def test_tool_post_invoke_blocks_on_eicar_string():
     plugin = _mk_plugin(True)
+    # First-Party
     from mcpgateway.plugins.framework import ToolPostInvokePayload
 
     ctx = PluginContext(global_context=GlobalContext(request_id="r5"))
@@ -119,6 +120,7 @@ async def test_health_stats_counters():
     await plugin.resource_post_fetch(payload_r, ctx)
 
     # 2) prompt_post_fetch with EICAR -> attempted +1, infected +1 (total attempted=2, infected=2)
+    # First-Party
     from mcpgateway.plugins.framework import PromptPosthookPayload
 
     pr = PromptResult(
@@ -133,6 +135,7 @@ async def test_health_stats_counters():
     await plugin.prompt_post_fetch(payload_p, ctx)
 
     # 3) tool_post_invoke with one EICAR and one clean string -> attempted +2, infected +1
+    # First-Party
     from mcpgateway.plugins.framework import ToolPostInvokePayload
 
     payload_t = ToolPostInvokePayload(name="t", result={"a": EICAR, "b": "clean"})

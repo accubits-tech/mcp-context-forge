@@ -166,7 +166,7 @@ class TestPersonalTeamService:
             mock_team.id = "special-team-id"
             MockTeam.return_value = mock_team
 
-            result = await service.create_personal_team(user)
+            await service.create_personal_team(user)
 
             # Verify slug generation handles special characters
             MockTeam.assert_called_once()

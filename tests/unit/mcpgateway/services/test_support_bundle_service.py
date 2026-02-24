@@ -17,9 +17,9 @@ import pytest
 
 # First-Party
 from mcpgateway.services.support_bundle_service import (
+    create_support_bundle,
     SupportBundleConfig,
     SupportBundleService,
-    create_support_bundle,
 )
 
 

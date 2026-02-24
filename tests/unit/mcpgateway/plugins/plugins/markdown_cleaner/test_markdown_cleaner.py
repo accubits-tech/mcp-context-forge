@@ -7,8 +7,10 @@ Authors: Mihai Criveti
 Tests for MarkdownCleanerPlugin.
 """
 
+# Third-Party
 import pytest
 
+# First-Party
 from mcpgateway.common.models import Message, PromptResult, TextContent
 from mcpgateway.plugins.framework import (
     GlobalContext,

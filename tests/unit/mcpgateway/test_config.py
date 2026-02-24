@@ -13,9 +13,9 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+# Third-Party
 from pydantic import SecretStr
 
-# Third-Party
 # Third-party
 import pytest
 
@@ -198,6 +198,7 @@ def test_compression_minimum_size_validation():
     assert s.compression_minimum_size == 0
 
     # Invalid: negative values should fail
+    # Third-Party
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as exc_info:
@@ -207,6 +208,7 @@ def test_compression_minimum_size_validation():
 
 def test_compression_gzip_level_validation():
     """Test that gzip level validates 1-9 range."""
+    # Third-Party
     from pydantic import ValidationError
 
     # Valid range
@@ -227,6 +229,7 @@ def test_compression_gzip_level_validation():
 
 def test_compression_brotli_quality_validation():
     """Test that brotli quality validates 0-11 range."""
+    # Third-Party
     from pydantic import ValidationError
 
     # Valid range
@@ -247,6 +250,7 @@ def test_compression_brotli_quality_validation():
 
 def test_compression_zstd_level_validation():
     """Test that zstd level validates 1-22 range."""
+    # Third-Party
     from pydantic import ValidationError
 
     # Valid range

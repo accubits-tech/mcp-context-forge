@@ -17,9 +17,8 @@ from sqlalchemy.orm import Session
 
 # First-Party
 from mcpgateway.common.models import ResourceContent
-from mcpgateway.services.resource_service import ResourceNotFoundError, ResourceService
 from mcpgateway.plugins.framework import PluginError, PluginErrorModel, PluginViolation, PluginViolationError
-
+from mcpgateway.services.resource_service import ResourceNotFoundError, ResourceService
 
 
 class TestResourceServicePluginIntegration:
@@ -48,12 +47,7 @@ class TestResourceServicePluginIntegration:
                 mock_manager._initialized = False
                 mock_manager.initialize = AsyncMock()
                 # Add default invoke_hook mock that returns success
-                mock_manager.invoke_hook = AsyncMock(
-                    return_value=(
-                        PluginResult(continue_processing=True, modified_payload=None),
-                        None  # contexts
-                    )
-                )
+                mock_manager.invoke_hook = AsyncMock(return_value=(PluginResult(continue_processing=True, modified_payload=None), None))  # contexts
                 MockPluginManager.return_value = mock_manager
                 service = ResourceService()
                 service._plugin_manager = mock_manager
@@ -65,11 +59,11 @@ class TestResourceServicePluginIntegration:
         # Setup mock resource
         mock_resource = MagicMock()
         mock_resource.content = ResourceContent(
-                type="resource",
-                id="test://resource",
-                uri="test://resource",
-                text="Test content",
-            )
+            type="resource",
+            id="test://resource",
+            uri="test://resource",
+            text="Test content",
+        )
         mock_db.execute.return_value.scalar_one_or_none.return_value = mock_resource
 
         result = await resource_service.read_resource(mock_db, "test://resource")
@@ -82,8 +76,8 @@ class TestResourceServicePluginIntegration:
         """Test read_resource with pre-fetch hook execution."""
         # First-Party
         from mcpgateway.plugins.framework import ResourceHookType
-
         import mcpgateway.services.resource_service as resource_service_mod
+
         resource_service_mod.PLUGINS_AVAILABLE = True
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager
@@ -121,7 +115,9 @@ class TestResourceServicePluginIntegration:
     @pytest.mark.asyncio
     async def test_read_resource_blocked_by_plugin(self, resource_service_with_plugins, mock_db):
         """Test read_resource blocked by pre-fetch hook."""
+        # First-Party
         import mcpgateway.services.resource_service as resource_service_mod
+
         resource_service_mod.PLUGINS_AVAILABLE = True
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager
@@ -140,13 +136,9 @@ class TestResourceServicePluginIntegration:
 
         # Setup invoke_hook to raise PluginViolationError
         mock_manager.invoke_hook = AsyncMock(
-            side_effect=PluginViolationError(message="Protocol not allowed",
-                violation=PluginViolation(
-                    reason="Protocol not allowed",
-                    code="PROTOCOL_BLOCKED",
-                    description="file:// protocol is blocked",
-                    details={"protocol": "file", "uri": "file:///etc/passwd"}
-                ),
+            side_effect=PluginViolationError(
+                message="Protocol not allowed",
+                violation=PluginViolation(reason="Protocol not allowed", code="PROTOCOL_BLOCKED", description="file:// protocol is blocked", details={"protocol": "file", "uri": "file:///etc/passwd"}),
             ),
         )
 
@@ -160,8 +152,8 @@ class TestResourceServicePluginIntegration:
     async def test_read_resource_uri_modified_by_plugin(self, resource_service_with_plugins, mock_db):
         """Test read_resource with URI modification by plugin."""
         # First-Party
-        from mcpgateway.plugins.framework.models import PluginResult
         from mcpgateway.plugins.framework import ResourceHookType
+        from mcpgateway.plugins.framework.models import PluginResult
 
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager
@@ -169,11 +161,11 @@ class TestResourceServicePluginIntegration:
         # Setup mock resources
         mock_resource = MagicMock()
         mock_resource.content = ResourceContent(
-                type="resource",
-                id="cached://test://resource",
-                uri="cached://test://resource",
-                text="Cached content",
-            )
+            type="resource",
+            id="cached://test://resource",
+            uri="cached://test://resource",
+            text="Cached content",
+        )
 
         # First call returns None (original URI), second returns the cached resource
         mock_db.execute.return_value.scalar_one_or_none.side_effect = [mock_resource]
@@ -213,10 +205,10 @@ class TestResourceServicePluginIntegration:
     async def test_read_resource_content_filtered_by_plugin(self, resource_service_with_plugins, mock_db):
         """Test read_resource with content filtering by post-fetch hook."""
         # First-Party
-        from mcpgateway.plugins.framework.models import PluginResult
         from mcpgateway.plugins.framework import ResourceHookType
-
+        from mcpgateway.plugins.framework.models import PluginResult
         import mcpgateway.services.resource_service as resource_service_mod
+
         resource_service_mod.PLUGINS_AVAILABLE = True
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager
@@ -225,15 +217,17 @@ class TestResourceServicePluginIntegration:
         mock_resource = MagicMock()
         original_content = ResourceContent(
             type="resource",
-            id ="original-1",
+            id="original-1",
             uri="test://config",
             text="password: mysecret123\napi_key: sk-12345",
         )
         mock_resource.content = original_content
         mock_resource.uri = "test://config"  # Ensure uri is set at the top level
+
         # Return the mock resource for both original and filtered id lookups
         def scalar_one_or_none_side_effect(*args, **kwargs):
             return mock_resource
+
         mock_db.execute.return_value.scalar_one_or_none.side_effect = scalar_one_or_none_side_effect
         mock_db.get.return_value = mock_resource
 
@@ -278,7 +272,9 @@ class TestResourceServicePluginIntegration:
     @pytest.mark.asyncio
     async def test_read_resource_plugin_error_handling(self, resource_service_with_plugins, mock_db):
         """Test read_resource handles plugin errors gracefully."""
+        # First-Party
         import mcpgateway.services.resource_service as resource_service_mod
+
         resource_service_mod.PLUGINS_AVAILABLE = True
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager
@@ -302,17 +298,16 @@ class TestResourceServicePluginIntegration:
         with pytest.raises(PluginError) as exc_info:
             await service.read_resource(mock_db, resource_id)
 
-
         mock_manager.invoke_hook.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_read_resource_post_fetch_blocking(self, resource_service_with_plugins, mock_db):
         """Test read_resource blocked by post-fetch hook."""
         # First-Party
-        from mcpgateway.plugins.framework.models import PluginResult
         from mcpgateway.plugins.framework import ResourceHookType
-
+        from mcpgateway.plugins.framework.models import PluginResult
         import mcpgateway.services.resource_service as resource_service_mod
+
         resource_service_mod.PLUGINS_AVAILABLE = True
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager
@@ -320,11 +315,11 @@ class TestResourceServicePluginIntegration:
         # Setup mock resource
         mock_resource = MagicMock()
         mock_resource.content = ResourceContent(
-                type="resource",
-                id="test://resource",
-                uri="test://resource",
-                text="Sensitive content",
-            )
+            type="resource",
+            id="test://resource",
+            uri="test://resource",
+            text="Sensitive content",
+        )
         mock_resource.uri = "test://resource"  # Ensure uri is set at the top level
         mock_db.execute.return_value.scalar_one_or_none.return_value = mock_resource
         mock_db.get.return_value = mock_resource  # Ensure resource_db is not None
@@ -343,8 +338,8 @@ class TestResourceServicePluginIntegration:
                     reason="Content contains sensitive data",
                     description="The resource content was flagged as containing sensitive information",
                     code="SENSITIVE_CONTENT",
-                    details={"uri": "test://resource"}
-                )
+                    details={"uri": "test://resource"},
+                ),
             )
 
         mock_manager.invoke_hook = AsyncMock(side_effect=invoke_hook_side_effect)
@@ -359,7 +354,9 @@ class TestResourceServicePluginIntegration:
     @pytest.mark.asyncio
     async def test_read_resource_with_template(self, resource_service_with_plugins, mock_db):
         """Test read_resource with template resource and plugins."""
+        # First-Party
         import mcpgateway.services.resource_service as resource_service_mod
+
         resource_service_mod.PLUGINS_AVAILABLE = True
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager
@@ -391,10 +388,10 @@ class TestResourceServicePluginIntegration:
     async def test_read_resource_context_propagation(self, resource_service_with_plugins, mock_db):
         """Test context propagation from pre-fetch to post-fetch."""
         # First-Party
-        from mcpgateway.plugins.framework.models import PluginResult
         from mcpgateway.plugins.framework import ResourceHookType
-
+        from mcpgateway.plugins.framework.models import PluginResult
         import mcpgateway.services.resource_service as resource_service_mod
+
         resource_service_mod.PLUGINS_AVAILABLE = True
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager
@@ -478,7 +475,9 @@ class TestResourceServicePluginIntegration:
     @pytest.mark.asyncio
     async def test_read_resource_no_request_id(self, resource_service_with_plugins, mock_db):
         """Test read_resource generates request_id if not provided."""
+        # First-Party
         import mcpgateway.services.resource_service as resource_service_mod
+
         resource_service_mod.PLUGINS_AVAILABLE = True
         service = resource_service_with_plugins
         mock_manager = service._plugin_manager

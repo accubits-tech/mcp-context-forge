@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
 """Statistical distribution utilities for realistic data generation."""
 
-import random
+# Standard
 from datetime import datetime, timedelta
+import random
 from typing import List, Optional
 
+# Third-Party
 import numpy as np
 
 
-def power_law_distribution(
-    n_samples: int,
-    min_value: int,
-    max_value: int,
-    alpha: float = 2.5
-) -> List[int]:
+def power_law_distribution(n_samples: int, min_value: int, max_value: int, alpha: float = 2.5) -> List[int]:
     """Generate values following a power law distribution.
 
     Power law creates a distribution where few items have high values
@@ -40,11 +37,7 @@ def power_law_distribution(
     return samples.tolist()
 
 
-def zipf_distribution(
-    n_samples: int,
-    n_items: int,
-    alpha: float = 1.5
-) -> List[int]:
+def zipf_distribution(n_samples: int, n_items: int, alpha: float = 1.5) -> List[int]:
     """Generate item indices following Zipf's law.
 
     Zipf's law creates access patterns where some items are accessed
@@ -67,12 +60,7 @@ def zipf_distribution(
     return samples.tolist()
 
 
-def exponential_decay_temporal(
-    n_samples: int,
-    start_date: datetime,
-    end_date: datetime,
-    recent_percent: float = 0.8
-) -> List[datetime]:
+def exponential_decay_temporal(n_samples: int, start_date: datetime, end_date: datetime, recent_percent: float = 0.8) -> List[datetime]:
     """Generate timestamps with exponential decay (more recent data).
 
     Creates a temporal distribution where most data is recent,
@@ -119,13 +107,7 @@ def exponential_decay_temporal(
     return timestamps
 
 
-def normal_distribution(
-    n_samples: int,
-    min_value: int,
-    max_value: int,
-    mean: Optional[float] = None,
-    std_dev: Optional[float] = None
-) -> List[int]:
+def normal_distribution(n_samples: int, min_value: int, max_value: int, mean: Optional[float] = None, std_dev: Optional[float] = None) -> List[int]:
     """Generate values following normal (Gaussian) distribution.
 
     Args:
@@ -153,11 +135,7 @@ def normal_distribution(
     return samples.astype(int).tolist()
 
 
-def uniform_distribution(
-    n_samples: int,
-    min_value: int,
-    max_value: int
-) -> List[int]:
+def uniform_distribution(n_samples: int, min_value: int, max_value: int) -> List[int]:
     """Generate values following uniform distribution.
 
     Args:
@@ -171,13 +149,7 @@ def uniform_distribution(
     return [random.randint(min_value, max_value) for _ in range(n_samples)]
 
 
-def get_distribution(
-    distribution_type: str,
-    n_samples: int,
-    min_value: int,
-    max_value: int,
-    **kwargs
-) -> List[int]:
+def get_distribution(distribution_type: str, n_samples: int, min_value: int, max_value: int, **kwargs) -> List[int]:
     """Get samples from specified distribution type.
 
     Args:

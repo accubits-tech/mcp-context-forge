@@ -1,18 +1,22 @@
 # -*- coding: utf-8 -*-
 """Activity log generators for load testing."""
 
-import random
+# Standard
 from datetime import datetime
+import random
 from typing import Generator, List
 
+# Third-Party
 from sqlalchemy import text
 
+# First-Party
 from mcpgateway.db import (
-    TokenUsageLog,
     EmailAuthEvent,
     PermissionAuditLog,
+    TokenUsageLog,
 )
 
+# Local
 from ..utils.distributions import exponential_decay_temporal
 from .base import BaseGenerator
 
@@ -81,12 +85,14 @@ class TokenUsageLogGenerator(BaseGenerator):
                     endpoint=random.choice(endpoints),
                     method=random.choice(methods),
                     ip_address=f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
-                    user_agent=random.choice([
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "curl/7.68.0",
-                        "Python/3.11 aiohttp/3.8.0",
-                        "PostmanRuntime/7.32.3",
-                    ]),
+                    user_agent=random.choice(
+                        [
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "curl/7.68.0",
+                            "Python/3.11 aiohttp/3.8.0",
+                            "PostmanRuntime/7.32.3",
+                        ]
+                    ),
                     status_code=status_code,
                     response_time_ms=int(random.expovariate(1 / 150)),
                     blocked=blocked,
@@ -144,17 +150,25 @@ class EmailAuthEventGenerator(BaseGenerator):
                     event_type=event_type,
                     success=success,
                     ip_address=f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
-                    user_agent=random.choice([
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15",
-                        "Mozilla/5.0 (X11; Linux x86_64) Firefox/109.0",
-                    ]),
-                    failure_reason=None if success else random.choice([
-                        "Invalid credentials",
-                        "Account locked",
-                        "MFA failed",
-                        "Session expired",
-                    ]),
+                    user_agent=random.choice(
+                        [
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15",
+                            "Mozilla/5.0 (X11; Linux x86_64) Firefox/109.0",
+                        ]
+                    ),
+                    failure_reason=(
+                        None
+                        if success
+                        else random.choice(
+                            [
+                                "Invalid credentials",
+                                "Account locked",
+                                "MFA failed",
+                                "Session expired",
+                            ]
+                        )
+                    ),
                     details=None,
                 )
 

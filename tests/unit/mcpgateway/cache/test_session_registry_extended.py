@@ -14,11 +14,11 @@ from __future__ import annotations
 
 # Standard
 import asyncio
+from asyncio import Lock
 import json
 import logging
 import sys
 import time
-from asyncio import Lock
 from typing import cast, Generator
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 

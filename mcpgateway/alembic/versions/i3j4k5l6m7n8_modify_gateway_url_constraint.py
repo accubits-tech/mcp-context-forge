@@ -43,10 +43,7 @@ def upgrade() -> None:
             print(f"Constraint uq_team_owner_url_gateway not found or already dropped: {e}")
 
         # Create new constraint (team_id, owner_email, url, slug)
-        batch_op.create_unique_constraint(
-            "uq_team_owner_url_slug_gateway",
-            ["team_id", "owner_email", "url", "slug"]
-        )
+        batch_op.create_unique_constraint("uq_team_owner_url_slug_gateway", ["team_id", "owner_email", "url", "slug"])
 
 
 def downgrade() -> None:
@@ -67,7 +64,4 @@ def downgrade() -> None:
             print(f"Constraint uq_team_owner_url_slug_gateway not found or already dropped: {e}")
 
         # Recreate old constraint (team_id, owner_email, url)
-        batch_op.create_unique_constraint(
-            "uq_team_owner_url_gateway",
-            ["team_id", "owner_email", "url"]
-        )
+        batch_op.create_unique_constraint("uq_team_owner_url_gateway", ["team_id", "owner_email", "url"])

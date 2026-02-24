@@ -14,8 +14,6 @@ different MCP Gateway versions with comprehensive validation.
 import logging
 from pathlib import Path
 
-# Third-Party
-
 # Local
 from .utils.schema_validator import SchemaValidator
 

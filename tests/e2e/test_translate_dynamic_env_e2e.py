@@ -9,13 +9,16 @@ Authors: Manav Gupta
 End-to-end tests for complete HTTP flow with dynamic environment variable injection.
 """
 
+# Standard
 import asyncio
-import pytest
+import json
+import os
 import subprocess
 import tempfile
-import os
-import json
+
+# Third-Party
 import httpx
+import pytest
 
 
 class TestDynamicEnvE2E:
@@ -116,8 +119,9 @@ if __name__ == "__main__":
     @pytest.fixture
     async def translate_server_process(self, test_mcp_server_script):
         """Start a translate server process with dynamic environment injection."""
-        import socket
+        # Standard
         import random
+        import socket
 
         # Find an available port
         port = None
@@ -723,8 +727,9 @@ sys.stdout.flush()
     @pytest.mark.timeout(30)
     async def test_server_startup_with_valid_mappings(self, test_server_script):
         """Test server startup with valid header mappings."""
-        import socket
+        # Standard
         import random
+        import socket
 
         # Find an available port
         port = None
@@ -779,8 +784,9 @@ sys.stdout.flush()
     @pytest.mark.timeout(30)
     async def test_server_startup_with_invalid_mappings(self, test_server_script):
         """Test server startup with invalid header mappings."""
-        import socket
+        # Standard
         import random
+        import socket
 
         # Find an available port
         port = None
@@ -847,8 +853,9 @@ sys.stdout.flush()
     @pytest.mark.timeout(30)
     async def test_server_startup_without_enable_flag(self, test_server_script):
         """Test server startup without enable-dynamic-env flag."""
-        import socket
+        # Standard
         import random
+        import socket
 
         # Find an available port
         port = None

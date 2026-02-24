@@ -7,11 +7,12 @@ Compares performance test results across different configurations.
 Supports baseline comparison, regression detection, and cost-benefit analysis.
 """
 
+# Standard
 import argparse
 import json
-import sys
 from pathlib import Path
-from typing import Dict, List, Any
+import sys
+from typing import Any, Dict, List
 
 
 class ResultsComparator:
@@ -316,6 +317,7 @@ def main():
 
     except Exception as e:
         print(f"❌ Error: {e}", file=sys.stderr)
+        # Standard
         import traceback
 
         traceback.print_exc()

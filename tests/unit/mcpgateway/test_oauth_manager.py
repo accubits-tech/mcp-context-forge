@@ -18,9 +18,9 @@ import pytest
 
 # First-Party
 from mcpgateway.db import OAuthToken
+from mcpgateway.services.encryption_service import EncryptionService
 from mcpgateway.services.oauth_manager import OAuthError, OAuthManager
 from mcpgateway.services.token_storage_service import TokenStorageService
-from mcpgateway.services.encryption_service import EncryptionService
 
 
 class TestOAuthManager:

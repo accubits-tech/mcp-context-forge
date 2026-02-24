@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """Data validation utilities."""
 
+# Standard
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
 
+# Third-Party
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
@@ -85,21 +87,29 @@ class DataValidator:
 
         try:
             # Check EmailTeamMember for orphaned records
-            result = self.db.execute(text("""
+            result = self.db.execute(
+                text(
+                    """
                 SELECT COUNT(*) FROM email_team_members etm
                 LEFT JOIN email_users eu ON etm.user_email = eu.email
                 WHERE eu.email IS NULL
-            """))
+            """
+                )
+            )
             team_member_orphans = result.scalar()
             if team_member_orphans > 0:
                 orphans.append(f"EmailTeamMember: {team_member_orphans} orphans")
 
             # Check Tool for orphaned gateways
-            result = self.db.execute(text("""
+            result = self.db.execute(
+                text(
+                    """
                 SELECT COUNT(*) FROM tools t
                 LEFT JOIN gateways g ON t.gateway_id = g.id
                 WHERE t.gateway_id IS NOT NULL AND g.id IS NULL
-            """))
+            """
+                )
+            )
             tool_orphans = result.scalar()
             if tool_orphans > 0:
                 orphans.append(f"Tool: {tool_orphans} orphans")
@@ -126,19 +136,27 @@ class DataValidator:
 
         try:
             # Check EmailUser required fields
-            result = self.db.execute(text("""
+            result = self.db.execute(
+                text(
+                    """
                 SELECT COUNT(*) FROM email_users
                 WHERE email IS NULL OR full_name IS NULL OR password_hash IS NULL
-            """))
+            """
+                )
+            )
             user_issues = result.scalar()
             if user_issues > 0:
                 issues.append(f"EmailUser: {user_issues} records with NULL required fields")
 
             # Check EmailTeam required fields
-            result = self.db.execute(text("""
+            result = self.db.execute(
+                text(
+                    """
                 SELECT COUNT(*) FROM email_teams
                 WHERE name IS NULL OR created_by IS NULL
-            """))
+            """
+                )
+            )
             team_issues = result.scalar()
             if team_issues > 0:
                 issues.append(f"EmailTeam: {team_issues} records with NULL required fields")
@@ -163,10 +181,14 @@ class DataValidator:
         """
         try:
             # Simple check: email should contain @
-            result = self.db.execute(text("""
+            result = self.db.execute(
+                text(
+                    """
                 SELECT COUNT(*) FROM email_users
                 WHERE email NOT LIKE '%@%'
-            """))
+            """
+                )
+            )
             invalid_emails = result.scalar()
 
             return {

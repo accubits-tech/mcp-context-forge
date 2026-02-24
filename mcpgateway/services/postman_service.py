@@ -27,8 +27,6 @@ logger = logging.getLogger(__name__)
 class PostmanCollectionError(Exception):
     """Raised when Postman collection parsing fails."""
 
-    pass
-
 
 class PostmanCollectionService:
     """Service for converting Postman Collections to MCP Tools."""
@@ -424,14 +422,14 @@ class PostmanCollectionService:
         """
         # Simple parsing (can be enhanced with urllib.parse)
         # Extract protocol, host, path, query
-        match = re.match(r"(https?://)?([^/]+)(/.*)?(\\?.*)?" , url)
+        match = re.match(r"(https?://)?([^/]+)(/.*)?(\\?.*)?", url)
         if not match:
             return {"base_url": "", "path": "/", "query_params": [], "has_path_variables": False}
 
         protocol = match.group(1) or "https://"
         host = match.group(2) or ""
         path = match.group(3) or "/"
-        query = match.group(4) or ""
+        match.group(4) or ""
 
         base_url = f"{protocol}{host}"
 
@@ -622,6 +620,7 @@ class PostmanCollectionService:
                 username = self._substitute_variables(username)
                 password = self._substitute_variables(password)
                 # Basic auth format: base64(username:password)
+                # Standard
                 import base64
 
                 credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -657,6 +656,7 @@ class PostmanCollectionService:
         Returns:
             JSON encoded string
         """
+        # Standard
         import base64
 
         return base64.b64encode(json.dumps(headers).encode()).decode()

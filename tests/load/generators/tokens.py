@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
 """API token generator for load testing."""
 
+# Standard
+from datetime import datetime, timedelta
 import random
 import secrets
-import uuid
-from datetime import datetime, timedelta
 from typing import Generator, List
+import uuid
 
+# First-Party
 from mcpgateway.db import EmailApiToken
 
+# Local
 from ..utils.distributions import exponential_decay_temporal, normal_distribution
 from .base import BaseGenerator
 
@@ -61,11 +64,7 @@ class TokenGenerator(BaseGenerator):
                 is_active = random.random() < (active_percent / 100)
 
                 # Random scopes
-                scopes = random.sample(
-                    ["tools:read", "tools:write", "resources:read", "resources:write",
-                     "prompts:read", "prompts:write", "servers:read", "servers:write"],
-                    k=random.randint(1, 4)
-                )
+                scopes = random.sample(["tools:read", "tools:write", "resources:read", "resources:write", "prompts:read", "prompts:write", "servers:read", "servers:write"], k=random.randint(1, 4))
 
                 # Token expires in 1-365 days
                 expires_days = random.randint(1, 365)

@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """Team member generator for load testing."""
 
-import random
-import uuid
+# Standard
 from datetime import datetime
+import random
 from typing import Generator, List
+import uuid
 
+# First-Party
 from mcpgateway.db import EmailTeamMember
 
+# Local
 from ..utils.distributions import exponential_decay_temporal, power_law_distribution
 from .base import BaseGenerator
 
@@ -18,13 +21,9 @@ class TeamMemberGenerator(BaseGenerator):
     def get_count(self) -> int:
         """Get estimated number of team members."""
         # This is approximate - actual count depends on distribution
-        user_count = self.get_scale_config("users", 100)
-        team_count = self.get_scale_config("users", 100) * (
-            self.get_scale_config("personal_teams_per_user", 1) +
-            self.get_scale_config("additional_teams_per_user", 10)
-        )
-        avg_members = (self.get_scale_config("members_per_team_min", 1) +
-                       self.get_scale_config("members_per_team_max", 100)) / 2
+        self.get_scale_config("users", 100)
+        team_count = self.get_scale_config("users", 100) * (self.get_scale_config("personal_teams_per_user", 1) + self.get_scale_config("additional_teams_per_user", 10))
+        avg_members = (self.get_scale_config("members_per_team_min", 1) + self.get_scale_config("members_per_team_max", 100)) / 2
         return int(team_count * avg_members)
 
     def get_dependencies(self) -> List[str]:
@@ -37,6 +36,7 @@ class TeamMemberGenerator(BaseGenerator):
         Yields:
             EmailTeamMember instances
         """
+        # Third-Party
         from sqlalchemy import text
 
         user_count = self.get_scale_config("users", 100)
@@ -55,10 +55,7 @@ class TeamMemberGenerator(BaseGenerator):
         total_teams = user_count * (personal_teams_per_user + additional_teams_per_user)
 
         # Fetch actual team IDs from database
-        result = self.db.execute(
-            text("SELECT id, created_by FROM email_teams WHERE created_by LIKE :domain ORDER BY created_at"),
-            {"domain": f"%{self.email_domain}"}
-        )
+        result = self.db.execute(text("SELECT id, created_by FROM email_teams WHERE created_by LIKE :domain ORDER BY created_at"), {"domain": f"%{self.email_domain}"})
         teams = [(row[0], row[1]) for row in result.fetchall()]
 
         if len(teams) != total_teams:

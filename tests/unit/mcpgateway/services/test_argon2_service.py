@@ -11,9 +11,9 @@ Comprehensive tests for Argon2 password hashing service.
 from unittest.mock import MagicMock, patch
 
 # Third-Party
-import pytest
 from argon2 import PasswordHasher
 from argon2.exceptions import HashingError, InvalidHash, VerifyMismatchError
+import pytest
 
 # First-Party
 from mcpgateway.services.argon2_service import Argon2PasswordService, hash_password, needs_rehash, password_service, verify_password

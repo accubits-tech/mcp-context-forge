@@ -9,8 +9,8 @@ Tests for token catalog service implementation.
 
 # Standard
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 import hashlib
+from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
 # Third-Party
@@ -435,7 +435,7 @@ class TestTokenCatalogService:
 
         assert tokens == []
         # Verify query was built correctly
-        call_args = mock_db.execute.call_args[0][0]
+        mock_db.execute.call_args[0][0]
         # The query should not filter out inactive tokens
 
     @pytest.mark.asyncio
@@ -448,7 +448,7 @@ class TestTokenCatalogService:
         await token_service.list_user_tokens("test@example.com", limit=10, offset=20)
 
         # Verify pagination was applied
-        call_args = mock_db.execute.call_args[0][0]
+        mock_db.execute.call_args[0][0]
         # Query should have limit and offset applied
 
     @pytest.mark.asyncio
@@ -851,7 +851,7 @@ class TestTokenCatalogServiceEdgeCases:
         """Test update_token with None values (should not update)."""
         with patch.object(token_service, "get_token", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_api_token
-            original_desc = mock_api_token.description
+            mock_api_token.description
 
             await token_service.update_token(token_id="token-123", user_email="test@example.com", description=None)
 
@@ -958,7 +958,7 @@ class TestTokenCatalogServiceIntegration:
 
         # Get stats
         mock_db.execute.return_value.scalars.return_value.all.return_value = []
-        stats = await token_service.get_token_usage_stats("test@example.com")
+        await token_service.get_token_usage_stats("test@example.com")
 
         # Revoke token
         with patch.object(token_service, "get_token", new_callable=AsyncMock) as mock_get:

@@ -53,6 +53,7 @@ from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicCredentials, HTTPBearer
 from fastapi.security.utils import get_authorization_scheme_param
 import jwt
+from jwt import PyJWKClient
 
 # First-Party
 from mcpgateway.config import settings
@@ -65,6 +66,86 @@ security = HTTPBearer(auto_error=False)
 # Initialize logging service first
 logging_service = LoggingService()
 logger = logging_service.get_logger(__name__)
+
+# Module-level cache for Keycloak JWKS client
+_keycloak_jwks_client: Optional[PyJWKClient] = None
+_keycloak_jwks_client_issuer: Optional[str] = None
+
+
+def _get_keycloak_issuer() -> Optional[str]:
+    """Compute the Keycloak issuer URL from existing SSO settings.
+
+    Returns:
+        The Keycloak issuer URL (e.g. ``https://keycloak.example.com/realms/master``),
+        or ``None`` if the base URL is not configured.
+    """
+    base_url = settings.sso_keycloak_base_url
+    if not base_url:
+        return None
+    base_url = base_url.rstrip("/")
+    realm = settings.sso_keycloak_realm or "master"
+    return f"{base_url}/realms/{realm}"
+
+
+def _get_keycloak_jwks_client(issuer: str) -> PyJWKClient:
+    """Return a cached :class:`PyJWKClient` for the given Keycloak *issuer*.
+
+    The client is lazily created on first call and reused for subsequent
+    calls as long as the issuer has not changed.
+
+    Args:
+        issuer: The Keycloak issuer URL used to construct the JWKS endpoint.
+
+    Returns:
+        PyJWKClient: A cached JWKS client instance.
+    """
+    global _keycloak_jwks_client, _keycloak_jwks_client_issuer  # noqa: PLW0603
+    if _keycloak_jwks_client is None or _keycloak_jwks_client_issuer != issuer:
+        jwks_url = f"{issuer}/protocol/openid-connect/certs"
+        _keycloak_jwks_client = PyJWKClient(jwks_url, cache_jwk_set=True, lifespan=settings.external_jwt_jwks_cache_ttl)
+        _keycloak_jwks_client_issuer = issuer
+    return _keycloak_jwks_client
+
+
+def _verify_keycloak_jwt(token: str, expected_issuer: str) -> dict:
+    """Validate a Keycloak-issued RS256 JWT via JWKS and return its payload.
+
+    The payload is tagged with ``_auth_source: "keycloak"`` so downstream
+    code can distinguish it from internally-issued tokens.
+
+    Args:
+        token: The raw JWT string.
+        expected_issuer: The expected ``iss`` claim value.
+
+    Returns:
+        The decoded JWT payload dict.
+
+    Raises:
+        HTTPException: On any validation failure (expired, bad signature, etc.).
+    """
+    client = _get_keycloak_jwks_client(expected_issuer)
+    try:
+        signing_key = client.get_signing_key_from_jwt(token)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unable to retrieve signing key from Keycloak JWKS",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    decode_kwargs: dict = {
+        "key": signing_key.key,
+        "algorithms": ["RS256"],
+        "issuer": expected_issuer,
+    }
+    if settings.external_jwt_required_audience:
+        decode_kwargs["audience"] = settings.external_jwt_required_audience
+    else:
+        decode_kwargs["options"] = {"verify_aud": False}
+
+    payload = jwt.decode(token, **decode_kwargs)
+    payload["_auth_source"] = "keycloak"
+    return payload
 
 
 async def verify_jwt_token(token: str) -> dict:
@@ -92,6 +173,13 @@ async def verify_jwt_token(token: str) -> dict:
 
         # First decode to check claims
         unverified = jwt.decode(token, options={"verify_signature": False})
+
+        # Route to Keycloak validation if external JWT validation is enabled
+        # and the issuer matches the configured Keycloak realm
+        if settings.external_jwt_validation_enabled:
+            keycloak_issuer = _get_keycloak_issuer()
+            if keycloak_issuer and unverified.get("iss") == keycloak_issuer:
+                return _verify_keycloak_jwt(token, keycloak_issuer)
 
         # Check for expiration claim
         if "exp" not in unverified:

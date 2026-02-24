@@ -16,8 +16,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 # First-Party
-from mcpgateway.main import app
 from mcpgateway.common.models import Tool
+from mcpgateway.main import app
 from mcpgateway.services.tool_service import ToolService
 
 

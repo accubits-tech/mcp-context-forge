@@ -8,14 +8,15 @@ Authors: Mihai Criveti
 Headers plugin.
 """
 
+# Standard
 import copy
 import logging
 
-from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
+# First-Party
 from mcpgateway.plugins.framework import (
-    PluginContext,
-    Plugin,
     HttpHeaderPayload,
+    Plugin,
+    PluginContext,
     PromptPosthookPayload,
     PromptPosthookResult,
     PromptPrehookPayload,
@@ -29,6 +30,7 @@ from mcpgateway.plugins.framework import (
     ToolPreInvokePayload,
     ToolPreInvokeResult,
 )
+from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
 
 logger = logging.getLogger("header_plugin")
 
