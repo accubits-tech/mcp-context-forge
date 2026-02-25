@@ -672,10 +672,10 @@ catalog_servers:
   - id: deepwiki
     name: "DeepWiki"
     category: "RAG-as-a-Service"
-    url: "https://mcp.deepwiki.com/sse"
+    url: "https://mcp.deepwiki.com/mcp"
     auth_type: "Open"
     provider: "Devin"
-    description: "DeepWiki MCP provides access to public GitHub repositories by exposing wiki structure, contents and question‑answering endpoints. It is available via HTTP and SSE endpoints, though SSE is deprecated. Tools allow browsing the wiki and asking questions about repository docs."
+    description: "DeepWiki MCP provides access to public GitHub repositories by exposing wiki structure, contents and question‑answering endpoints via Streamable HTTP. Tools allow browsing the wiki and asking questions about repository docs."
     requires_api_key: false
     tags: ["rag", "wiki", "knowledge", "ai"]
     logo_url: "https://img.logo.dev/deepwiki.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
