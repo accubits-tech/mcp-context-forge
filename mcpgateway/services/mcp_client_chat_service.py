@@ -21,6 +21,7 @@ The module consists of several key components:
 # Standard
 from datetime import datetime, timezone
 import json
+import re
 import time
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
 from uuid import uuid4
@@ -82,6 +83,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 # First-Party
 from mcpgateway.config import settings
+from mcpgateway.db import SessionLocal, ServerMetric, ToolMetric
+from mcpgateway.db import Server as DbServer
+from mcpgateway.db import Tool as DbTool
 from mcpgateway.services.logging_service import LoggingService
 
 logging_service = LoggingService()
@@ -1955,7 +1959,79 @@ class MCPChatService:
         self._initialized = False
         self._tools: List[BaseTool] = []
 
+        # Extract server_id from URL pattern /servers/{id}/mcp
+        self._server_id: Optional[str] = None
+        if config.mcp_server and config.mcp_server.url:
+            match = re.search(r"/servers/([a-fA-F0-9]+)/mcp", config.mcp_server.url)
+            if match:
+                self._server_id = match.group(1)
+
         logger.info(f"MCPChatService initialized for user: {user_id or 'anonymous'}")
+
+    def _record_llmchat_metrics(self, tool_runs: Dict[str, Dict[str, Any]]) -> None:
+        """Record tool and server metrics for tool invocations made via llmchat.
+
+        Args:
+            tool_runs: Dictionary of tool run data keyed by run_id, containing
+                       'name', 'start', 'end', and optionally 'error' fields.
+        """
+        if not tool_runs:
+            return
+
+        try:
+            db = SessionLocal()
+            try:
+                for run_id, run_data in tool_runs.items():
+                    tool_name = run_data.get("name")
+                    if not tool_name:
+                        continue
+
+                    start_iso = run_data.get("start")
+                    end_iso = run_data.get("end")
+                    error = run_data.get("error")
+                    is_success = error is None and end_iso is not None
+
+                    # Calculate response time from ISO timestamps
+                    response_time = 0.0
+                    if start_iso and end_iso:
+                        try:
+                            start_dt = datetime.fromisoformat(start_iso)
+                            end_dt = datetime.fromisoformat(end_iso)
+                            response_time = (end_dt - start_dt).total_seconds()
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Record ToolMetric if tool exists in DB
+                    db_tool = db.query(DbTool).filter(DbTool.name == tool_name).first()
+                    if db_tool:
+                        tool_metric = ToolMetric(
+                            tool_id=db_tool.id,
+                            response_time=response_time,
+                            is_success=is_success,
+                            error_message=error,
+                        )
+                        db.add(tool_metric)
+
+                    # Record ServerMetric if we have a server_id
+                    if self._server_id:
+                        db_server = db.query(DbServer).filter(DbServer.id == self._server_id).first()
+                        if db_server:
+                            server_metric = ServerMetric(
+                                server_id=self._server_id,
+                                response_time=response_time,
+                                is_success=is_success,
+                                error_message=error,
+                            )
+                            db.add(server_metric)
+
+                db.commit()
+            except Exception as metric_error:
+                logger.warning(f"Failed to record llmchat metrics: {metric_error}")
+                db.rollback()
+            finally:
+                db.close()
+        except Exception as db_error:
+            logger.warning(f"Failed to open DB session for llmchat metrics: {db_error}")
 
     async def initialize(self) -> None:
         """
@@ -2048,6 +2124,7 @@ class MCPChatService:
 
         try:
             logger.debug("Processing chat message...")
+            start_iso = datetime.now(timezone.utc).isoformat()
 
             # Get conversation history from manager
             lc_messages = await self.history_manager.get_langchain_messages(self.user_id) if self.user_id else []
@@ -2059,9 +2136,26 @@ class MCPChatService:
             # Invoke agent
             response = await self._agent.ainvoke({"messages": lc_messages})
 
+            end_iso = datetime.now(timezone.utc).isoformat()
+
             # Extract AI response
             ai_message = response["messages"][-1]
             response_text = ai_message.content if hasattr(ai_message, "content") else str(ai_message)
+
+            # Record metrics for any tool calls in the response
+            tool_runs: Dict[str, Dict[str, Any]] = {}
+            for msg in response.get("messages", []):
+                if hasattr(msg, "type") and msg.type == "tool":
+                    tool_name = getattr(msg, "name", None)
+                    if tool_name:
+                        run_id = str(uuid4())
+                        tool_runs[run_id] = {
+                            "name": tool_name,
+                            "start": start_iso,
+                            "end": end_iso,
+                        }
+            if tool_runs:
+                self._record_llmchat_metrics(tool_runs)
 
             # Save history if user_id provided
             if self.user_id:
@@ -2300,6 +2394,10 @@ class MCPChatService:
                         run_id = str(event.get("run_id") or uuid4())
                         error = str(event.get("data", {}).get("error", "Unknown error"))
 
+                        if run_id in tool_runs:
+                            tool_runs[run_id]["error"] = error
+                            tool_runs[run_id]["end"] = now_iso
+
                         yield {"type": "tool_error", "id": run_id, "tool": tool_runs.get(run_id, {}).get("name"), "error": error, "time": now_iso}
 
                     elif kind == "on_chat_model_stream":
@@ -2319,6 +2417,10 @@ class MCPChatService:
 
             # Determine tool usage
             tools_used = list({tr["name"] for tr in tool_runs.values() if tr.get("name")})
+
+            # Record metrics for tool invocations
+            if tool_runs:
+                self._record_llmchat_metrics(tool_runs)
 
             # Yield final event
             yield {"type": "final", "content": full_response, "tool_used": len(tools_used) > 0, "tools": tools_used, "elapsed_ms": elapsed_ms}
