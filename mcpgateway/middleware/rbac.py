@@ -108,6 +108,12 @@ async def get_current_user_with_permissions(
     if not token and credentials and credentials.credentials:
         token = credentials.credentials
 
+    # 2.5. Try query parameter (for SSE/EventSource which cannot set headers)
+    if not token:
+        query_token = request.query_params.get("token")
+        if query_token:
+            token = query_token
+
     # 3. Finally try FastAPI Cookie dependency (fallback)
     if not token and jwt_token:
         token = jwt_token
