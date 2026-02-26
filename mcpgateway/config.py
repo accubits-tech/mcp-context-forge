@@ -958,6 +958,7 @@ class Settings(BaseSettings):
     # Core plugin settings
     plugins_enabled: bool = Field(default=False, description="Enable the plugin framework")
     plugin_config_file: str = Field(default="plugins/config.yaml", description="Path to main plugin configuration file")
+    plugin_max_payload_size: int = Field(default=1_000_000, description="Maximum payload size in bytes for plugin hooks (default 1MB)")
 
     # Plugin CLI settings
     plugins_cli_completion: bool = Field(default=False, description="Enable auto-completion for plugins CLI")

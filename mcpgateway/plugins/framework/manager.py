@@ -56,9 +56,18 @@ logger = logging.getLogger(__name__)
 
 # Configuration constants
 DEFAULT_PLUGIN_TIMEOUT = 30  # seconds
-MAX_PAYLOAD_SIZE = 1_000_000  # 1MB
 CONTEXT_CLEANUP_INTERVAL = 300  # 5 minutes
 CONTEXT_MAX_AGE = 3600  # 1 hour
+
+
+def _get_max_payload_size() -> int:
+    """Get the maximum payload size from settings, with fallback default."""
+    try:
+        from mcpgateway.config import settings
+
+        return settings.plugin_max_payload_size
+    except Exception:
+        return 1_000_000  # 1MB default
 
 
 class PluginTimeoutError(Exception):
@@ -125,7 +134,7 @@ class PluginExecutor:
             - PluginContextTable with updated local contexts for each plugin
 
         Raises:
-            PayloadSizeError: If the payload exceeds MAX_PAYLOAD_SIZE.
+            PayloadSizeError: If the payload exceeds the configured max payload size.
             PluginError: If there is an error inside a plugin.
             PluginViolationError: If a violation occurs and violation_as_exceptions is set.
 
@@ -226,7 +235,7 @@ class PluginExecutor:
             - PluginContextTable with updated local contexts for each plugin
 
         Raises:
-            PayloadSizeError: If the payload exceeds MAX_PAYLOAD_SIZE.
+            PayloadSizeError: If the payload exceeds the configured max payload size.
             PluginError: If there is an error inside a plugin.
             PluginViolationError: If a violation occurs and violation_as_exceptions is set.
         """
@@ -376,19 +385,20 @@ class PluginExecutor:
             payload: The payload to validate.
 
         Raises:
-            PayloadSizeError: If payload exceeds MAX_PAYLOAD_SIZE.
+            PayloadSizeError: If payload exceeds the configured max payload size.
         """
+        max_size = _get_max_payload_size()
         # For PromptPrehookPayload, check args size
         if hasattr(payload, "args") and payload.args:
             total_size = sum(len(str(v)) for v in payload.args.values())
-            if total_size > MAX_PAYLOAD_SIZE:
-                raise PayloadSizeError(f"Payload size {total_size} exceeds limit of {MAX_PAYLOAD_SIZE} bytes")
+            if total_size > max_size:
+                raise PayloadSizeError(f"Payload size {total_size} exceeds limit of {max_size} bytes")
         # For PromptPosthookPayload, check result size
         elif hasattr(payload, "result") and payload.result:
             # Estimate size of result messages
             total_size = len(str(payload.result))
-            if total_size > MAX_PAYLOAD_SIZE:
-                raise PayloadSizeError(f"Result size {total_size} exceeds limit of {MAX_PAYLOAD_SIZE} bytes")
+            if total_size > max_size:
+                raise PayloadSizeError(f"Result size {total_size} exceeds limit of {max_size} bytes")
 
 
 class PluginManager:
