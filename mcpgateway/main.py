@@ -29,12 +29,15 @@ Structure:
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+import ipaddress
 import json
 import os as _os  # local alias to avoid collisions
 import sys
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 from urllib.parse import urlparse, urlunparse
 import uuid
+
+import yaml
 
 # Third-Party
 from fastapi import (
@@ -2828,14 +2831,16 @@ async def upload_openapi_spec(
         spec = await openapi_service.parse_openapi_spec(content.decode("utf-8"), content_type)
 
         if preview_only:
-            # Return preview without creating tools
-            previews = await openapi_service.preview_tools(spec)
+            # Use preview_tools_from_spec to avoid redundant re-parsing
+            previews = await openapi_service.preview_tools_from_spec(spec, base_url=base_url, tags=additional_tags)
             return {
                 "status": "preview",
                 "message": f"Preview generated from {file.filename}",
                 "api_info": {"title": spec.get("info", {}).get("title", "Unknown API"), "version": spec.get("info", {}).get("version", "unknown"), "openapi_version": spec.get("openapi", "unknown")},
-                "tool_count": len(previews),
-                "tools": previews,
+                "tools_created": len(previews),
+                "tools_failed": 0,
+                "created_tools": previews,
+                "failed_tools": [],
             }
 
         # Generate tools from specification
@@ -2843,7 +2848,7 @@ async def upload_openapi_spec(
 
         # Enhance tools with AI if requested
         if enhance_with_ai and tools:
-            logger.info("Enhancing tool descriptions with CrewAI agent")
+            logger.info("Enhancing tool descriptions with AI agent")
             try:
                 # Generate comprehensive analysis
                 analysis = await openapi_agent.generate_comprehensive_analysis(spec)
@@ -2889,15 +2894,16 @@ async def upload_openapi_spec(
         created_tools = []
         failed_tools = []
 
+        # Create MockRequest once outside the loop
+        class _MockRequest:
+            headers = {}
+            client = type("Client", (), {"host": "unknown"})()
+
+        mock_request = _MockRequest()
+
         for tool in tools:
             try:
-                # Extract metadata from request
-                # Note: Using a mock request for metadata capture since file upload doesn't have standard request
-                class MockRequest:
-                    headers = {}
-                    client = type("Client", (), {"host": "unknown"})()
-
-                metadata = MetadataCapture.extract_creation_metadata(MockRequest(), user)
+                metadata = MetadataCapture.extract_creation_metadata(mock_request, user)
                 metadata["created_via"] = "openapi_upload"
 
                 created_tool = await tool_service.register_tool(
@@ -2982,7 +2988,7 @@ async def process_openapi_url(
         gateway_id: Gateway ID to associate tools with
         tags: Comma-separated additional tags for tools
         preview_only: If True, only preview tools without creating them
-        enhance_with_ai: If True, use CrewAI agent to enhance descriptions
+        enhance_with_ai: If True, use AI agent to enhance descriptions
         db: Database session
         user: Authenticated user
 
@@ -2992,25 +2998,72 @@ async def process_openapi_url(
     Raises:
         HTTPException: If URL fetch or processing fails
     """
+    # Third-Party
+    import httpx
+    import socket
+
+    def _validate_url_not_internal(target_url: str) -> None:
+        """Validate that a URL does not point to internal/private network addresses (SSRF prevention)."""
+        parsed = urlparse(target_url)
+        if parsed.scheme not in ("http", "https"):
+            raise HTTPException(status_code=400, detail=f"URL scheme '{parsed.scheme}' is not allowed. Only http and https are supported.")
+
+        hostname = parsed.hostname
+        if not hostname:
+            raise HTTPException(status_code=400, detail="Invalid URL: no hostname found")
+
+        # Resolve hostname to IP addresses
+        try:
+            addr_infos = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        except socket.gaierror:
+            raise HTTPException(status_code=400, detail=f"Could not resolve hostname: {hostname}")
+
+        for addr_info in addr_infos:
+            ip = ipaddress.ip_address(addr_info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                raise HTTPException(status_code=400, detail=f"URL resolves to a private/internal address ({ip}). Only public URLs are allowed.")
+
     try:
         logger.info(f"User {user} processing OpenAPI spec from URL: {url}")
+
+        # SSRF prevention: validate URL before fetching
+        _validate_url_not_internal(url)
 
         # Generate import batch ID for grouping tools
         import_batch_id = str(uuid.uuid4())
 
-        # Fetch OpenAPI specification from URL
-        # Third-Party
-        import httpx
+        # Fetch OpenAPI specification from URL with size limit
+        max_content_size = 20 * 1024 * 1024  # 20MB
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, max_redirects=5) as client:
             response = await client.get(url)
             response.raise_for_status()
-            content = response.text
 
-        # Determine content type from response headers or URL
+            # Check content length before reading body
+            content_length = response.headers.get("content-length")
+            if content_length and int(content_length) > max_content_size:
+                raise HTTPException(status_code=400, detail=f"Response too large ({content_length} bytes). Maximum allowed is {max_content_size} bytes.")
+
+            content = response.text
+            if len(content.encode("utf-8")) > max_content_size:
+                raise HTTPException(status_code=400, detail=f"Response content exceeds maximum size of {max_content_size} bytes.")
+
+        # Determine content type with fallback: try JSON first, then YAML
         content_type = "json"
-        if "yaml" in response.headers.get("content-type", "").lower() or url.endswith((".yaml", ".yml")):
+        response_content_type = response.headers.get("content-type", "").lower()
+        if "yaml" in response_content_type or "x-yaml" in response_content_type or url.endswith((".yaml", ".yml")):
             content_type = "yaml"
+        else:
+            # If content-type is ambiguous (text/plain, application/octet-stream),
+            # try JSON first; if it fails, try YAML
+            try:
+                json.loads(content)
+            except (json.JSONDecodeError, ValueError):
+                try:
+                    yaml.safe_load(content)
+                    content_type = "yaml"
+                except Exception:
+                    pass  # Let the parser produce the appropriate error
 
         # Parse additional tags
         additional_tags = []
@@ -3021,15 +3074,17 @@ async def process_openapi_url(
         spec = await openapi_service.parse_openapi_spec(content, content_type)
 
         if preview_only:
-            # Return preview without creating tools
-            previews = await openapi_service.preview_tools(spec)
+            # Use preview_tools_from_spec to avoid redundant re-parsing
+            previews = await openapi_service.preview_tools_from_spec(spec, base_url=base_url, tags=additional_tags)
             return {
                 "status": "preview",
                 "message": f"Preview generated from {url}",
                 "source_url": url,
                 "api_info": {"title": spec.get("info", {}).get("title", "Unknown API"), "version": spec.get("info", {}).get("version", "unknown"), "openapi_version": spec.get("openapi", "unknown")},
-                "tool_count": len(previews),
-                "tools": previews,
+                "tools_created": len(previews),
+                "tools_failed": 0,
+                "created_tools": previews,
+                "failed_tools": [],
             }
 
         # Generate tools from specification
@@ -3037,7 +3092,7 @@ async def process_openapi_url(
 
         # Enhance tools with AI if requested
         if enhance_with_ai and tools:
-            logger.info("Enhancing tool descriptions with CrewAI agent")
+            logger.info("Enhancing tool descriptions with AI agent")
             try:
                 # Generate comprehensive analysis
                 analysis = await openapi_agent.generate_comprehensive_analysis(spec, {"source_url": url})
@@ -3083,15 +3138,16 @@ async def process_openapi_url(
         created_tools = []
         failed_tools = []
 
+        # Create MockRequest once outside the loop
+        class _MockRequest:
+            headers = {}
+            client = type("Client", (), {"host": "unknown"})()
+
+        mock_request = _MockRequest()
+
         for tool in tools:
             try:
-                # Extract metadata from request
-                # Note: Using a mock request for metadata capture
-                class MockRequest:
-                    headers = {}
-                    client = type("Client", (), {"host": "unknown"})()
-
-                metadata = MetadataCapture.extract_creation_metadata(MockRequest(), user)
+                metadata = MetadataCapture.extract_creation_metadata(mock_request, user)
                 metadata["created_via"] = "openapi_url"
 
                 created_tool = await tool_service.register_tool(
@@ -3144,6 +3200,8 @@ async def process_openapi_url(
             },
         }
 
+    except HTTPException:
+        raise
     except httpx.HTTPError as e:
         logger.error(f"Failed to fetch OpenAPI spec from {url}: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Failed to fetch OpenAPI specification: {str(e)}")
