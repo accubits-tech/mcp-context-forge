@@ -31,6 +31,7 @@ from mcpgateway.auth import get_current_user
 from mcpgateway.db import get_db
 from mcpgateway.middleware.rbac import get_current_user_with_permissions, require_permission
 from mcpgateway.schemas import (
+    AddTeamMemberRequest,
     EmailUserResponse,
     SuccessResponse,
     TeamCreateRequest,
@@ -359,6 +360,58 @@ async def list_team_members(team_id: str, current_user_ctx: dict = Depends(get_c
     except Exception as e:
         logger.error(f"Error listing team members for team {team_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list team members")
+
+
+@teams_router.post("/{team_id}/members", response_model=TeamMemberResponse, status_code=status.HTTP_201_CREATED)
+@require_permission("teams.manage_members")
+async def add_team_member(team_id: str, request: AddTeamMemberRequest, current_user_ctx: dict = Depends(get_current_user_with_permissions)) -> TeamMemberResponse:
+    """Add a member directly to a team (no invitation flow).
+
+    Args:
+        team_id: Team UUID
+        request: Add member request data
+        current_user_ctx: Currently authenticated user context
+
+    Returns:
+        TeamMemberResponse: Newly added member data
+
+    Raises:
+        HTTPException: If access denied, user not found, or add fails
+    """
+    try:
+        db = current_user_ctx["db"]
+        service = TeamManagementService(db)
+
+        # Check if user is team owner
+        role = await service.get_user_role_in_team(current_user_ctx["email"], team_id)
+        if role != "owner":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+        result = await service.add_member_to_team(team_id, request.user_email, request.role, invited_by=current_user_ctx["email"])
+        if not result:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to add member. User may not exist or is already a member.")
+
+        # Fetch the newly created member to build the response
+        members = await service.get_team_members(team_id)
+        new_member = None
+        for _user, member in members:
+            if member.user_email == request.user_email:
+                new_member = member
+                break
+
+        if not new_member:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Member added but could not be retrieved")
+
+        mm = cast(Any, new_member)
+        return TeamMemberResponse(id=mm.id, team_id=mm.team_id, user_email=mm.user_email, role=mm.role, joined_at=mm.joined_at, invited_by=mm.invited_by, is_active=mm.is_active)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Add member failed: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error adding member {request.user_email} to team {team_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to add team member")
 
 
 @teams_router.put("/{team_id}/members/{user_email}", response_model=TeamMemberResponse)

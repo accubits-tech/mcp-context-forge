@@ -5420,6 +5420,26 @@ class TeamMemberResponse(BaseModel):
     is_active: bool = Field(..., description="Whether the membership is active")
 
 
+class AddTeamMemberRequest(BaseModel):
+    """Schema for directly adding a user to a team (no invitation flow).
+
+    Attributes:
+        user_email: Email address of the user to add
+        role: Role to assign to the user
+
+    Examples:
+        >>> req = AddTeamMemberRequest(
+        ...     user_email="newuser@example.com",
+        ...     role="member"
+        ... )
+        >>> req.user_email
+        'newuser@example.com'
+    """
+
+    user_email: EmailStr = Field(..., description="Email address of user to add")
+    role: Literal["owner", "member"] = Field("member", description="Role to assign to the user")
+
+
 class TeamInviteRequest(BaseModel):
     """Schema for inviting users to a team.
 
