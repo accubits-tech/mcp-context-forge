@@ -15,14 +15,16 @@ It handles:
 """
 
 # Standard
+import ipaddress
 import re
+import socket
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 # Third-Party
 from bs4 import BeautifulSoup
 from markdown import markdown
-import requests
+import httpx
 
 # First-Party
 from mcpgateway.schemas import ToolCreate
@@ -31,6 +33,9 @@ from mcpgateway.services.logging_service import LoggingService
 # Initialize logging service
 logging_service = LoggingService()
 logger = logging_service.get_logger(__name__)
+
+# Maximum raw_content size preserved for LLM analysis (100KB)
+MAX_RAW_CONTENT_SIZE = 100000
 
 
 class APIDocumentationError(Exception):
@@ -43,6 +48,35 @@ class DocumentFormatError(APIDocumentationError):
 
 class ContentExtractionError(APIDocumentationError):
     """Raised when content extraction fails."""
+
+
+def _validate_url_not_internal(target_url: str) -> None:
+    """Validate that a URL does not point to internal/private network addresses.
+
+    Args:
+        target_url: URL to validate
+
+    Raises:
+        ContentExtractionError: If the URL points to an internal address or uses an unsupported scheme
+    """
+    parsed = urlparse(target_url)
+    if parsed.scheme not in ("http", "https"):
+        raise ContentExtractionError(f"Unsupported URL scheme: {parsed.scheme}. Only http and https are allowed.")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ContentExtractionError("URL has no hostname")
+
+    try:
+        default_port = 443 if parsed.scheme == "https" else 80
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or default_port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise ContentExtractionError(f"Cannot resolve hostname: {hostname}")
+
+    for addr_info in addr_infos:
+        ip = ipaddress.ip_address(addr_info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ContentExtractionError(f"URL resolves to internal address ({ip}). External URLs only.")
 
 
 class APIDocumentationParserService:
@@ -62,7 +96,7 @@ class APIDocumentationParserService:
             file_content: Raw file content
             filename: Original filename
             format_hint: Format hint ("auto", "pdf", "html", "markdown", "text")
-            base_url: Base URL for the API
+            base_url: Base URL for the API (reserved for future use)
 
         Returns:
             Parsed documentation structure
@@ -90,6 +124,8 @@ class APIDocumentationParserService:
             else:
                 raise DocumentFormatError(f"Unsupported format: {detected_format}")
 
+        except (DocumentFormatError, ContentExtractionError, APIDocumentationError):
+            raise
         except Exception as e:
             raise ContentExtractionError(f"Failed to parse {detected_format} content: {str(e)}")
 
@@ -98,8 +134,8 @@ class APIDocumentationParserService:
 
         Args:
             url: URL to API documentation
-            format_hint: Format hint ("auto", "html", "markdown", "text")
-            base_url: Base URL for the API
+            format_hint: Format hint ("auto", "html", "markdown", "text", "pdf")
+            base_url: Base URL for the API (reserved for future use)
 
         Returns:
             Parsed documentation structure
@@ -110,27 +146,25 @@ class APIDocumentationParserService:
         try:
             logger.info(f"Fetching API documentation from URL: {url}")
 
-            # Fetch content with timeout and size limits
+            # SSRF protection: validate URL does not resolve to internal address
+            _validate_url_not_internal(url)
+
+            # Fetch content with timeout and size limits using async httpx
             headers = {
                 "User-Agent": "MCP-Gateway API Documentation Parser 1.0",
-                "Accept": "text/html,application/xhtml+xml,text/markdown,text/plain,*/*",
-                "Accept-Encoding": "gzip, deflate",  # Avoid brotli streaming decode issues
+                "Accept": "text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain,*/*",
+                "Accept-Encoding": "gzip, deflate",
             }
 
-            response = requests.get(url, headers=headers, timeout=self.request_timeout, stream=True)
-            response.raise_for_status()
+            async with httpx.AsyncClient(timeout=self.request_timeout, follow_redirects=True) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
 
-            # Check content length
-            content_length = response.headers.get("content-length")
-            if content_length and int(content_length) > self.max_content_length:
-                raise ContentExtractionError(f"Content length {content_length} exceeds maximum {self.max_content_length} bytes")
+                content = response.content
 
-            # Read content with size limit
-            content = b""
-            for chunk in response.iter_content(chunk_size=8192):
-                content += chunk
+                # Check content size
                 if len(content) > self.max_content_length:
-                    raise ContentExtractionError(f"Content size exceeds maximum {self.max_content_length} bytes")
+                    raise ContentExtractionError(f"Content size {len(content)} exceeds maximum {self.max_content_length} bytes")
 
             # Detect format from content-type or URL
             content_type = response.headers.get("content-type", "").lower()
@@ -139,7 +173,11 @@ class APIDocumentationParserService:
             logger.info(f"Detected format '{detected_format}' for URL content")
 
             # Parse content based on format
-            if detected_format == "html":
+            if detected_format == "pdf":
+                doc_structure = await self._parse_pdf_content(content)
+                doc_structure["source_url"] = url
+                return doc_structure
+            elif detected_format == "html":
                 return await self._parse_html_content(content.decode("utf-8", errors="ignore"), source_url=url)
             elif detected_format == "markdown":
                 return await self._parse_markdown_content(content.decode("utf-8", errors="ignore"), source_url=url)
@@ -149,7 +187,11 @@ class APIDocumentationParserService:
                 # Default to HTML parsing for web content
                 return await self._parse_html_content(content.decode("utf-8", errors="ignore"), source_url=url)
 
-        except requests.exceptions.RequestException as e:
+        except (ContentExtractionError, DocumentFormatError, APIDocumentationError):
+            raise
+        except httpx.HTTPStatusError as e:
+            raise ContentExtractionError(f"Failed to fetch URL {url}: HTTP {e.response.status_code}")
+        except httpx.RequestError as e:
             raise ContentExtractionError(f"Failed to fetch URL {url}: {str(e)}")
         except Exception as e:
             raise ContentExtractionError(f"Failed to parse documentation from URL: {str(e)}")
@@ -165,8 +207,13 @@ class APIDocumentationParserService:
         Returns:
             Detected format string
         """
+        # Normalize format_hint to lowercase
+        format_hint = format_hint.lower().strip()
+
         if format_hint != "auto":
-            return format_hint
+            if format_hint in self.supported_formats:
+                return format_hint
+            raise DocumentFormatError(f"Unsupported format hint: {format_hint}. Supported: {', '.join(self.supported_formats)}")
 
         # Check file extension
         filename_lower = filename.lower()
@@ -192,7 +239,7 @@ class APIDocumentationParserService:
                 return "markdown"
             elif "<" in text_content and ">" in text_content:
                 return "html"
-        except:
+        except Exception:
             pass
 
         # Default to text
@@ -209,11 +256,16 @@ class APIDocumentationParserService:
         Returns:
             Detected format string
         """
+        # Normalize format_hint to lowercase
+        format_hint = format_hint.lower().strip()
+
         if format_hint != "auto":
             return format_hint
 
         # Check content-type
-        if "text/html" in content_type:
+        if "application/pdf" in content_type:
+            return "pdf"
+        elif "text/html" in content_type:
             return "html"
         elif "text/markdown" in content_type:
             return "markdown"
@@ -222,7 +274,9 @@ class APIDocumentationParserService:
 
         # Check URL path
         url_lower = url.lower()
-        if url_lower.endswith((".html", ".htm")):
+        if url_lower.endswith(".pdf"):
+            return "pdf"
+        elif url_lower.endswith((".html", ".htm")):
             return "html"
         elif url_lower.endswith((".md", ".markdown")):
             return "markdown"
@@ -257,7 +311,9 @@ class APIDocumentationParserService:
             logger.info(f"Extracted {len(text_content)} characters from PDF")
 
             # Parse the extracted text
-            return await self._parse_text_content(text_content)
+            doc_structure = await self._parse_text_content(text_content)
+            doc_structure["source_format"] = "pdf"
+            return doc_structure
 
         except ImportError:
             raise DocumentFormatError("PyPDF2 library not available for PDF parsing")
@@ -291,10 +347,14 @@ class APIDocumentationParserService:
             for selector in content_selectors:
                 elements = soup.select(selector)
                 if elements:
+                    candidate_content = ""
                     for element in elements:
-                        main_content += element.get_text(separator="\n", strip=True) + "\n\n"
-                    content_found = True
-                    break
+                        candidate_content += element.get_text(separator="\n", strip=True) + "\n\n"
+                    # Only accept if content is meaningful (non-empty after strip)
+                    if candidate_content.strip():
+                        main_content = candidate_content
+                        content_found = True
+                        break
 
             # If no main content found, use body
             if not content_found:
@@ -330,29 +390,92 @@ class APIDocumentationParserService:
             # Convert markdown to HTML for structured parsing
             html_content = markdown(content)
 
-            # Also keep the raw markdown for text analysis
             logger.info(f"Processing {len(content)} characters of Markdown content")
 
-            # Parse both HTML structure and raw text
+            # Parse the HTML-converted version (which internally calls _parse_text_content)
             html_doc = await self._parse_html_content(html_content, source_url=source_url)
-            text_doc = await self._parse_text_content(content, source_url=source_url)
 
-            # Combine results, preferring HTML structure analysis
-            doc_structure = html_doc
-            doc_structure["source_format"] = "markdown"
-            doc_structure["raw_content"] = content
+            # Also do a direct text regex pass on the raw markdown for endpoints
+            # that may be lost in HTML conversion (e.g., code blocks, tables)
+            raw_endpoints = self._extract_endpoints_from_text(content)
 
-            # Merge any additional endpoints found in text analysis
-            if text_doc.get("potential_endpoints"):
-                existing_endpoints = {ep.get("path", "") for ep in doc_structure.get("potential_endpoints", [])}
-                for endpoint in text_doc["potential_endpoints"]:
-                    if endpoint.get("path", "") not in existing_endpoints:
-                        doc_structure["potential_endpoints"].append(endpoint)
+            # Merge any additional endpoints found in raw text that HTML missed
+            existing_keys = {(ep.get("method", "GET"), ep.get("path", "")) for ep in html_doc.get("potential_endpoints", [])}
+            for endpoint in raw_endpoints:
+                key = (endpoint.get("method", "GET"), endpoint.get("path", ""))
+                if key not in existing_keys and key[1]:
+                    html_doc.setdefault("potential_endpoints", []).append(endpoint)
+                    existing_keys.add(key)
 
-            return doc_structure
+            html_doc["source_format"] = "markdown"
+            # Preserve full raw content for LLM analysis (consistent with text path)
+            html_doc["raw_content"] = content[:MAX_RAW_CONTENT_SIZE] if len(content) > MAX_RAW_CONTENT_SIZE else content
+
+            return html_doc
 
         except Exception as e:
             raise ContentExtractionError(f"Markdown parsing failed: {str(e)}")
+
+    def _extract_endpoints_from_text(self, content: str) -> List[Dict[str, Any]]:
+        """Extract potential API endpoints from text using regex patterns only.
+
+        This is a lightweight extraction method that doesn't build a full doc_structure,
+        used for supplementing other parsers.
+
+        Args:
+            content: Text content
+
+        Returns:
+            List of endpoint dicts with method, path, context
+        """
+        endpoints = []
+
+        # Pattern 1: HTTP method + path
+        method_path_pattern = r"\b(GET|POST|PUT|DELETE|PATCH)\s+([/\w\-{}:]+)"
+        for match in re.finditer(method_path_pattern, content, re.IGNORECASE):
+            method, path = match.groups()
+            endpoints.append(
+                {
+                    "method": method.upper(),
+                    "path": path,
+                    "context_start": max(0, match.start() - 100),
+                    "context_end": min(len(content), match.end() + 100),
+                    "context": content[max(0, match.start() - 100) : min(len(content), match.end() + 100)],
+                }
+            )
+
+        # Pattern 2: URL patterns with base URLs
+        url_pattern = r"https?://[^\s/]+(/[^\s]*)"
+        for match in re.finditer(url_pattern, content):
+            path = match.group(1)
+            if path and len(path) > 1:
+                endpoints.append(
+                    {
+                        "method": "GET",
+                        "path": path,
+                        "context_start": max(0, match.start() - 100),
+                        "context_end": min(len(content), match.end() + 100),
+                        "context": content[max(0, match.start() - 100) : min(len(content), match.end() + 100)],
+                        "full_url": match.group(0),
+                    }
+                )
+
+        # Pattern 3: Path-only patterns (starting with /)
+        path_pattern = r"(?:^|\s)(/[/\w\-{}:]+)(?=\s|$)"
+        for match in re.finditer(path_pattern, content, re.MULTILINE):
+            path = match.group(1)
+            if len(path) > 1 and not path.endswith(".") and ("{" not in path or "}" in path):
+                endpoints.append(
+                    {
+                        "method": "GET",
+                        "path": path,
+                        "context_start": max(0, match.start() - 100),
+                        "context_end": min(len(content), match.end() + 100),
+                        "context": content[max(0, match.start() - 100) : min(len(content), match.end() + 100)],
+                    }
+                )
+
+        return endpoints
 
     async def _parse_text_content(self, content: str, source_url: Optional[str] = None) -> Dict[str, Any]:
         """Parse plain text content to extract API documentation.
@@ -368,57 +491,12 @@ class APIDocumentationParserService:
             logger.info(f"Analyzing {len(content)} characters of text content")
 
             # Extract potential API endpoints using regex patterns
-            endpoints = []
-
-            # Pattern 1: HTTP method + path
-            method_path_pattern = r"\b(GET|POST|PUT|DELETE|PATCH)\s+([/\w\-{}:]+)"
-            for match in re.finditer(method_path_pattern, content, re.IGNORECASE):
-                method, path = match.groups()
-                endpoints.append(
-                    {
-                        "method": method.upper(),
-                        "path": path,
-                        "context_start": max(0, match.start() - 100),
-                        "context_end": min(len(content), match.end() + 100),
-                        "context": content[max(0, match.start() - 100) : min(len(content), match.end() + 100)],
-                    }
-                )
-
-            # Pattern 2: URL patterns with base URLs
-            url_pattern = r"https?://[^\s/]+(/[^\s]*)"
-            for match in re.finditer(url_pattern, content):
-                path = match.group(1)
-                if path and len(path) > 1:  # Ignore root paths
-                    endpoints.append(
-                        {
-                            "method": "GET",  # Default assumption
-                            "path": path,
-                            "context_start": max(0, match.start() - 100),
-                            "context_end": min(len(content), match.end() + 100),
-                            "context": content[max(0, match.start() - 100) : min(len(content), match.end() + 100)],
-                            "full_url": match.group(0),
-                        }
-                    )
-
-            # Pattern 3: Path-only patterns (starting with /)
-            path_pattern = r"(?:^|\s)(/[/\w\-{}:]+)(?=\s|$)"
-            for match in re.finditer(path_pattern, content, re.MULTILINE):
-                path = match.group(1)
-                if len(path) > 1 and not path.endswith(".") and "{" not in path or "}" in path:
-                    endpoints.append(
-                        {
-                            "method": "GET",  # Default assumption
-                            "path": path,
-                            "context_start": max(0, match.start() - 100),
-                            "context_end": min(len(content), match.end() + 100),
-                            "context": content[max(0, match.start() - 100) : min(len(content), match.end() + 100)],
-                        }
-                    )
+            raw_endpoints = self._extract_endpoints_from_text(content)
 
             # Remove duplicates based on method + path
             unique_endpoints = []
             seen = set()
-            for endpoint in endpoints:
+            for endpoint in raw_endpoints:
                 key = (endpoint.get("method", "GET"), endpoint.get("path", ""))
                 if key not in seen and key[1]:  # Ensure path is not empty
                     seen.add(key)
@@ -443,7 +521,7 @@ class APIDocumentationParserService:
                 "potential_endpoints": unique_endpoints,
                 "authentication_info": auth_info,
                 "parameters": parameters,
-                "raw_content": content[:50000] if len(content) > 50000 else content,  # First 50KB for AI analysis
+                "raw_content": content[:MAX_RAW_CONTENT_SIZE] if len(content) > MAX_RAW_CONTENT_SIZE else content,
             }
 
             logger.info(f"Extracted {len(unique_endpoints)} potential endpoints from text content")
@@ -527,20 +605,22 @@ class APIDocumentationParserService:
         Returns:
             Authentication information
         """
-        auth_info = {"methods": [], "details": {}}
+        auth_info: Dict[str, Any] = {"methods": [], "details": {}}
 
-        # Common authentication keywords
+        # Tighter authentication keyword patterns to reduce false positives
         auth_patterns = {
-            "bearer": r"\b(bearer\s+token|authorization:\s*bearer|jwt\s+token)\b",
-            "api_key": r"\b(api\s*key|x-api-key|apikey)\b",
-            "basic": r"\b(basic\s+auth|http\s+basic|username.*password)\b",
-            "oauth": r"\b(oauth|o-?auth\s*2\.0)\b",
+            "bearer": r"\b(bearer\s+token|authorization:\s*bearer|jwt\s+(token|auth)|bearer\s+auth)\b",
+            "api_key": r"\b(api[\s_-]*key|x-api-key|apikey)\b",
+            "basic": r"\b(basic\s+auth(?:entication)?|http\s+basic|basic\s+credentials)\b",
+            "oauth": r"\b(oauth\s*2?\.?0?|o-?auth\s+(?:flow|token|client|grant|scope))\b",
         }
 
         content_lower = content.lower()
         for auth_type, pattern in auth_patterns.items():
-            if re.search(pattern, content_lower):
+            matches = re.findall(pattern, content_lower)
+            if matches:
                 auth_info["methods"].append(auth_type)
+                auth_info["details"][auth_type] = {"match_count": len(matches)}
 
         return auth_info
 
@@ -589,6 +669,7 @@ class APIDocumentationParserService:
             List of ToolCreate objects
         """
         tools = []
+        seen_names = set()
         endpoints = doc_structure.get("potential_endpoints", [])
 
         logger.info(f"Generating tools from {len(endpoints)} detected endpoints")
@@ -597,7 +678,8 @@ class APIDocumentationParserService:
             try:
                 tool = await self._create_tool_from_endpoint(endpoint=endpoint, doc_structure=doc_structure, base_url=base_url, gateway_id=gateway_id, additional_tags=tags or [])
 
-                if tool:
+                if tool and tool.name not in seen_names:
+                    seen_names.add(tool.name)
                     tools.append(tool)
 
             except Exception as e:

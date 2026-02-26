@@ -11,7 +11,9 @@ Uses direct LLM API calls instead of CrewAI for better Python version compatibil
 """
 
 # Standard
+import asyncio
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 # First-Party
@@ -779,12 +781,14 @@ Focus on making tools more discoverable, understandable, and safe to use."""
         logger.info(f"Total unique tools extracted: {len(unique_tools)}")
         return unique_tools
 
-    def _chunk_content(self, content: str, chunk_size: int) -> List[str]:
-        """Split content into chunks, trying to break at natural boundaries.
+    def _chunk_content(self, content: str, chunk_size: int, overlap: int = 500) -> List[str]:
+        """Split content into chunks, trying to break at natural boundaries with overlap.
 
         Args:
             content: Raw content to chunk
             chunk_size: Maximum size per chunk
+            overlap: Number of characters to overlap between chunks to avoid losing
+                     endpoint descriptions that span chunk boundaries
 
         Returns:
             List of content chunks
@@ -814,12 +818,16 @@ Focus on making tools more discoverable, understandable, and safe to use."""
             if chunk:
                 chunks.append(chunk)
 
-            current_pos = end_pos
+            # Advance position with overlap so boundary content is seen by both chunks
+            if end_pos < len(content):
+                current_pos = max(end_pos - overlap, current_pos + 1)
+            else:
+                current_pos = end_pos
 
         return chunks
 
-    async def _extract_tools_from_chunk(self, chunk: str, base_url: str, source_info: Dict[str, Any], chunk_idx: int, total_chunks: int) -> List[Dict[str, Any]]:
-        """Extract tools from a single content chunk.
+    async def _extract_tools_from_chunk(self, chunk: str, base_url: str, source_info: Dict[str, Any], chunk_idx: int, total_chunks: int, max_retries: int = 2) -> List[Dict[str, Any]]:
+        """Extract tools from a single content chunk with retry logic.
 
         Args:
             chunk: Content chunk to analyze
@@ -827,6 +835,7 @@ Focus on making tools more discoverable, understandable, and safe to use."""
             source_info: Source metadata
             chunk_idx: Index of this chunk
             total_chunks: Total number of chunks
+            max_retries: Maximum number of retries on transient failures
 
         Returns:
             List of tool definitions from this chunk
@@ -863,6 +872,13 @@ For EACH endpoint found, provide a complete tool definition with:
 8. "response_description": Brief description of what the endpoint returns
 9. "tags": Array of relevant tags (e.g., ["users", "authentication"])
 10. "auth_required": true/false - whether authentication is needed
+11. "auth_type": If auth is required, specify the type. Must be one of:
+    - "bearer" (Bearer token / JWT)
+    - "api_key" (API key in header, query, or cookie)
+    - "basic" (HTTP Basic Authentication)
+    - "oauth2" (OAuth 2.0)
+    - "none" (no authentication)
+    Infer from documentation context (e.g., "Authorization: Bearer" = bearer, "X-API-Key" = api_key)
 
 IMPORTANT RULES:
 - Extract EVERY endpoint you can identify from the documentation
@@ -873,6 +889,7 @@ IMPORTANT RULES:
 - Use the exact base_url provided: {base_url}
 - Generate meaningful, unique names for each endpoint
 - Include ALL parameters mentioned, even if descriptions are vague
+- Pay close attention to authentication sections and map auth_type accurately
 
 Return a JSON object with this structure:
 {{
@@ -885,7 +902,8 @@ Return a JSON object with this structure:
       "description": "Description of what this does",
       "parameters": [...],
       "tags": ["tag1", "tag2"],
-      "auth_required": false
+      "auth_required": false,
+      "auth_type": "none"
     }}
   ],
   "extraction_notes": "Any notes about ambiguous or unclear endpoints"
@@ -894,28 +912,42 @@ Return a JSON object with this structure:
 If no endpoints are found in this content, return: {{"tools": [], "extraction_notes": "No API endpoints found in this section"}}
 """
 
-        try:
-            messages = [{"role": "system", "content": OPENAPI_ANALYST_SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+        messages = [{"role": "system", "content": OPENAPI_ANALYST_SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
 
-            response = await self.llm_service.chat_completion_json(messages, max_tokens=8000)
+        # Retry loop for transient LLM failures
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = await self.llm_service.chat_completion_json(messages, max_tokens=8000)
 
-            tools = response.get("tools", [])
+                tools = response.get("tools", [])
 
-            # Validate and normalize each tool
-            validated_tools = []
-            for tool in tools:
-                validated = self._validate_and_normalize_tool(tool, base_url)
-                if validated:
-                    validated_tools.append(validated)
+                # Validate and normalize each tool
+                validated_tools = []
+                for tool in tools:
+                    validated = self._validate_and_normalize_tool(tool, base_url)
+                    if validated:
+                        validated_tools.append(validated)
 
-            if response.get("extraction_notes"):
-                logger.info(f"LLM extraction notes: {response['extraction_notes']}")
+                if response.get("extraction_notes"):
+                    logger.info(f"LLM extraction notes: {response['extraction_notes']}")
 
-            return validated_tools
+                return validated_tools
 
-        except (LLMAPIError, LLMConfigurationError) as e:
-            logger.error(f"LLM API error extracting tools: {e}")
-            return []
+            except LLMConfigurationError as e:
+                # Configuration errors won't be fixed by retrying
+                logger.error(f"LLM configuration error extracting tools: {e}")
+                return []
+            except LLMAPIError as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s
+                    logger.warning(f"LLM API error on attempt {attempt + 1}/{max_retries + 1}, retrying in {wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"LLM API error after {max_retries + 1} attempts: {e}")
+
+        return []
 
     def _validate_and_normalize_tool(self, tool: Dict[str, Any], base_url: str) -> Optional[Dict[str, Any]]:
         """Validate and normalize a tool definition from LLM.
@@ -958,12 +990,9 @@ If no endpoints are found in this content, return: {{"tools": [], "extraction_no
         if not full_url.startswith(("http://", "https://")):
             full_url = f"{base_url.rstrip('/')}{path}"
 
-        # Normalize name (ensure valid identifier)
-        # Standard
-        import re
-
+        # Normalize name (ensure valid identifier, prefer camelCase)
         normalized_name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
-        if normalized_name[0].isdigit():
+        if normalized_name and normalized_name[0].isdigit():
             normalized_name = "api_" + normalized_name
 
         # Helper to ensure description is always a string
@@ -1030,6 +1059,24 @@ If no endpoints are found in this content, return: {{"tools": [], "extraction_no
         tool_description = ensure_string_description(tool.get("description"), f"{method} {path}")
         response_desc = ensure_string_description(tool.get("response_description"), "")
 
+        # Extract auth type from LLM response
+        auth_type = "none"
+        if tool.get("auth_required"):
+            raw_auth_type = (tool.get("auth_type") or "").lower().strip()
+            valid_auth_types = {"bearer", "api_key", "basic", "oauth2", "none"}
+            if raw_auth_type in valid_auth_types:
+                auth_type = raw_auth_type
+            elif "bearer" in raw_auth_type or "jwt" in raw_auth_type:
+                auth_type = "bearer"
+            elif "api" in raw_auth_type and "key" in raw_auth_type:
+                auth_type = "api_key"
+            elif "basic" in raw_auth_type:
+                auth_type = "basic"
+            elif "oauth" in raw_auth_type:
+                auth_type = "oauth2"
+            else:
+                auth_type = "bearer"  # Default for authenticated endpoints
+
         return {
             "name": normalized_name,
             "method": method,
@@ -1039,5 +1086,6 @@ If no endpoints are found in this content, return: {{"tools": [], "extraction_no
             "input_schema": input_schema,
             "tags": tool.get("tags", []) if isinstance(tool.get("tags"), list) else [],
             "auth_required": bool(tool.get("auth_required", False)),
+            "auth_type": auth_type,
             "annotations": {"title": name, "api_doc_method": method, "api_doc_path": path, "generated_from": "llm_direct_extraction", "response_description": response_desc},
         }

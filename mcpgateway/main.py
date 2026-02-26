@@ -3224,6 +3224,100 @@ async def process_openapi_url(
 ################################
 
 
+def _build_auth_from_llm_tool_def(tool_def: Dict[str, Any], doc_structure: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Build authentication configuration from LLM-extracted tool definition.
+
+    Maps the LLM's auth_type and auth_required fields to actual AuthenticationValues-compatible dicts.
+    Falls back to doc_structure's regex-detected auth patterns if LLM doesn't specify a type.
+
+    Args:
+        tool_def: Tool definition from LLM extraction
+        doc_structure: Optional parsed doc structure with regex-detected auth info
+
+    Returns:
+        Auth dict compatible with AuthenticationValues, or None
+    """
+    if not tool_def.get("auth_required"):
+        return None
+
+    auth_type = (tool_def.get("auth_type") or "").lower().strip()
+
+    # If LLM didn't specify a type, try regex-detected auth from doc_structure
+    if not auth_type or auth_type == "none":
+        if doc_structure:
+            detected_methods = doc_structure.get("authentication_info", {}).get("methods", [])
+            if "bearer" in detected_methods:
+                auth_type = "bearer"
+            elif "api_key" in detected_methods:
+                auth_type = "api_key"
+            elif "basic" in detected_methods:
+                auth_type = "basic"
+            elif "oauth" in detected_methods:
+                auth_type = "oauth2"
+
+    if not auth_type or auth_type == "none":
+        # Default to bearer for endpoints marked as requiring auth
+        auth_type = "bearer"
+
+    if auth_type == "bearer":
+        return {"auth_type": "bearer", "auth_value": "REPLACE_WITH_BEARER_TOKEN"}
+    elif auth_type == "api_key":
+        return {"auth_type": "authheaders", "auth_header_key": "X-API-Key", "auth_header_value": "REPLACE_WITH_API_KEY"}
+    elif auth_type == "basic":
+        return {"auth_type": "basic", "username": "REPLACE_WITH_USERNAME", "password": "REPLACE_WITH_PASSWORD"}
+    elif auth_type == "oauth2":
+        return {"auth_type": "bearer", "auth_value": "REPLACE_WITH_OAUTH2_TOKEN"}
+
+    return {"auth_type": "bearer", "auth_value": "REPLACE_WITH_TOKEN"}
+
+
+def _llm_tool_defs_to_tool_creates(llm_tool_defs: List[Dict[str, Any]], gateway_id: Optional[str], additional_tags: List[str], doc_structure: Optional[Dict[str, Any]] = None) -> List:
+    """Convert LLM-extracted tool definitions to ToolCreate objects with proper auth.
+
+    Args:
+        llm_tool_defs: Tool definitions from LLM extraction
+        gateway_id: Gateway ID to associate tools with
+        additional_tags: Additional tags to merge
+        doc_structure: Optional parsed doc structure for auth fallback
+
+    Returns:
+        List of ToolCreate objects
+    """
+    tools = []
+    seen_names = set()
+
+    for tool_def in llm_tool_defs:
+        try:
+            name = tool_def.get("name", "")
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+
+            # Merge additional tags
+            tool_tags = (tool_def.get("tags", []) or []) + additional_tags + ["api-docs", "llm-extracted"]
+
+            # Build auth from LLM analysis + doc_structure fallback
+            auth = _build_auth_from_llm_tool_def(tool_def, doc_structure)
+
+            tool = ToolCreate(
+                name=name,
+                url=tool_def["url"],
+                description=tool_def.get("description", f"{tool_def['method']} {tool_def['path']}"),
+                integration_type="REST",
+                request_type=tool_def["method"],
+                input_schema=tool_def.get("input_schema", {"type": "object", "properties": {}}),
+                annotations=tool_def.get("annotations", {}),
+                auth=auth,
+                gateway_id=gateway_id,
+                tags=tool_tags,
+            )
+            tools.append(tool)
+        except Exception as e:
+            logger.warning(f"Failed to create ToolCreate from LLM definition {tool_def.get('name')}: {e}")
+
+    return tools
+
+
 @tool_router.post("/api-docs/upload", response_model=Dict[str, Any])
 async def upload_api_documentation(
     file: UploadFile = File(...),
@@ -3301,26 +3395,8 @@ async def upload_api_documentation(
 
                 logger.info(f"LLM extracted {len(llm_tool_defs)} tool definitions")
 
-                # Convert LLM tool definitions to ToolCreate objects
-                for tool_def in llm_tool_defs:
-                    try:
-                        # Merge additional tags
-                        tool_tags = (tool_def.get("tags", []) or []) + additional_tags + ["api-docs", "llm-extracted"]
-
-                        tool = ToolCreate(
-                            name=tool_def["name"],
-                            url=tool_def["url"],
-                            description=tool_def.get("description", f"{tool_def['method']} {tool_def['path']}"),
-                            integration_type="REST",
-                            request_type=tool_def["method"],
-                            input_schema=tool_def.get("input_schema", {"type": "object", "properties": {}}),
-                            annotations=tool_def.get("annotations", {}),
-                            gateway_id=gateway_id,
-                            tags=tool_tags,
-                        )
-                        tools.append(tool)
-                    except Exception as e:
-                        logger.warning(f"Failed to create ToolCreate from LLM definition {tool_def.get('name')}: {e}")
+                # Convert LLM tool definitions to ToolCreate objects with proper auth
+                tools = _llm_tool_defs_to_tool_creates(llm_tool_defs, gateway_id, additional_tags, doc_structure)
 
                 analysis = {
                     "extraction_method": "llm_direct",
@@ -3362,18 +3438,18 @@ async def upload_api_documentation(
                         "method": tool.request_type,
                         "tags": tool.tags,
                         "requires_auth": tool.auth is not None,
-                        "confidence": tool.annotations.get("confidence_rating", 5),
+                        "confidence": tool.annotations.get("confidence_rating", 5) if tool.annotations else 5,
                     }
                     for tool in tools
                 ],
-                "analysis": doc_structure if not enhance_with_ai else analysis,
+                "analysis": analysis,
             }
 
         # Create tools in database
         created_tools = []
         errors = []
 
-        # Note: Using a mock request for metadata capture since file upload doesn't have standard request
+        # Mock request for metadata capture since file upload doesn't have standard request
         class MockRequest:
             headers = {}
             client = type("Client", (), {"host": "unknown"})()
@@ -3432,7 +3508,7 @@ async def upload_api_documentation(
             "import_batch_id": import_batch_id,
             "tool_count": len(created_tools),
             "created_tools": created_tools,
-            "analysis": doc_structure if not enhance_with_ai else analysis,
+            "analysis": analysis,
             "auth_summary": {
                 "tools_requiring_auth": tools_requiring_auth,
                 "tools_configured": 0,
@@ -3445,6 +3521,8 @@ async def upload_api_documentation(
 
         return result
 
+    except HTTPException:
+        raise
     except DocumentFormatError as e:
         logger.error(f"Document format error for {file.filename}: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Document format error: {str(e)}")
@@ -3475,7 +3553,7 @@ async def process_api_documentation_url(
 
     Args:
         url: URL to API documentation
-        format_hint: Format hint ("auto", "html", "markdown", "text")
+        format_hint: Format hint ("auto", "html", "markdown", "text", "pdf")
         base_url: Base URL for the API
         gateway_id: Gateway ID to associate tools with
         tags: Comma-separated additional tags for tools
@@ -3501,7 +3579,7 @@ async def process_api_documentation_url(
         if tags:
             additional_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-        # Parse API documentation from URL to extract raw content
+        # Parse API documentation from URL (SSRF protection is inside the parser service)
         doc_structure = await api_doc_parser_service.parse_documentation_url(url, format_hint, base_url)
 
         logger.info(f"Parsed documentation: {doc_structure.get('content_length', 0)} chars, format: {doc_structure.get('source_format', 'unknown')}")
@@ -3532,26 +3610,8 @@ async def process_api_documentation_url(
 
                 logger.info(f"LLM extracted {len(llm_tool_defs)} tool definitions")
 
-                # Convert LLM tool definitions to ToolCreate objects
-                for tool_def in llm_tool_defs:
-                    try:
-                        # Merge additional tags
-                        tool_tags = (tool_def.get("tags", []) or []) + additional_tags + ["api-docs", "llm-extracted"]
-
-                        tool = ToolCreate(
-                            name=tool_def["name"],
-                            url=tool_def["url"],
-                            description=tool_def.get("description", f"{tool_def['method']} {tool_def['path']}"),
-                            integration_type="REST",
-                            request_type=tool_def["method"],
-                            input_schema=tool_def.get("input_schema", {"type": "object", "properties": {}}),
-                            annotations=tool_def.get("annotations", {}),
-                            gateway_id=gateway_id,
-                            tags=tool_tags,
-                        )
-                        tools.append(tool)
-                    except Exception as e:
-                        logger.warning(f"Failed to create ToolCreate from LLM definition {tool_def.get('name')}: {e}")
+                # Convert LLM tool definitions to ToolCreate objects with proper auth
+                tools = _llm_tool_defs_to_tool_creates(llm_tool_defs, gateway_id, additional_tags, doc_structure)
 
                 analysis = {
                     "extraction_method": "llm_direct",
@@ -3594,18 +3654,18 @@ async def process_api_documentation_url(
                         "method": tool.request_type,
                         "tags": tool.tags,
                         "requires_auth": tool.auth is not None,
-                        "confidence": tool.annotations.get("confidence_rating", 5),
+                        "confidence": tool.annotations.get("confidence_rating", 5) if tool.annotations else 5,
                     }
                     for tool in tools
                 ],
-                "analysis": analysis or doc_structure,
+                "analysis": analysis,
             }
 
         # Create tools in database
         created_tools = []
         errors = []
 
-        # Note: Using a mock request for metadata capture since URL endpoint doesn't have standard request
+        # Mock request for metadata capture since URL endpoint doesn't have standard request
         class MockRequest:
             headers = {}
             client = type("Client", (), {"host": "unknown"})()
@@ -3664,7 +3724,7 @@ async def process_api_documentation_url(
             "import_batch_id": import_batch_id,
             "tool_count": len(created_tools),
             "created_tools": created_tools,
-            "analysis": analysis or doc_structure,
+            "analysis": analysis,
             "auth_summary": {
                 "tools_requiring_auth": tools_requiring_auth,
                 "tools_configured": 0,
@@ -3677,6 +3737,8 @@ async def process_api_documentation_url(
 
         return result
 
+    except HTTPException:
+        raise
     except ContentExtractionError as e:
         logger.error(f"Content extraction error for {url}: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Content extraction error: {str(e)}")
