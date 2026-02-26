@@ -3021,6 +3021,9 @@ class GatewayRead(BaseModelWithConfigDict):
     # OAuth 2.0 configuration
     oauth_config: Optional[Dict[str, Any]] = Field(None, description="OAuth 2.0 configuration including grant_type, client_id, encrypted client_secret, URLs, and scopes")
 
+    # OAuth authorization status (populated at read time based on current user's token)
+    oauth_authorized: bool = Field(default=False, description="Whether the current user has a valid OAuth token for this gateway")
+
     # auth_value will populate the following fields
     auth_username: Optional[str] = Field(None, description="username for basic authentication")
     auth_password: Optional[str] = Field(None, description="password for basic authentication")
@@ -6393,6 +6396,17 @@ class PluginStatsResponse(BaseModel):
 # MCP Server Catalog Schemas
 
 
+class CatalogOAuthConfig(BaseModel):
+    """OAuth configuration for a catalog server."""
+
+    authorize_url: Optional[str] = Field(None, description="OAuth authorization endpoint URL")
+    token_url: Optional[str] = Field(None, description="OAuth token exchange endpoint URL")
+    scopes: List[str] = Field(default_factory=list, description="Available OAuth scopes")
+    supports_dcr: bool = Field(default=False, description="Whether Dynamic Client Registration (RFC 7591) is supported")
+    registration_url: Optional[str] = Field(None, description="DCR registration endpoint URL")
+    setup_guide: Optional[str] = Field(None, description="Guide for creating client_id and client_secret")
+
+
 class CatalogServer(BaseModel):
     """Schema for a catalog server entry."""
 
@@ -6410,6 +6424,7 @@ class CatalogServer(BaseModel):
     logo_url: Optional[str] = Field(None, description="URL to server logo/icon")
     documentation_url: Optional[str] = Field(None, description="URL to server documentation")
     tools: List[str] = Field(default_factory=list, description="List of tool names provided by this server")
+    oauth_config: Optional[CatalogOAuthConfig] = Field(None, description="OAuth configuration details")
     is_registered: bool = Field(default=False, description="Whether server is already registered")
     is_available: bool = Field(default=True, description="Whether server is currently available")
 

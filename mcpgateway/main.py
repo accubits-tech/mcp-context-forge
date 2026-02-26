@@ -82,6 +82,7 @@ from mcpgateway.common.models import JSONRPCError as PydanticJSONRPCError
 from mcpgateway.common.models import ListResourceTemplatesResult, LogLevel, Root
 from mcpgateway.config import settings
 from mcpgateway.db import refresh_slugs_on_startup, SessionLocal
+from mcpgateway.db import OAuthToken
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.handlers.sampling import SamplingHandler
 from mcpgateway.middleware.http_auth_middleware import HttpAuthMiddleware
@@ -4390,8 +4391,9 @@ async def list_gateways(
     Returns:
         List of gateway records.
     """
-    logger.debug(f"User '{user}' requested list of gateways with include_inactive={include_inactive}")
-    return await gateway_service.list_gateways(db, include_inactive=include_inactive)
+    user_email = get_user_email(user)
+    logger.debug(f"User '{user_email}' requested list of gateways with include_inactive={include_inactive}")
+    return await gateway_service.list_gateways(db, include_inactive=include_inactive, user_email=user_email)
 
 
 @gateway_router.post("", response_model=GatewayRead)
@@ -4480,8 +4482,19 @@ async def get_gateway(gateway_id: str, db: Session = Depends(get_db), user=Depen
     Returns:
         Gateway data with associated tools list.
     """
-    logger.debug(f"User '{user}' requested gateway {gateway_id}")
+    user_email = get_user_email(user)
+    logger.debug(f"User '{user_email}' requested gateway {gateway_id}")
     gateway = await gateway_service.get_gateway(db, gateway_id)
+
+    # Check OAuth authorization status for this user
+    if gateway.auth_type == "oauth" and user_email:
+        token_exists = db.execute(
+            select(OAuthToken.id).where(
+                OAuthToken.gateway_id == gateway_id,
+                OAuthToken.app_user_email == user_email,
+            )
+        ).scalar_one_or_none()
+        gateway.oauth_authorized = token_exists is not None
 
     # Query tools for this gateway
     stmt = select(DbTool).where(DbTool.gateway_id == gateway_id)

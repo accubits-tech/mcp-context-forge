@@ -74,6 +74,7 @@ from mcpgateway.config import settings
 from mcpgateway.db import EmailTeam
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import get_db
+from mcpgateway.db import OAuthToken
 from mcpgateway.db import Prompt as DbPrompt
 from mcpgateway.db import Resource as DbResource
 from mcpgateway.db import SessionLocal
@@ -482,7 +483,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     },
                 }
                 request_headers = {**headers, "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-                logger.debug(f"[GATEWAY_VALIDATION] Sending POST request for STREAMABLEHTTP validation")
+                logger.debug("[GATEWAY_VALIDATION] Sending POST request for STREAMABLEHTTP validation")
 
                 async with validation_client.client.stream("POST", url, headers=request_headers, json=mcp_init_request, timeout=timeout) as response:
                     response_headers = dict(response.headers)
@@ -543,7 +544,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 if transport_type == "SSE":
                     logger.info(f"Validating SSE gateway URL {url}")
                     if "text/event-stream" in content_type:
-                        logger.debug(f"[GATEWAY_VALIDATION] SSE validation succeeded")
+                        logger.debug("[GATEWAY_VALIDATION] SSE validation succeeded")
                         return True
                     else:
                         logger.warning(f"[GATEWAY_VALIDATION] SSE validation failed: expected text/event-stream but got {content_type}")
@@ -705,7 +706,6 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
             # Case 2: Both have auth_value (need to decrypt and compare)
             elif auth_value and existing.auth_value:
-
                 try:
                     # Decrypt existing auth_value
                     if isinstance(existing.auth_value, str):
@@ -831,6 +831,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             #     )
 
             auth_type = getattr(gateway, "auth_type", None)
+            # Auto-set auth_type to "oauth" when oauth_config is provided
+            if not auth_type and getattr(gateway, "oauth_config", None):
+                auth_type = "oauth"
             # Support multiple custom headers
             auth_value = getattr(gateway, "auth_value", {})
             authentication_headers: Optional[Dict[str, str]] = None
@@ -1118,7 +1121,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 logger.info(f"[FETCH_TOOLS_OAUTH] Using SSE transport to {gateway.url}")
                 capabilities, tools, resources, prompts = await self._connect_to_sse_server_without_validation(gateway.url, authentication)
             elif gateway.transport.upper() == "STREAMABLEHTTP":
-                logger.debug(f"[FETCH_TOOLS_OAUTH] Using STREAMABLEHTTP transport")
+                logger.debug("[FETCH_TOOLS_OAUTH] Using STREAMABLEHTTP transport")
                 capabilities, tools, resources, prompts = await self.connect_to_streamablehttp_server(gateway.url, authentication)
             else:
                 logger.error(f"[FETCH_TOOLS_OAUTH] Unsupported transport type: {gateway.transport}")
@@ -1207,7 +1210,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             logger.error(f"[FETCH_TOOLS_OAUTH] Failed for gateway {gateway_id}: {type(e).__name__}: {e}", exc_info=True)
             raise GatewayConnectionError(f"Failed to fetch tools after OAuth: {type(e).__name__}: {str(e)}")
 
-    async def list_gateways(self, db: Session, include_inactive: bool = False, tags: Optional[List[str]] = None) -> List[GatewayRead]:
+    async def list_gateways(self, db: Session, include_inactive: bool = False, tags: Optional[List[str]] = None, user_email: Optional[str] = None) -> List[GatewayRead]:
         """List all registered gateways.
 
         Args:
@@ -1255,25 +1258,39 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
         gateways = db.execute(query).scalars().all()
 
-        # print("******************************************************************")
-        # for g in gateways:
-        #         print("----------------------------")
-        #         for attr in dir(g):
-        #             if not attr.startswith("_"):
-        #                 try:
-        #                     value = getattr(g, attr)
-        #                 except Exception:
-        #                     value = "<unreadable>"
-        #                 print(f"{attr}: {value}")
-        #         # print(f"Gateway oauth_config: {g}")
-        #         # print(f"Gateway auth_type: {g['auth_type']}")
-        # print("******************************************************************")
+        # Auto-fix auth_type for gateways with oauth_config but missing auth_type
+        for g in gateways:
+            if not g.auth_type and g.oauth_config:
+                g.auth_type = "oauth"
+                db.add(g)
+        db.flush()
+
+        # Batch-check which OAuth gateways have valid tokens for this user
+        authorized_gateway_ids: Set[str] = set()
+        if user_email:
+            oauth_gateway_ids = [g.id for g in gateways if getattr(g, "auth_type", None) == "oauth"]
+            if oauth_gateway_ids:
+                authorized_tokens = (
+                    db.execute(
+                        select(OAuthToken.gateway_id).where(
+                            OAuthToken.gateway_id.in_(oauth_gateway_ids),
+                            OAuthToken.app_user_email == user_email,
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                authorized_gateway_ids = set(authorized_tokens)
 
         result = []
         for g in gateways:
             team_name = self._get_team_name(db, getattr(g, "team_id", None))
             g.team = team_name
-            result.append(GatewayRead.model_validate(self._prepare_gateway_for_read(g)).masked())
+            gateway_read = GatewayRead.model_validate(self._prepare_gateway_for_read(g)).masked()
+            if g.id in authorized_gateway_ids:
+                gateway_read.oauth_authorized = True
+            result.append(gateway_read)
+        db.commit()
         return result
 
     async def list_gateways_for_user(
@@ -1338,12 +1355,39 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         query = query.offset(skip).limit(limit)
 
         gateways = db.execute(query).scalars().all()
+
+        # Auto-fix auth_type for gateways with oauth_config but missing auth_type
+        for g in gateways:
+            if not g.auth_type and g.oauth_config:
+                g.auth_type = "oauth"
+                db.add(g)
+        db.flush()
+
+        # Batch-check which OAuth gateways have valid tokens for this user
+        oauth_gateway_ids = [g.id for g in gateways if getattr(g, "auth_type", None) == "oauth"]
+        authorized_gateway_ids: Set[str] = set()
+        if oauth_gateway_ids:
+            authorized_tokens = (
+                db.execute(
+                    select(OAuthToken.gateway_id).where(
+                        OAuthToken.gateway_id.in_(oauth_gateway_ids),
+                        OAuthToken.app_user_email == user_email,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            authorized_gateway_ids = set(authorized_tokens)
+
         result = []
         for g in gateways:
             team_name = self._get_team_name(db, getattr(g, "team_id", None))
             g.team = team_name
-            logger.info(f"Gateway: {g.team_id}, Team: {team_name}")
-            result.append(GatewayRead.model_validate(self._prepare_gateway_for_read(g)).masked())
+            gateway_read = GatewayRead.model_validate(self._prepare_gateway_for_read(g)).masked()
+            if g.id in authorized_gateway_ids:
+                gateway_read.oauth_authorized = True
+            result.append(gateway_read)
+        db.commit()
         return result
 
     async def update_gateway(
@@ -1517,6 +1561,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 # Handle OAuth configuration updates
                 if gateway_update.oauth_config is not None:
                     gateway.oauth_config = gateway_update.oauth_config
+                    # Auto-set auth_type to "oauth" when oauth_config is provided
+                    if not gateway.auth_type:
+                        gateway.auth_type = "oauth"
 
                 # Handle auth_value updates (both existing and new auth values)
                 token = gateway_update.auth_token
@@ -1752,6 +1799,11 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             raise GatewayNotFoundError(f"Gateway not found: {gateway_id}")
 
         if gateway.enabled or include_inactive:
+            # Auto-fix auth_type for gateways with oauth_config but missing auth_type
+            if not gateway.auth_type and gateway.oauth_config:
+                gateway.auth_type = "oauth"
+                db.add(gateway)
+                db.commit()
             gateway.team = self._get_team_name(db, getattr(gateway, "team_id", None))
             return GatewayRead.model_validate(self._prepare_gateway_for_read(gateway)).masked()
 
@@ -1991,9 +2043,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             db.rollback()
             raise GatewayError(f"Failed to delete gateway: {str(e)}")
 
-    async def forward_request(
-        self, gateway_or_db, method: str, params: Optional[Dict[str, Any]] = None, app_user_email: Optional[str] = None
-    ) -> Any:  # noqa: F811 # pylint: disable=function-redefined
+    async def forward_request(self, gateway_or_db, method: str, params: Optional[Dict[str, Any]] = None, app_user_email: Optional[str] = None) -> Any:  # noqa: F811 # pylint: disable=function-redefined
         """
         Forward a request to a gateway or multiple gateways.
 
@@ -2351,7 +2401,6 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         # Create trace span for health check batch
         with create_span("gateway.health_check_batch", {"gateway.count": len(gateways), "check.type": "health"}) as batch_span:
             for gateway in gateways:
-
                 if gateway.auth_type == "one_time_auth":
                     continue  # Skip health check for one-time auth gateways as these are authenticated with passthrough headers only
 
@@ -3537,10 +3586,10 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         try:
             logger.debug(f"[STREAMABLEHTTP] Validation passed, opening streamable HTTP client connection to {server_url}")
             async with streamablehttp_client(url=server_url, headers=authentication, httpx_client_factory=get_httpx_client_factory) as (read_stream, write_stream, _get_session_id):
-                logger.debug(f"[STREAMABLEHTTP] Client connection established, creating session")
+                logger.debug("[STREAMABLEHTTP] Client connection established, creating session")
                 async with ClientSession(read_stream, write_stream) as session:
                     # Initialize the session
-                    logger.debug(f"[STREAMABLEHTTP] Initializing MCP session")
+                    logger.debug("[STREAMABLEHTTP] Initializing MCP session")
                     try:
                         response = await session.initialize()
                         capabilities = response.capabilities.model_dump(by_alias=True, exclude_none=True)
@@ -3549,7 +3598,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                         logger.error(f"[STREAMABLEHTTP] Failed to initialize session: {type(init_err).__name__}: {init_err}", exc_info=True)
                         raise
 
-                    logger.debug(f"[STREAMABLEHTTP] Fetching tools list")
+                    logger.debug("[STREAMABLEHTTP] Fetching tools list")
                     try:
                         response = await session.list_tools()
                         tools = response.tools

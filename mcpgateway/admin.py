@@ -53,7 +53,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 # First-Party
 from mcpgateway.common.models import LogLevel
 from mcpgateway.config import settings
-from mcpgateway.db import get_db, GlobalConfig, ObservabilitySavedQuery, ObservabilitySpan, ObservabilityTrace
+from mcpgateway.db import get_db, GlobalConfig, OAuthToken, ObservabilitySavedQuery, ObservabilitySpan, ObservabilityTrace
 from mcpgateway.db import Prompt as DbPrompt
 from mcpgateway.db import Resource as DbResource
 from mcpgateway.db import Tool as DbTool
@@ -6537,9 +6537,20 @@ async def admin_get_gateway(gateway_id: str, db: Session = Depends(get_db), user
         >>> # Restore original method
         >>> gateway_service.get_gateway = original_get_gateway
     """
-    LOGGER.debug(f"User {get_user_email(user)} requested details for gateway ID {gateway_id}")
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} requested details for gateway ID {gateway_id}")
     try:
         gateway = await gateway_service.get_gateway(db, gateway_id)
+
+        # Check OAuth authorization status for this user
+        if gateway.auth_type == "oauth":
+            token_exists = db.execute(
+                select(OAuthToken.id).where(
+                    OAuthToken.gateway_id == gateway_id,
+                    OAuthToken.app_user_email == user_email,
+                )
+            ).scalar_one_or_none()
+            gateway.oauth_authorized = token_exists is not None
 
         # Query tools for this gateway
         stmt = select(DbTool).where(DbTool.gateway_id == gateway_id)
@@ -11740,9 +11751,12 @@ async def catalog_partial(
         "servers_by_provider": servers_by_provider,
     }
 
+    # Convert Pydantic models to dicts for Jinja2 tojson serialization
+    servers_as_dicts = [s.model_dump() for s in response.servers]
+
     context = {
         "request": request,
-        "servers": response.servers,
+        "servers": servers_as_dicts,
         "stats": stats,
         "root_path": root_path,
         "page": page,

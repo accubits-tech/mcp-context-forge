@@ -15,6 +15,17 @@ catalog_servers:
     logo_url: "https://img.logo.dev/asana.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developers.asana.com/docs/using-asanas-mcp-server"
     tools: ["search_tasks", "create_task", "update_task", "get_task", "list_projects", "create_project", "get_project", "search_projects", "list_workspaces", "create_comment"]
+    oauth_config:
+      authorize_url: "https://app.asana.com/-/oauth_authorize"
+      token_url: "https://app.asana.com/-/oauth_token"
+      scopes: ["tasks:read", "tasks:write", "projects:read", "projects:write", "users:read"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Asana Developer Console (https://app.asana.com/0/my-apps)
+        2. Click 'Create new app'
+        3. Fill in App name and redirect URL
+        4. Copy the Client ID and Client Secret from the app settings
+        5. Configure OAuth scopes as needed
 
   - id: linear
     name: "Linear"
@@ -28,6 +39,18 @@ catalog_servers:
     logo_url: "https://img.logo.dev/linear.app?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://linear.app/docs/mcp"
     tools: ["create_issue", "get_issue", "list_issues", "create_comment", "list_comments", "create_project", "get_project", "create_document", "get_document", "get_team"]
+    oauth_config:
+      authorize_url: "https://linear.app/oauth/authorize"
+      token_url: "https://api.linear.app/oauth/token"
+      scopes: ["read", "write", "issues:create", "comments:create", "admin"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Linear Settings > API > OAuth Applications
+           (https://linear.app/settings/api)
+        2. Click 'Create OAuth application'
+        3. Fill in Application name, Description, and Redirect URI
+        4. Copy the Client ID and Client Secret
+        5. Select the required scopes for your application
 
   - id: notion
     name: "Notion"
@@ -41,6 +64,18 @@ catalog_servers:
     logo_url: "https://img.logo.dev/notion.so?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developers.notion.com/guides/mcp/mcp"
     tools: ["search", "create_page", "get_page", "update_page", "query_data_source", "retrieve_a_data_source", "create_a_data_source", "move_page", "retrieve_a_database", "list_data_source_templates"]
+    oauth_config:
+      authorize_url: "https://api.notion.com/v1/oauth/authorize"
+      token_url: "https://api.notion.com/v1/oauth/token"
+      scopes: []
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Notion Developers (https://www.notion.so/my-integrations)
+        2. Click 'New integration' and select 'Public' type
+        3. Fill in Basic Information and redirect URI
+        4. Copy the OAuth Client ID and Client Secret
+        Note: Notion uses capabilities-based permissions (not traditional scopes).
+        Users select which pages/databases the integration can access.
 
   - id: monday
     name: "monday.com"
@@ -54,6 +89,17 @@ catalog_servers:
     logo_url: "https://img.logo.dev/monday.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developer.monday.com/apps/docs/mondaycom-mcp-integration"
     tools: ["create_item", "update_item", "create_board", "list_boards", "get_board", "update_column", "create_update", "list_items", "search_items", "get_item"]
+    oauth_config:
+      authorize_url: "https://auth.monday.com/oauth2/authorize"
+      token_url: "https://auth.monday.com/oauth2/token"
+      scopes: ["boards:read", "boards:write", "me:read", "users:read", "updates:read", "updates:write"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to monday.com Developers (https://monday.com/developers/apps)
+        2. Click 'Create App'
+        3. Navigate to OAuth & Permissions in your app settings
+        4. Add your redirect URI and select required scopes
+        5. Copy the Client ID and Client Secret
 
   # Software Development
   - id: github
@@ -69,6 +115,20 @@ catalog_servers:
     logo_url: "https://img.logo.dev/github.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp/use-the-github-mcp-server"
     tools: ["get_repo", "list_repos", "create_issue", "list_issues", "get_pull_request", "list_pull_requests", "create_pull_request", "search_code", "get_file_contents", "list_commits"]
+    oauth_config:
+      authorize_url: "https://github.com/login/oauth/authorize"
+      token_url: "https://github.com/login/oauth/access_token"
+      scopes: ["repo", "read:user", "user:email", "workflow", "read:org", "gist", "notifications", "project"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to GitHub Settings > Developer settings > OAuth Apps > New OAuth App
+           (https://github.com/settings/developers)
+        2. Fill in Application name, Homepage URL, and Authorization callback URL
+        3. Click 'Register application'
+        4. Copy the Client ID from the app page
+        5. Click 'Generate a new client secret' and copy it immediately
+        Note: GitHub Apps (recommended over OAuth Apps) can also be used.
+        Alternative: Use a Personal Access Token (PAT) as a Bearer token.
 
   - id: atlassian
     name: "Atlassian"
@@ -83,6 +143,18 @@ catalog_servers:
     logo_url: "https://img.logo.dev/atlassian.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://support.atlassian.com/atlassian-rovo-mcp-server/docs/supported-tools/"
     tools: ["createJiraIssue", "editJiraIssue", "getJiraIssue", "addCommentToJiraIssue", "createConfluencePage", "getConfluencePage", "updateConfluencePage", "searchConfluenceUsingCql", "getConfluenceSpaces", "createCompassComponent"]
+    oauth_config:
+      authorize_url: "https://auth.atlassian.com/authorize"
+      token_url: "https://auth.atlassian.com/oauth/token"
+      scopes: ["read:jira-work", "write:jira-work", "read:confluence-content.all", "write:confluence-content"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Atlassian Developer Console (https://developer.atlassian.com/console/myapps/)
+        2. Click 'Create' > 'OAuth 2.0 integration'
+        3. Fill in App name and agree to developer terms
+        4. Add Authorization callback URL under Authorization settings
+        5. Navigate to Permissions and enable required APIs (Jira, Confluence)
+        6. Copy the Client ID and Secret from the Settings page
 
   - id: buildkite
     name: "Buildkite"
@@ -96,6 +168,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/buildkite.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://buildkite.com/docs/apis/mcp-server"
     tools: ["list_pipelines", "get_pipeline", "list_builds", "get_build", "create_build", "search_logs", "list_artifacts", "list_annotations", "list_test_runs", "get_jobs"]
+    oauth_config:
+      authorize_url: "https://mcp.buildkite.com/oauth/authorize"
+      token_url: "https://mcp.buildkite.com/oauth/token"
+      scopes: ["read", "write"]
+      supports_dcr: true
+      registration_url: "https://mcp.buildkite.com/oauth/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Buildkite to authorize via their Buildkite account.
 
   - id: cloudflare-workers
     name: "Cloudflare Workers"
@@ -109,6 +191,17 @@ catalog_servers:
     logo_url: "https://img.logo.dev/cloudflare.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/"
     tools: ["list_workers", "get_worker", "deploy_worker", "list_kv_namespaces", "kv_get", "kv_put", "list_r2_buckets", "r2_get_object", "list_d1_databases", "d1_query"]
+    oauth_config:
+      authorize_url: "https://bindings.mcp.cloudflare.com/oauth/authorize"
+      token_url: "https://bindings.mcp.cloudflare.com/token"
+      scopes: []
+      supports_dcr: true
+      registration_url: "https://bindings.mcp.cloudflare.com/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Cloudflare to authorize via their Cloudflare account.
+        Alternative: Use a Cloudflare API token as a Bearer token for CI/CD.
 
   - id: cloudflare-observability
     name: "Cloudflare Observability"
@@ -122,6 +215,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/cloudflare.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/"
     tools: ["list_workers", "get_worker_logs", "get_worker_analytics", "search_logs", "build_query", "discover_keys", "discover_values", "search_documentation", "get_worker_source", "list_accounts"]
+    oauth_config:
+      authorize_url: "https://observability.mcp.cloudflare.com/oauth/authorize"
+      token_url: "https://observability.mcp.cloudflare.com/token"
+      scopes: []
+      supports_dcr: true
+      registration_url: "https://observability.mcp.cloudflare.com/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Cloudflare to authorize via their Cloudflare account.
 
   - id: grafbase
     name: "Grafbase"
@@ -174,6 +277,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/neon.tech?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://neon.tech/docs/ai/neon-mcp-server"
     tools: ["list_projects", "create_project", "run_sql", "run_sql_transaction", "describe_table_schema", "get_database_tables", "create_branch", "prepare_database_migration", "complete_database_migration", "explain_sql_statement"]
+    oauth_config:
+      authorize_url: "https://mcp.neon.tech/api/authorize"
+      token_url: "https://mcp.neon.tech/api/token"
+      scopes: ["read", "write", "*"]
+      supports_dcr: true
+      registration_url: "https://mcp.neon.tech/api/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Neon to authorize via their Neon account.
 
   - id: netlify
     name: "Netlify"
@@ -187,6 +300,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/netlify.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://docs.netlify.com/welcome/build-with-ai/netlify-mcp-server/"
     tools: ["deploy_site", "create_site", "list_sites", "trigger_build", "get_status", "set_env_vars", "get_env_var", "list_functions", "get_logs", "delete_site"]
+    oauth_config:
+      authorize_url: "https://netlify-mcp.netlify.app/oauth-server/auth"
+      token_url: "https://netlify-mcp.netlify.app/oauth-server/token"
+      scopes: ["openid", "offline_access", "read", "write"]
+      supports_dcr: true
+      registration_url: "https://netlify-mcp.netlify.app/oauth-server/reg"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Netlify to authorize via their Netlify account.
 
   - id: sentry
     name: "Sentry"
@@ -200,6 +323,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/sentry.io?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://docs.sentry.io/product/sentry-mcp"
     tools: ["search_issues", "search_events", "get_issue_details", "analyze_issue_with_seer", "query_trace_data", "list_projects", "get_event", "list_releases", "get_organization", "resolve_issue"]
+    oauth_config:
+      authorize_url: "https://mcp.sentry.dev/oauth/authorize"
+      token_url: "https://mcp.sentry.dev/oauth/token"
+      scopes: ["org:read", "project:write", "team:write", "event:write"]
+      supports_dcr: true
+      registration_url: "https://mcp.sentry.dev/oauth/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Sentry to authorize via their Sentry account.
 
   - id: vercel
     name: "Vercel"
@@ -213,6 +346,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/vercel.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://vercel.com/docs/mcp/vercel-mcp/tools"
     tools: ["search_documentation", "list_teams", "list_projects", "get_project", "list_deployments", "get_deployment"]
+    oauth_config:
+      authorize_url: "https://vercel.com/oauth/authorize"
+      token_url: "https://vercel.com/api/login/oauth/token"
+      scopes: ["openid", "email", "offline_access", "profile"]
+      supports_dcr: true
+      registration_url: "https://vercel.com/api/login/oauth/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Vercel to authorize via their Vercel account.
 
   - id: prisma-postgres
     name: "Prisma Postgres"
@@ -226,6 +369,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/prisma.io?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://prisma.io/docs/postgres/integrations/mcp-server"
     tools: ["ListDatabasesTool", "ExecuteSqlQueryTool", "IntrospectSchemaTool", "CreateBackupTool", "ListBackupsTool", "CreateConnectionStringTool", "DeleteConnectionStringTool", "ListConnectionStringsTool", "CreateRecoveryTool", "DeleteDatabaseTool"]
+    oauth_config:
+      authorize_url: "https://mcp.prisma.io/oauth/authorize"
+      token_url: "https://auth.prisma.io/token"
+      scopes: ["workspace:admin", "offline_access"]
+      supports_dcr: true
+      registration_url: "https://auth.prisma.io/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Prisma to authorize via their Prisma account.
 
   - id: globalping
     name: "Globalping"
@@ -253,6 +406,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/stripe.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://docs.stripe.com/mcp"
     tools: ["create_customer", "list_customers", "create_product", "list_products", "create_price", "create_payment_link", "list_payment_intents", "create_invoice", "create_refund", "search_stripe_documentation"]
+    oauth_config:
+      authorize_url: null
+      token_url: null
+      scopes: []
+      supports_dcr: true
+      setup_guide: |
+        Stripe's MCP server uses well-known discovery for OAuth endpoints and
+        supports Dynamic Client Registration (RFC 7591). MCP clients register
+        automatically. Connect OAuth (connect.stripe.com) is separate from MCP
+        OAuth. Alternative: Use a Stripe API key as a Bearer token.
 
   - id: paypal
     name: "PayPal"
@@ -266,6 +429,17 @@ catalog_servers:
     logo_url: "https://img.logo.dev/paypal.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://docs.paypal.ai/developer/tools/ai/mcp-quickstart"
     tools: ["create_order", "get_order", "capture_payment", "create_refund", "get_refund", "list_disputes", "get_dispute", "accept_dispute_claim"]
+    oauth_config:
+      authorize_url: "https://www.paypal.com/signin/authorize"
+      token_url: "https://api-m.paypal.com/v1/oauth2/token"
+      scopes: ["openid", "email", "profile"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to PayPal Developer Dashboard (https://developer.paypal.com/dashboard/applications)
+        2. Click 'Create App' under REST API apps
+        3. Fill in App name and select account type (Sandbox/Live)
+        4. Copy the Client ID and Secret from the app details page
+        5. Configure return URL under App Settings
 
   - id: plaid
     name: "Plaid"
@@ -280,6 +454,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/plaid.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://plaid.com/docs/resources/mcp/"
     tools: ["diagnostics", "analytics", "api_usage_metrics", "integration_health_checks", "transactions_summary", "accounts_lookup"]
+    oauth_config:
+      authorize_url: "https://dashboard.plaid.com/oauth/authorize"
+      token_url: "https://api.dashboard.plaid.com/oauth/token"
+      scopes: ["mcp:dashboard"]
+      supports_dcr: true
+      registration_url: "https://api.dashboard.plaid.com/oauth/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Plaid Dashboard to authorize via their Plaid account.
 
   - id: square
     name: "Square"
@@ -293,6 +477,18 @@ catalog_servers:
     logo_url: "https://img.logo.dev/squareup.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://github.com/square/square-mcp-server"
     tools: ["get_service_info", "make_api_request", "catalog_lookup", "create_payment", "refund_payment", "customer_lookup"]
+    oauth_config:
+      authorize_url: "https://connect.squareup.com/oauth2/authorize"
+      token_url: "https://connect.squareup.com/oauth2/token"
+      scopes: ["PAYMENTS_READ", "PAYMENTS_WRITE", "ORDERS_READ", "CUSTOMERS_READ", "ITEMS_READ"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Square Developer Dashboard (https://developer.squareup.com/apps)
+        2. Click 'Create Application' or '+' button
+        3. Fill in Application name
+        4. Navigate to OAuth tab and add Redirect URL
+        5. Copy the Application ID and Application Secret
+        6. Select required OAuth permissions
 
   - id: dodo-payments
     name: "Dodo Payments"
@@ -334,6 +530,18 @@ catalog_servers:
     logo_url: "https://img.logo.dev/close.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://help.close.com/docs/mcp-server"
     tools: ["lead_search", "fetch_lead", "fetch_contact", "activity_search", "find_opportunities", "org_info", "org_users"]
+    oauth_config:
+      authorize_url: "https://app.close.com/oauth2/authorize/"
+      token_url: "https://api.close.com/oauth2/token/"
+      scopes: ["all.full_access", "offline_access"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Close Settings > Developer > OAuth Apps
+           (https://app.close.com/settings/developer/)
+        2. Click 'Create OAuth App'
+        3. Fill in App name, Description, and Redirect URI
+        4. Copy the Client ID and Client Secret
+        5. Request required scopes during authorization
 
   - id: close-crm-api
     name: "Close (API Key)"
@@ -373,6 +581,17 @@ catalog_servers:
     logo_url: "https://img.logo.dev/intercom.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developers.intercom.com/docs/guides/mcp"
     tools: ["list_conversations", "get_conversation", "list_contacts", "get_contact", "list_tickets", "search_articles", "get_article"]
+    oauth_config:
+      authorize_url: "https://app.intercom.com/oauth"
+      token_url: "https://api.intercom.io/auth/eagle/token"
+      scopes: []
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Intercom Developer Hub (https://developers.intercom.com/)
+        2. Create a new app and navigate to Authentication settings
+        3. Add your redirect URI under OAuth settings
+        4. Copy the Client ID and Client Secret
+        5. See Intercom OAuth scopes docs for available permissions
 
   # Document Management
   - id: box
@@ -388,6 +607,18 @@ catalog_servers:
     logo_url: "https://img.logo.dev/box.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developer.box.com/guides/box-mcp"
     tools: ["search_files", "get_file", "list_folders", "download_file", "extract_text", "set_metadata", "ask_box_ai"]
+    oauth_config:
+      authorize_url: "https://account.box.com/api/oauth2/authorize"
+      token_url: "https://api.box.com/oauth2/token"
+      scopes: ["root_readwrite", "root_readonly", "manage_managed_users", "ai.readwrite"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Box Developer Console (https://app.box.com/developers/console)
+        2. Click 'Create New App' and select 'Custom App'
+        3. Choose 'User Authentication (OAuth 2.0)' as authentication method
+        4. Add your redirect URI under Configuration
+        5. Copy the Client ID and Client Secret
+        6. Select required Application Scopes
 
   - id: egnyte
     name: "Egnyte"
@@ -401,6 +632,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/egnyte.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developers.egnyte.com/docs/Remote_MCP_Server"
     tools: ["search_content", "get_file", "list_folder", "summarize_document", "extract_entities", "generate_share_link", "get_permissions", "get_activity"]
+    oauth_config:
+      authorize_url: "https://mcp-oauth.egnyte.com/domain-picker"
+      token_url: "https://mcp-oauth.egnyte.com/oauth2/token"
+      scopes: []
+      supports_dcr: true
+      registration_url: "https://mcp-oauth.egnyte.com/clients"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Egnyte to select their domain and authorize access.
 
   - id: cloudinary
     name: "Cloudinary"
@@ -414,6 +655,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/cloudinary.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://cloudinary.com/documentation/cloudinary_llm_mcp"
     tools: ["upload", "transform", "search", "get_asset", "update_metadata", "add_tags", "delete_asset"]
+    oauth_config:
+      authorize_url: "https://asset-management.mcp.cloudinary.com/authorize"
+      token_url: "https://asset-management.mcp.cloudinary.com/token"
+      scopes: ["openid", "profile", "email", "offline_access", "asset_management", "upload"]
+      supports_dcr: true
+      registration_url: "https://asset-management.mcp.cloudinary.com/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Cloudinary to authorize via their Cloudinary account.
 
   # Productivity
   - id: audioscrape
@@ -428,6 +679,15 @@ catalog_servers:
     logo_url: "https://img.logo.dev/audioscrape.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://mcp.audioscrape.com"
     tools: ["search_audio", "get_episode", "get_transcript", "search_transcript", "summarize_episode", "extract_quotes", "find_topics", "export_results"]
+    oauth_config:
+      authorize_url: "https://mcp.audioscrape.com/oauth/authorize"
+      token_url: "https://mcp.audioscrape.com/oauth/token"
+      scopes: []
+      supports_dcr: true
+      registration_url: "https://mcp.audioscrape.com/oauth/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically.
 
   - id: carbon-voice
     name: "Carbon Voice"
@@ -485,10 +745,10 @@ catalog_servers:
     name: "Zine"
     category: "Memory"
     url: "https://www.zine.ai/mcp"
-    auth_type: "OAuth2.1"
+    auth_type: "API Key"
     provider: "Zine"
     description: "Zine is a portable knowledge layer that ingests an organisation’s scattered knowledge base (emails, Slack, Notion, etc.) into a unified graph. It functions as both an MCP server and client, allowing AI agents to search and retrieve information and to connect to other servers. It uses Bearer/OAuth authentication and Graphlit foundations to securely ingest, convert and index content."
-    requires_api_key: false
+    requires_api_key: true
     tags: ["knowledge", "memory", "notes"]
     logo_url: "https://img.logo.dev/zine.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://zine.ai/docs/mcp"
@@ -507,12 +767,22 @@ catalog_servers:
     logo_url: "https://img.logo.dev/canva.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://www.canva.com/help/article/model-context-protocol"
     tools: ["generate_design", "search_designs", "search_designs_by_id", "get_design", "resize_design", "view_design_pages", "import_design_from_url", "export_design", "create_folder", "list_folder_items"]
+    oauth_config:
+      authorize_url: "https://mcp.canva.com/authorize"
+      token_url: "https://mcp.canva.com/token"
+      scopes: []
+      supports_dcr: true
+      registration_url: "https://mcp.canva.com/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Canva to authorize via their Canva account.
 
   - id: invideo
     name: "InVideo"
     category: "Video Platform"
     url: "https://mcp.invideo.io/sse"
-    auth_type: "OAuth2.1"
+    auth_type: "Open"
     provider: "Invidio"
     description: "The InVideo MCP server allows AI tools to generate publish‑ready videos by turning prompts into scripts and adding AI‑generated visuals, voice‑overs and subtitles. It supports short‑form video creation for platforms like YouTube Shorts and Instagram reels."
     requires_api_key: false
@@ -534,6 +804,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/webflow.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://developers.webflow.com/docs/mcp"
     tools: ["sites_list", "pages_list", "components_get", "collections_list", "fields_list", "items_get", "custom_code_update", "elements_get", "styles_update", "assets_upload"]
+    oauth_config:
+      authorize_url: "https://mcp.webflow.com/oauth/authorize"
+      token_url: "https://mcp.webflow.com/oauth/token"
+      scopes: []
+      supports_dcr: true
+      registration_url: "https://mcp.webflow.com/oauth/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Webflow to authorize via their Webflow account.
 
   - id: wix
     name: "Wix"
@@ -547,6 +827,16 @@ catalog_servers:
     logo_url: "https://img.logo.dev/wix.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://github.com/wix/wix-mcp"
     tools: ["SearchWixWDSDocumentation", "SearchWixRESTDocumentation", "SearchWixSDKDocumentation", "SearchBuildAppsDocumentation", "SearchWixHeadlessDocumentation", "WixBusinessFlowsDocumentation", "ReadFullDocsArticle", "ReadFullDocsMethodSchema", "ListWixSites", "CallWixSiteAPI"]
+    oauth_config:
+      authorize_url: "https://mcp.wix.com/authorize"
+      token_url: "https://mcp.wix.com/token"
+      scopes: []
+      supports_dcr: true
+      registration_url: "https://mcp.wix.com/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Wix to authorize via their Wix account.
 
   # Communication
   - id: dialer
@@ -588,6 +878,19 @@ catalog_servers:
     logo_url: "https://img.logo.dev/slack.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://docs.slack.dev/ai/slack-mcp-server/"
     tools: ["search_messages", "search_files", "search_users", "search_channels", "send_message", "read_channel", "read_thread", "create_or_update_canvas", "read_canvas", "get_user_profile"]
+    oauth_config:
+      authorize_url: "https://slack.com/oauth/v2_user/authorize"
+      token_url: "https://slack.com/api/oauth.v2.user.access"
+      scopes: ["search:read.public", "chat:write", "channels:history", "users:read", "canvases:read", "canvases:write"]
+      supports_dcr: false
+      setup_guide: |
+        1. Go to Slack API Apps page (https://api.slack.com/apps)
+        2. Click 'Create New App' > 'From scratch'
+        3. Fill in App Name and select workspace
+        4. Navigate to OAuth & Permissions and add Redirect URLs
+        5. Add required User Token Scopes
+        6. Install the app to your workspace to get tokens
+        7. Copy the Client ID and Client Secret from Basic Information
 
   # Analytics & Data
   - id: thoughtspot
@@ -828,6 +1131,15 @@ catalog_servers:
     logo_url: "https://img.logo.dev/stytch.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://stytch.com/docs/mcp"
     tools: ["listProjects", "createProject", "updateConsumerSDKConfig", "getAllRedirectURLs", "createRedirectURLs", "getAllPublicTokens", "createPublicToken", "listApplications", "createApplication", "updateApplication"]
+    oauth_config:
+      authorize_url: "https://stytch.com/oauth/authorize"
+      token_url: null
+      scopes: ["openid", "email", "profile"]
+      supports_dcr: false
+      setup_guide: |
+        Stytch uses project-domain-specific OAuth endpoints. The token URL and
+        DCR registration URL vary per Stytch project. Consult your Stytch
+        project dashboard for the exact endpoints for your domain.
 
   - id: zenable
     name: "Zenable"
