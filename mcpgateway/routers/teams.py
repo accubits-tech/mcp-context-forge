@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 # First-Party
 from mcpgateway.auth import get_current_user
-from mcpgateway.db import get_db
+from mcpgateway.db import EmailTeamMember, EmailUser, get_db
 from mcpgateway.middleware.rbac import get_current_user_with_permissions, require_permission
 from mcpgateway.schemas import (
     AddTeamMemberRequest,
@@ -387,9 +387,18 @@ async def add_team_member(team_id: str, request: AddTeamMemberRequest, current_u
         if role != "owner":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
+        # Pre-validate so we can return specific error messages
+        user = db.query(EmailUser).filter(EmailUser.email == request.user_email).first()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with email '{request.user_email}' not found")
+
+        existing = db.query(EmailTeamMember).filter(EmailTeamMember.team_id == team_id, EmailTeamMember.user_email == request.user_email, EmailTeamMember.is_active.is_(True)).first()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"User '{request.user_email}' is already a member of this team")
+
         result = await service.add_member_to_team(team_id, request.user_email, request.role, invited_by=current_user_ctx["email"])
         if not result:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to add member. User may not exist or is already a member.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to add member to team")
 
         # Fetch the newly created member to build the response
         members = await service.get_team_members(team_id)

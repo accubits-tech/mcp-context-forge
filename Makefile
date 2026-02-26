@@ -141,7 +141,7 @@ activate:
 
 .PHONY: install
 install: venv
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install ."
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install .[llmchat]"
 
 .PHONY: install-db
 install-db: venv
