@@ -253,8 +253,25 @@ class CatalogService:
             # Set authentication based on server requirements
             auth_type = server_data.get("auth_type", "Open")
             skip_initialization = False  # Flag to skip connection test for OAuth servers without creds
+            has_oauth_creds = request and request.oauth_credentials and request.oauth_credentials.get("client_id") and request.oauth_credentials.get("client_secret")
 
-            if request and request.api_key and auth_type != "Open":
+            if has_oauth_creds and auth_type in ["OAuth2.1", "OAuth", "OAuth2.1 & API Key"]:
+                # OAuth credentials provided - configure OAuth auth on the gateway
+                catalog_oauth_config = server_data.get("oauth_config", {})
+                gateway_data["auth_type"] = "oauth"
+                gateway_data["oauth_config"] = {
+                    "grant_type": "authorization_code",
+                    "client_id": request.oauth_credentials["client_id"],
+                    "client_secret": request.oauth_credentials["client_secret"],
+                    "authorization_url": catalog_oauth_config.get("authorize_url", ""),
+                    "token_url": catalog_oauth_config.get("token_url", ""),
+                    "scope": " ".join(catalog_oauth_config.get("scopes", [])),
+                }
+                # Also set API key as bearer if provided alongside OAuth creds
+                if request.api_key and auth_type == "OAuth2.1 & API Key":
+                    gateway_data["auth_token"] = request.api_key
+                logger.info(f"Registering OAuth server {server_data['name']} with client credentials")
+            elif request and request.api_key and auth_type != "Open":
                 # Handle all possible auth types from the catalog
                 if auth_type in ["API Key", "API"]:
                     # Use bearer token for API key authentication
