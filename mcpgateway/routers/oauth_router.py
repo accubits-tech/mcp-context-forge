@@ -155,6 +155,62 @@ async def initiate_oauth_flow(
                     detail="Gateway OAuth configuration is incomplete. Please provide client_id and client_secret, or enable DCR (Dynamic Client Registration) by setting MCPGATEWAY_DCR_ENABLED=true and MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS=true",
                 )
 
+        elif not client_id and oauth_config.get("supports_dcr") and oauth_config.get("registration_url"):
+            # Catalog DCR: use registration_url directly (no .well-known discovery)
+            if settings.dcr_enabled and settings.dcr_auto_register_on_missing_credentials:
+                logger.info(f"Gateway {gateway_id} has registration_url but no client_id. Attempting catalog DCR...")
+
+                try:
+                    dcr_service = DcrService()
+
+                    registered_client = await dcr_service.get_or_register_client_direct(
+                        gateway_id=gateway_id,
+                        gateway_name=gateway.name,
+                        registration_url=oauth_config["registration_url"],
+                        redirect_uri=oauth_config.get("redirect_uri"),
+                        scopes=oauth_config.get("scopes", settings.dcr_default_scopes),
+                        db=db,
+                    )
+
+                    logger.info(f"Catalog DCR successful for gateway {gateway_id}: client_id={registered_client.client_id}")
+
+                    # Decrypt the client secret for use in OAuth flow
+                    decrypted_secret = None
+                    if registered_client.client_secret_encrypted:
+                        # First-Party
+                        from mcpgateway.services.encryption_service import get_encryption_service
+
+                        encryption = get_encryption_service(settings.auth_encryption_secret)
+                        decrypted_secret = encryption.decrypt_secret(registered_client.client_secret_encrypted)
+
+                    # Update oauth_config with registered credentials
+                    oauth_config["client_id"] = registered_client.client_id
+                    if decrypted_secret:
+                        oauth_config["client_secret"] = decrypted_secret
+
+                    # Update gateway's oauth_config and auth_type in database for future use
+                    gateway.oauth_config = oauth_config
+                    gateway.auth_type = "oauth"
+                    db.commit()
+
+                    logger.info(f"Updated gateway {gateway_id} with catalog DCR credentials and auth_type=oauth")
+
+                except DcrError as dcr_err:
+                    logger.error(f"Catalog DCR failed for gateway {gateway_id}: {dcr_err}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Dynamic Client Registration failed: {str(dcr_err)}. Please configure client_id and client_secret manually.",
+                    )
+                except Exception as dcr_ex:
+                    logger.error(f"Unexpected error during catalog DCR for gateway {gateway_id}: {dcr_ex}")
+                    raise HTTPException(status_code=500, detail=f"Failed to register OAuth client: {str(dcr_ex)}")
+            else:
+                logger.warning(f"Gateway {gateway_id} supports DCR via registration_url but DCR auto-registration is disabled")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Gateway supports Dynamic Client Registration but DCR auto-registration is disabled. Set MCPGATEWAY_DCR_ENABLED=true and MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS=true to enable.",
+                )
+
         # Validate required fields for OAuth flow
         if not oauth_config.get("client_id"):
             raise HTTPException(status_code=400, detail="OAuth configuration missing client_id")
@@ -805,6 +861,62 @@ async def initiate_oauth_json(gateway_id: str, current_user: EmailUserResponse =
                 raise HTTPException(
                     status_code=400,
                     detail="Gateway OAuth configuration is incomplete. Please provide client_id and client_secret, or enable DCR (Dynamic Client Registration) by setting MCPGATEWAY_DCR_ENABLED=true and MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS=true",
+                )
+
+        elif not client_id and oauth_config.get("supports_dcr") and oauth_config.get("registration_url"):
+            # Catalog DCR: use registration_url directly (no .well-known discovery)
+            if settings.dcr_enabled and settings.dcr_auto_register_on_missing_credentials:
+                logger.info(f"Gateway {gateway_id} has registration_url but no client_id. Attempting catalog DCR...")
+
+                try:
+                    dcr_service = DcrService()
+
+                    registered_client = await dcr_service.get_or_register_client_direct(
+                        gateway_id=gateway_id,
+                        gateway_name=gateway.name,
+                        registration_url=oauth_config["registration_url"],
+                        redirect_uri=oauth_config.get("redirect_uri"),
+                        scopes=oauth_config.get("scopes", settings.dcr_default_scopes),
+                        db=db,
+                    )
+
+                    logger.info(f"Catalog DCR successful for gateway {gateway_id}: client_id={registered_client.client_id}")
+
+                    # Decrypt the client secret for use in OAuth flow
+                    decrypted_secret = None
+                    if registered_client.client_secret_encrypted:
+                        # First-Party
+                        from mcpgateway.utils.oauth_encryption import get_oauth_encryption
+
+                        encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                        decrypted_secret = encryption.decrypt_secret(registered_client.client_secret_encrypted)
+
+                    # Update oauth_config with registered credentials
+                    oauth_config["client_id"] = registered_client.client_id
+                    if decrypted_secret:
+                        oauth_config["client_secret"] = decrypted_secret
+
+                    # Update gateway's oauth_config and auth_type in database
+                    gateway.oauth_config = oauth_config
+                    gateway.auth_type = "oauth"
+                    db.commit()
+
+                    logger.info(f"Updated gateway {gateway_id} with catalog DCR credentials and auth_type=oauth")
+
+                except DcrError as dcr_err:
+                    logger.error(f"Catalog DCR failed for gateway {gateway_id}: {dcr_err}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Dynamic Client Registration failed: {str(dcr_err)}. Please configure client_id and client_secret manually.",
+                    )
+                except Exception as dcr_ex:
+                    logger.error(f"Unexpected error during catalog DCR for gateway {gateway_id}: {dcr_ex}")
+                    raise HTTPException(status_code=500, detail=f"Failed to register OAuth client: {str(dcr_ex)}")
+            else:
+                logger.warning(f"Gateway {gateway_id} supports DCR via registration_url but DCR auto-registration is disabled")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Gateway supports Dynamic Client Registration but DCR auto-registration is disabled. Set MCPGATEWAY_DCR_ENABLED=true and MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS=true to enable.",
                 )
 
         # Validate required fields for OAuth flow
