@@ -108,7 +108,7 @@ class CatalogService:
                 # First-Party
                 from mcpgateway.db import Gateway as DbGateway  # pylint: disable=import-outside-toplevel
 
-                stmt = select(DbGateway.url).where(DbGateway.enabled)
+                stmt = select(DbGateway.url)
                 result = db.execute(stmt)
                 registered_urls = {row[0] for row in result}
             except Exception as e:
@@ -255,6 +255,10 @@ class CatalogService:
             skip_initialization = False  # Flag to skip connection test for OAuth servers without creds
             has_oauth_creds = request and request.oauth_credentials and request.oauth_credentials.get("client_id") and request.oauth_credentials.get("client_secret")
 
+            # Build the OAuth redirect URI from server settings
+            oauth_host = settings.host if settings.host != "0.0.0.0" else "localhost"
+            oauth_redirect_uri = f"http://{oauth_host}:{settings.port}/oauth/callback"
+
             if has_oauth_creds and auth_type in ["OAuth2.1", "OAuth", "OAuth2.1 & API Key"]:
                 # OAuth credentials provided - configure OAuth auth on the gateway
                 catalog_oauth_config = server_data.get("oauth_config", {})
@@ -266,6 +270,9 @@ class CatalogService:
                     "authorization_url": catalog_oauth_config.get("authorize_url", ""),
                     "token_url": catalog_oauth_config.get("token_url", ""),
                     "scope": " ".join(catalog_oauth_config.get("scopes", [])),
+                    "redirect_uri": oauth_redirect_uri,
+                    "store_tokens": True,
+                    "auto_refresh": True,
                 }
                 # Also set API key as bearer if provided alongside OAuth creds
                 if request.api_key and auth_type == "OAuth2.1 & API Key":
@@ -294,10 +301,27 @@ class CatalogService:
             # For OAuth servers without credentials, register directly without connection test
             if skip_initialization:
                 # Create minimal gateway entry without tool discovery
+                # Store OAuth URLs from catalog so the gateway is ready for OAuth setup later
                 # First-Party
                 from mcpgateway.db import Gateway as DbGateway  # pylint: disable=import-outside-toplevel
 
-                gateway_create = GatewayCreate(**gateway_data)
+                catalog_oauth_config = server_data.get("oauth_config", {})
+                oauth_config_for_gateway = None
+                if catalog_oauth_config:
+                    oauth_config_for_gateway = {
+                        "grant_type": "authorization_code",
+                        "authorization_url": catalog_oauth_config.get("authorize_url", ""),
+                        "token_url": catalog_oauth_config.get("token_url", ""),
+                        "scope": " ".join(catalog_oauth_config.get("scopes", [])),
+                        "redirect_uri": oauth_redirect_uri,
+                        "store_tokens": True,
+                        "auto_refresh": True,
+                    }
+                    # Include DCR registration URL if available
+                    if catalog_oauth_config.get("supports_dcr") and catalog_oauth_config.get("registration_url"):
+                        oauth_config_for_gateway["registration_url"] = catalog_oauth_config["registration_url"]
+                        oauth_config_for_gateway["supports_dcr"] = True
+
                 slug_name = slugify(gateway_data["name"])
 
                 db_gateway = DbGateway(
@@ -308,8 +332,9 @@ class CatalogService:
                     tags=gateway_data.get("tags", []),
                     transport=gateway_data["transport"],
                     capabilities={},
-                    auth_type=None,  # Will be set during OAuth configuration
-                    enabled=False,  # Disabled until OAuth is configured
+                    auth_type="oauth" if oauth_config_for_gateway else None,
+                    oauth_config=oauth_config_for_gateway,
+                    enabled=False,  # Disabled until OAuth credentials are configured
                     created_via="catalog",
                     visibility="public",
                     version=1,

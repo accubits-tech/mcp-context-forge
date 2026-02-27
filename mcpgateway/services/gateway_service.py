@@ -73,8 +73,7 @@ except ImportError:
 from mcpgateway.config import settings
 from mcpgateway.db import EmailTeam
 from mcpgateway.db import Gateway as DbGateway
-from mcpgateway.db import get_db
-from mcpgateway.db import OAuthToken
+from mcpgateway.db import get_db, OAuthToken
 from mcpgateway.db import Prompt as DbPrompt
 from mcpgateway.db import Resource as DbResource
 from mcpgateway.db import SessionLocal
@@ -809,6 +808,19 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
             # Normalize the gateway URL
             normalized_url = self.normalize_url(str(gateway.url))
+
+            # SSRF protection: validate gateway URL does not point to internal addresses
+            # First-Party
+            from mcpgateway.config import settings as _settings  # pylint: disable=import-outside-toplevel
+
+            if getattr(_settings, "ssrf_protection_enabled", True):
+                # First-Party
+                from mcpgateway.utils.url_validation import validate_url_not_internal  # pylint: disable=import-outside-toplevel
+
+                try:
+                    validate_url_not_internal(normalized_url)
+                except ValueError as e:
+                    raise GatewayConnectionError(str(e))
 
             if gateway.auth_value:
                 if isinstance(gateway.auth_value, str):
@@ -1560,7 +1572,19 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     # if auth_type is not None and only then check auth_value
                 # Handle OAuth configuration updates
                 if gateway_update.oauth_config is not None:
-                    gateway.oauth_config = gateway_update.oauth_config
+                    new_oauth = gateway_update.oauth_config
+                    existing_oauth = gateway.oauth_config or {}
+
+                    # Preserve existing client_secret if not provided in update
+                    # (frontend clears secret fields for security and omits them when unchanged)
+                    if "client_secret" not in new_oauth and "client_secret" in existing_oauth:
+                        new_oauth["client_secret"] = existing_oauth["client_secret"]
+
+                    # Same for password field in Resource Owner Password flow
+                    if "password" not in new_oauth and "password" in existing_oauth:
+                        new_oauth["password"] = existing_oauth["password"]
+
+                    gateway.oauth_config = new_oauth
                     # Auto-set auth_type to "oauth" when oauth_config is provided
                     if not gateway.auth_type:
                         gateway.auth_type = "oauth"
@@ -2043,7 +2067,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             db.rollback()
             raise GatewayError(f"Failed to delete gateway: {str(e)}")
 
-    async def forward_request(self, gateway_or_db, method: str, params: Optional[Dict[str, Any]] = None, app_user_email: Optional[str] = None) -> Any:  # noqa: F811 # pylint: disable=function-redefined
+    async def forward_request(
+        self, gateway_or_db, method: str, params: Optional[Dict[str, Any]] = None, app_user_email: Optional[str] = None
+    ) -> Any:  # noqa: F811 # pylint: disable=function-redefined
         """
         Forward a request to a gateway or multiple gateways.
 
