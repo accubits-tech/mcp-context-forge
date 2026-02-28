@@ -29,7 +29,7 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile
-    image: mcpgateway/nginx-cache:latest
+    image: mcp-foundry/nginx-cache:latest
     restart: unless-stopped
     ports:
       - "8080:80"                   # HTTP caching proxy (public-facing)
@@ -48,12 +48,12 @@ services:
       start_period: 10s
 
   # ──────────────────────────────────────────────────────────────────────
-  # MCP Gateway - the main API server for the MCP stack
+  # MCP Foundry - the main API server for the MCP stack
   # ──────────────────────────────────────────────────────────────────────
   gateway:
-    image: ${IMAGE_LOCAL:-mcpgateway/mcpgateway:latest} # Use the local latest image. Run `make docker-prod` to build it.
-    #image: ghcr.io/ibm/mcp-context-forge:0.9.0 # Use the release MCP Context Forge image
-    #image: ghcr.io/ibm/mcp-context-forge:0.7.0 # Testing migration from 0.7.0
+    image: ${IMAGE_LOCAL:-mcp-foundry/mcp-foundry:latest} # Use the local latest image. Run `make docker-prod` to build it.
+    #image: ghcr.io/accubits-tech/mcp-foundry:0.9.0 # Use the release MCP Foundry image
+    #image: ghcr.io/accubits-tech/mcp-foundry:0.7.0 # Testing migration from 0.7.0
     build:
       context: .
       dockerfile: Containerfile.lite     # Same one the Makefile builds
@@ -156,6 +156,30 @@ services:
     # 2. Uncomment volumes mount above
     # 3. Switch JWT_ALGORITHM to RS256 and uncomment JWT_*_KEY_PATH variables
 
+  # ──────────────────────────────────────────────────────────────────────
+  # MCP Foundry Frontend - React admin dashboard
+  # ──────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../mcp-foundry-fe
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    image: mcp-foundry/mcp-foundry-fe:latest
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    networks: [mcpnet]
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 ###############################################################################
 #  DATABASES - enable ONE of these blocks and adjust DATABASE_URL
 ###############################################################################
@@ -215,8 +239,8 @@ services:
   #   networks: [mcpnet]
 
   # migration:
-  #   #image: ghcr.io/ibm/mcp-context-forge:0.7.0 # Testing migration from 0.7.0
-  #   image: mcpgateway/mcpgateway:latest # Use the local latest image. Run `make docker-prod` to build it.
+  #   #image: ghcr.io/accubits-tech/mcp-foundry:0.7.0 # Testing migration from 0.7.0
+  #   image: mcp-foundry/mcp-foundry:latest # Use the local latest image. Run `make docker-prod` to build it.
   #   build:
   #     context: .
   #     dockerfile: Containerfile
@@ -409,7 +433,7 @@ services:
   # Auto-registration service - registers fast_time_server with gateway
   ###############################################################################
   register_fast_time:
-    image: ${IMAGE_LOCAL:-mcpgateway/mcpgateway:latest}
+    image: ${IMAGE_LOCAL:-mcp-foundry/mcp-foundry:latest}
     networks: [mcpnet]
     depends_on:
       gateway:

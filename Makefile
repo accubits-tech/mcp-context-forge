@@ -1,5 +1,5 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#   🐍 MCP CONTEXT FORGE - Makefile
+#   🐍 MCP FOUNDRY - Makefile
 #   (An enterprise-ready Model Context Protocol Gateway)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
@@ -7,7 +7,7 @@
 # Description: Build & automation helpers for the MCP Gateway project
 # Usage: run `make` or `make help` to view available targets
 #
-# help: 🐍 MCP CONTEXT FORGE  (An enterprise-ready Model Context Protocol Gateway)
+# help: 🐍 MCP FOUNDRY  (An enterprise-ready Model Context Protocol Gateway)
 #
 # ──────────────────────────────────────────────────────────────────────────
 SHELL := /bin/bash
@@ -759,7 +759,7 @@ docs: images sbom
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
 		python3 -m pip install -q handsdown && \
-		python3 -m handsdown --external https://github.com/IBM/mcp-context-forge/ \
+		python3 -m handsdown --external https://github.com/accubits-tech/mcp-foundry/ \
 		         -o $(DOCS_DIR)/docs \
 		         -n app --name '$(PROJECT_NAME)' --cleanup"
 
@@ -1815,7 +1815,7 @@ SONAR_SCANNER_IMAGE ?= docker.io/sonarsource/sonar-scanner-cli:latest
 # service name inside the container. Override for remote SQ
 SONAR_HOST_URL      ?= http://sonarqube:9000
 # compose network name (podman network ls)
-SONAR_NETWORK       ?= mcp-context-forge_sonarnet
+SONAR_NETWORK       ?= mcp-foundry_sonarnet
 # analysis props file
 SONAR_PROPS         ?= sonar-code.properties
 # path mounted into scanner:
@@ -1926,7 +1926,7 @@ trivy:
 
 # help: dockle               - Lint the built container image via tarball (no daemon/socket needed)
 .PHONY: dockle
-DOCKLE_IMAGE ?= $(IMG)         # mcpgateway/mcpgateway:latest
+DOCKLE_IMAGE ?= $(IMG)         # mcp-foundry/mcp-foundry:latest
 dockle:
 	@echo "🔎  dockle scan (tar mode) on $(DOCKLE_IMAGE)..."
 	@command -v dockle >/dev/null 2>&1 || { \
@@ -2106,7 +2106,7 @@ CONTAINER_RUNTIME = $(shell command -v docker >/dev/null 2>&1 && echo docker || 
 print-runtime:
 	@echo Using container runtime: $(CONTAINER_RUNTIME)
 # Base image name (without any prefix)
-IMAGE_BASE := mcpgateway/mcpgateway
+IMAGE_BASE := mcp-foundry/mcp-foundry
 IMAGE_TAG := latest
 
 # Handle runtime-specific image naming
@@ -3035,7 +3035,7 @@ ibmcloud-ce-rm:
 # 🧪 MINIKUBE LOCAL CLUSTER
 # =============================================================================
 # A self-contained block with sensible defaults, overridable via the CLI.
-# App is accessible after: kubectl port-forward svc/mcp-context-forge 8080:80
+# App is accessible after: kubectl port-forward svc/mcp-foundry 8080:80
 # Examples:
 #   make minikube-start MINIKUBE_DRIVER=podman
 #   make minikube-image-load TAG=v0.1.2
@@ -3050,12 +3050,12 @@ ibmcloud-ce-rm:
 #   image: $${REG_URL}/$(PROJECT_NAME):dev
 #
 #   # If you built a prod image via:
-#   #     make docker-prod   # ⇒ mcpgateway/mcpgateway:latest
+#   #     make docker-prod   # ⇒ mcp-foundry/mcp-foundry:latest
 #   # Tag & push it into Minikube:
-#   docker tag mcpgateway/mcpgateway:latest $${REG_URL}/mcpgateway:latest
-#   docker push $${REG_URL}/mcpgateway:latest
+#   docker tag mcp-foundry/mcp-foundry:latest $${REG_URL}/mcp-foundry:latest
+#   docker push $${REG_URL}/mcp-foundry:latest
 #   # Override the Make target variable or patch your Helm values:
-#   make minikube-k8s-apply IMAGE=$${REG_URL}/mcpgateway:latest
+#   make minikube-k8s-apply IMAGE=$${REG_URL}/mcp-foundry:latest
 # -----------------------------------------------------------------------------
 
 # ▸ Tunables (export or pass on the command line)
@@ -3072,10 +3072,10 @@ MINIKUBE_MEMORY  ?= 6g             # RAM (supports m / g suffix)
 MINIKUBE_ADDONS  ?= ingress ingress-dns metrics-server dashboard registry registry-aliases
 # OCI image tag to preload into the cluster.
 # - By default we point to the *local* image built via `make docker-prod`, e.g.
-#   mcpgateway/mcpgateway:latest.  Override with IMAGE=<repo:tag> to use a
-#   remote registry (e.g. ghcr.io/ibm/mcp-context-forge:v0.9.0).
+#   mcp-foundry/mcp-foundry:latest.  Override with IMAGE=<repo:tag> to use a
+#   remote registry (e.g. ghcr.io/accubits-tech/mcp-foundry:v0.9.0).
 TAG              ?= latest         # override with TAG=<ver>
-IMAGE            ?= $(IMG):$(TAG)  # or IMAGE=ghcr.io/ibm/mcp-context-forge:$(TAG)
+IMAGE            ?= $(IMG):$(TAG)  # or IMAGE=ghcr.io/accubits-tech/mcp-foundry:$(TAG)
 
 # -----------------------------------------------------------------------------
 # 🆘  HELP TARGETS (parsed by `make help`)
@@ -3089,7 +3089,7 @@ IMAGE            ?= $(IMG):$(TAG)  # or IMAGE=ghcr.io/ibm/mcp-context-forge:$(TA
 # help: minikube-port-forward   - Run kubectl port-forward -n mcp-private svc/mcp-stack-mcpgateway 8080:80
 # help: minikube-dashboard      - Print & (best-effort) open the Kubernetes dashboard URL
 # help: minikube-image-load     - Load $(IMAGE) into Minikube container runtime
-# help: minikube-k8s-apply      - Apply manifests from deployment/k8s/ - access with `kubectl port-forward svc/mcp-context-forge 8080:80`
+# help: minikube-k8s-apply      - Apply manifests from deployment/k8s/ - access with `kubectl port-forward svc/mcp-foundry 8080:80`
 # help: minikube-status         - Cluster + addon health overview
 # help: minikube-context        - Switch kubectl context to Minikube
 # help: minikube-ssh            - SSH into the Minikube VM
@@ -3278,7 +3278,7 @@ helm-delete:
 ARGOCD_NS   ?= argocd
 ARGOCD_PORT ?= 8083
 ARGOCD_APP  ?= mcp-gateway
-GIT_REPO    ?= https://github.com/ibm/mcp-context-forge.git
+GIT_REPO    ?= https://github.com/accubits-tech/mcp-foundry.git
 GIT_PATH    ?= k8s
 
 .PHONY: argocd-cli-install argocd-install argocd-password argocd-forward \

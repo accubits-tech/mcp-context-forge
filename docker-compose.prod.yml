@@ -1,0 +1,146 @@
+###############################################################################
+#  MCP Foundry - Production Docker Compose
+#
+#  This file pulls PRE-BUILT images from ghcr.io/accubits-tech/.
+#  No source code is needed on the server — just this file + .env.
+#
+#  Usage:
+#    1. Copy this file and .env to the production server
+#    2. docker compose -f docker-compose.prod.yml up -d
+###############################################################################
+
+networks:
+  mcpnet:
+    driver: bridge
+
+volumes:
+  pgdata:
+  nginx_cache:
+
+services:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Nginx Caching Proxy
+  # ──────────────────────────────────────────────────────────────────────
+  nginx:
+    image: ghcr.io/accubits-tech/mcp-foundry-nginx:latest
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    networks: [mcpnet]
+    depends_on:
+      gateway:
+        condition: service_healthy
+    volumes:
+      - nginx_cache:/var/cache/nginx
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ──────────────────────────────────────────────────────────────────────
+  # MCP Foundry Gateway (Backend API)
+  # ──────────────────────────────────────────────────────────────────────
+  gateway:
+    image: ghcr.io/accubits-tech/mcp-foundry:latest
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-4444}:4444"
+    networks: [mcpnet]
+    environment:
+      - HOST=0.0.0.0
+      - PORT=4444
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-mysecretpassword}@postgres:5432/mcp
+      - CACHE_TYPE=redis
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-changeme}
+      - JWT_AUDIENCE=mcpgateway-api
+      - JWT_ISSUER=mcpgateway
+      - EMAIL_AUTH_ENABLED=true
+      - PLATFORM_ADMIN_EMAIL=${PLATFORM_ADMIN_EMAIL:-admin@example.com}
+      - PLATFORM_ADMIN_PASSWORD=${PLATFORM_ADMIN_PASSWORD:-changeme}
+      - REQUIRE_TOKEN_EXPIRATION=${REQUIRE_TOKEN_EXPIRATION:-true}
+      - MCPGATEWAY_UI_ENABLED=${MCPGATEWAY_UI_ENABLED:-true}
+      - MCPGATEWAY_ADMIN_API_ENABLED=${MCPGATEWAY_ADMIN_API_ENABLED:-true}
+      - ENVIRONMENT=production
+      - SECURITY_HEADERS_ENABLED=true
+      - CORS_ALLOW_CREDENTIALS=true
+      - SECURE_COOKIES=${SECURE_COOKIES:-true}
+      - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
+      - AUTH_REQUIRED=true
+      - MCP_CLIENT_AUTH_ENABLED=true
+      - TRUST_PROXY_AUTH=false
+      - LOG_LEVEL=${LOG_LEVEL:-ERROR}
+      - DISABLE_ACCESS_LOG=true
+      - HOME=/app
+      - XDG_DATA_HOME=/app/.local/share
+      - XDG_CACHE_HOME=/app/.cache
+      - XDG_CONFIG_HOME=/app/.config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; import json; resp = urllib.request.urlopen('http://localhost:4444/health', timeout=5); data = json.loads(resp.read()); exit(0 if data.get('status') == 'healthy' else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────────────
+  # MCP Foundry Frontend
+  # ──────────────────────────────────────────────────────────────────────
+  frontend:
+    image: ghcr.io/accubits-tech/mcp-foundry-fe:latest
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    networks: [mcpnet]
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ──────────────────────────────────────────────────────────────────────
+  # PostgreSQL Database
+  # ──────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mysecretpassword}
+      - POSTGRES_DB=${POSTGRES_DB:-mcp}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [mcpnet]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Redis Cache
+  # ──────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:latest
+    restart: unless-stopped
+    networks: [mcpnet]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

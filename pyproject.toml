@@ -251,11 +251,11 @@ name = "Mihai Criveti"
 email = "redacted@ibm.com"
 
 [project.urls]
-Homepage = "https://ibm.github.io/mcp-context-forge/"
-Documentation = "https://ibm.github.io/mcp-context-forge/"
-Repository = "https://github.com/IBM/mcp-context-forge"
-"Bug Tracker" = "https://github.com/IBM/mcp-context-forge/issues"
-Changelog = "https://github.com/IBM/mcp-context-forge/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/accubits-tech/mcp-foundry"
+Documentation = "https://github.com/accubits-tech/mcp-foundry"
+Repository = "https://github.com/accubits-tech/mcp-foundry"
+"Bug Tracker" = "https://github.com/accubits-tech/mcp-foundry/issues"
+Changelog = "https://github.com/accubits-tech/mcp-foundry/blob/main/CHANGELOG.md"
 
 # --------------------------------------------------------------------
 #  💻 Project scripts (cli entrypoint)
