@@ -339,6 +339,29 @@ class EmailAuthService:
                     logger.warning(f"Failed to create personal team for {email}: {e}")
                     # Don't fail user creation if personal team creation fails
 
+            # Assign default 'client' role to non-admin users
+            if not is_admin:
+                try:
+                    # First-Party
+                    from mcpgateway.services.role_service import RoleService  # pylint: disable=import-outside-toplevel
+
+                    role_service = RoleService(self.db)
+                    client_role = await role_service.get_role_by_name("client", "global")
+                    if client_role:
+                        await role_service.assign_role_to_user(
+                            user_email=email,
+                            role_id=client_role.id,
+                            scope="global",
+                            scope_id=None,
+                            granted_by=email,
+                        )
+                        logger.info(f"Assigned default 'client' role to user {email}")
+                    else:
+                        logger.warning(f"Default 'client' role not found - user {email} will have limited permissions")
+                except Exception as e:
+                    logger.warning(f"Failed to assign default 'client' role to {email}: {e}")
+                    # Don't fail user creation if role assignment fails
+
             # Log registration event
             registration_event = EmailAuthEvent.create_registration_event(user_email=email, success=True)
             self.db.add(registration_event)

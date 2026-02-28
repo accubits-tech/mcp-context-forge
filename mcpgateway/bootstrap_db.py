@@ -159,7 +159,7 @@ async def bootstrap_default_roles() -> None:
                 },
                 {
                     "name": "client",
-                    "description": "Default role for SSO users with gateway, server, tool, and token access",
+                    "description": "Default role for all platform users with gateway, server, tool, and token access",
                     "scope": "global",
                     "permissions": [
                         "gateways.read",
