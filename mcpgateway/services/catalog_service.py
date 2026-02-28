@@ -255,9 +255,9 @@ class CatalogService:
             skip_initialization = False  # Flag to skip connection test for OAuth servers without creds
             has_oauth_creds = request and request.oauth_credentials and request.oauth_credentials.get("client_id") and request.oauth_credentials.get("client_secret")
 
-            # Build the OAuth redirect URI from server settings
-            oauth_host = settings.host if settings.host != "0.0.0.0" else "localhost"
-            oauth_redirect_uri = f"http://{oauth_host}:{settings.port}/oauth/callback"
+            # Build OAuth redirect URI from the public gateway domain
+            # so DCR/manual registration works correctly behind proxies.
+            oauth_redirect_uri = f"{str(settings.app_domain).rstrip('/')}/oauth/callback"
 
             if has_oauth_creds and auth_type in ["OAuth2.1", "OAuth", "OAuth2.1 & API Key"]:
                 # OAuth credentials provided - configure OAuth auth on the gateway

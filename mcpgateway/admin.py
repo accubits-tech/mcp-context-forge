@@ -3512,7 +3512,13 @@ async def admin_update_team(
 
         # Update team
         user_email = getattr(user, "email", None) or str(user)
-        await team_service.update_team(team_id=team_id, name=name, description=description, visibility=visibility, updated_by=user_email)
+        updated = await team_service.update_team(team_id=team_id, name=name, description=description, visibility=visibility, updated_by=user_email)
+        if not updated:
+            is_htmx = request.headers.get("HX-Request") == "true"
+            if is_htmx:
+                return HTMLResponse(content='<div class="text-red-500">Failed to update team</div>', status_code=400)
+            error_msg = urllib.parse.quote("Failed to update team")
+            return RedirectResponse(url=f"{root_path}/admin/?error={error_msg}#teams", status_code=303)
 
         # Check if this is an HTMX request
         is_htmx = request.headers.get("HX-Request") == "true"

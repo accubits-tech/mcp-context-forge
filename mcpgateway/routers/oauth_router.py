@@ -375,59 +375,7 @@ async def oauth_callback(
                 <p><strong>Status:</strong> Authorization completed successfully</p>
             </div>
 
-            <div style="margin: 30px 0;">
-                <h3>Next Steps:</h3>
-                <p>Now that OAuth authorization is complete, you can fetch tools from the MCP server:</p>
-                <button onclick="fetchTools()" class="button" style="background-color: #059669;">
-                    🔧 Fetch Tools from MCP Server
-                </button>
-                <div id="fetch-status" style="margin-top: 15px;"></div>
-            </div>
-
-            <a href="{root_path}/admin#gateways" class="button">Return to Admin Panel</a>
-
-            <script>
-            async function fetchTools() {{
-                const button = event.target;
-                const statusDiv = document.getElementById('fetch-status');
-
-                button.disabled = true;
-                button.textContent = '⏳ Fetching Tools...';
-                statusDiv.innerHTML = '<p style="color: #2563eb;">Fetching tools from MCP server...</p>';
-
-                try {{
-                    const response = await fetch('{root_path}/oauth/fetch-tools/{gateway_id}', {{
-                        method: 'POST'
-                    }});
-
-                    const result = await response.json();
-
-                    if (response.ok) {{
-                        statusDiv.innerHTML = `
-                            <div style="color: #059669; padding: 15px; background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 5px;">
-                                <h4>✅ Tools Fetched Successfully!</h4>
-                                <p>${{result.message}}</p>
-                            </div>
-                        `;
-                        button.textContent = '✅ Tools Fetched';
-                        button.style.backgroundColor = '#059669';
-                    }} else {{
-                        throw new Error(result.detail || 'Failed to fetch tools');
-                    }}
-                }} catch (error) {{
-                    statusDiv.innerHTML = `
-                        <div style="color: #dc2626; padding: 15px; background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 5px;">
-                            <h4>❌ Failed to Fetch Tools</h4>
-                            <p><strong>Error:</strong> ${{error.message}}</p>
-                            <p>You can still return to the admin panel and try again later.</p>
-                        </div>
-                    `;
-                    button.textContent = '❌ Retry Fetch Tools';
-                    button.style.backgroundColor = '#dc2626';
-                    button.disabled = false;
-                }}
-            }}
-            </script>
+            <p style="margin-top: 20px; font-weight: 600;">Close the browser and return to admin panel</p>
         </body>
         </html>
         """

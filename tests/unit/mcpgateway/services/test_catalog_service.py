@@ -196,6 +196,41 @@ async def test_auth_type_api_key_and_oauth(service):
 
 
 @pytest.mark.asyncio
+async def test_register_catalog_server_uses_app_domain_for_oauth_redirect_uri(service):
+    fake_catalog = {
+        "catalog_servers": [
+            {
+                "id": "1",
+                "name": "srv",
+                "url": "http://a",
+                "description": "desc",
+                "auth_type": "OAuth2.1",
+                "oauth_config": {
+                    "authorize_url": "https://issuer.example.com/authorize",
+                    "token_url": "https://issuer.example.com/token",
+                    "scopes": ["openid", "profile"],
+                },
+            }
+        ]
+    }
+    req = CatalogServerRegisterRequest(server_id="1", oauth_credentials={"client_id": "cid", "client_secret": "csecret"})
+
+    with (
+        patch.object(service, "load_catalog", AsyncMock(return_value=fake_catalog)),
+        patch("mcpgateway.services.catalog_service.settings", MagicMock(app_domain="https://gateway.example.com")),
+        patch("mcpgateway.services.catalog_service.select"),
+        patch.object(service._gateway_service, "register_gateway", AsyncMock(return_value=MagicMock(id=1, name="srv"))) as mock_register_gateway,
+    ):
+        db = MagicMock()
+        db.execute.return_value.scalar_one_or_none.return_value = None
+        result = await service.register_catalog_server("1", req, db)
+
+        assert result.success
+        gateway_create = mock_register_gateway.await_args.kwargs["gateway"]
+        assert gateway_create.oauth_config["redirect_uri"] == "https://gateway.example.com/oauth/callback"
+
+
+@pytest.mark.asyncio
 async def test_bulk_register_servers_skip_errors(service):
     fake_request = CatalogBulkRegisterRequest(server_ids=["1", "2"], skip_errors=True)
     with patch.object(service, "register_catalog_server", AsyncMock(side_effect=[MagicMock(success=False, error="fail"), MagicMock(success=True)])):
