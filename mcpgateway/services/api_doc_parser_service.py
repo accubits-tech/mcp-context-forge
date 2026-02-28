@@ -15,11 +15,9 @@ It handles:
 """
 
 # Standard
-import ipaddress
 import re
-import socket
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 # Third-Party
 from bs4 import BeautifulSoup
@@ -118,13 +116,17 @@ class APIDocumentationParserService:
         except Exception as e:
             raise ContentExtractionError(f"Failed to parse {detected_format} content: {str(e)}")
 
-    async def parse_documentation_url(self, url: str, format_hint: str = "auto", base_url: Optional[str] = None) -> Dict[str, Any]:
+    async def parse_documentation_url(self, url: str, format_hint: str = "auto", base_url: Optional[str] = None, enable_crawling: bool = True) -> Dict[str, Any]:
         """Parse API documentation from URL.
+
+        When enable_crawling is True, delegates to DocumentationCrawlerService for
+        multi-page crawling, OpenAPI auto-detection, and deep auth extraction.
 
         Args:
             url: URL to API documentation
             format_hint: Format hint ("auto", "html", "markdown", "text", "pdf")
             base_url: Base URL for the API (reserved for future use)
+            enable_crawling: If True, use multi-page crawler. If False, single page fetch.
 
         Returns:
             Parsed documentation structure
@@ -133,50 +135,15 @@ class APIDocumentationParserService:
             ContentExtractionError: If URL fetching or parsing fails
         """
         try:
-            logger.info(f"Fetching API documentation from URL: {url}")
+            logger.info(f"Fetching API documentation from URL: {url} (crawling={'enabled' if enable_crawling else 'disabled'})")
 
             # SSRF protection: validate URL does not resolve to internal address
             _validate_url_not_internal(url)
 
-            # Fetch content with timeout and size limits using async httpx
-            headers = {
-                "User-Agent": "MCP-Gateway API Documentation Parser 1.0",
-                "Accept": "text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain,*/*",
-                "Accept-Encoding": "gzip, deflate",
-            }
+            if enable_crawling:
+                return await self._parse_with_crawler(url, format_hint, base_url)
 
-            async with httpx.AsyncClient(timeout=self.request_timeout, follow_redirects=False) as client:
-                response = await client.get(url, headers=headers)
-                if response.is_redirect or response.has_redirect_location:
-                    raise ContentExtractionError(f"URL returned a redirect to {response.headers.get('location', 'unknown')}. Please provide the final URL directly.")
-                response.raise_for_status()
-
-                content = response.content
-
-                # Check content size
-                if len(content) > self.max_content_length:
-                    raise ContentExtractionError(f"Content size {len(content)} exceeds maximum {self.max_content_length} bytes")
-
-            # Detect format from content-type or URL
-            content_type = response.headers.get("content-type", "").lower()
-            detected_format = self._detect_url_format(url, content_type, format_hint)
-
-            logger.info(f"Detected format '{detected_format}' for URL content")
-
-            # Parse content based on format
-            if detected_format == "pdf":
-                doc_structure = await self._parse_pdf_content(content)
-                doc_structure["source_url"] = url
-                return doc_structure
-            elif detected_format == "html":
-                return await self._parse_html_content(content.decode("utf-8", errors="ignore"), source_url=url)
-            elif detected_format == "markdown":
-                return await self._parse_markdown_content(content.decode("utf-8", errors="ignore"), source_url=url)
-            elif detected_format == "text":
-                return await self._parse_text_content(content.decode("utf-8", errors="ignore"), source_url=url)
-            else:
-                # Default to HTML parsing for web content
-                return await self._parse_html_content(content.decode("utf-8", errors="ignore"), source_url=url)
+            return await self._parse_single_page(url, format_hint, base_url)
 
         except (ContentExtractionError, DocumentFormatError, APIDocumentationError):
             raise
@@ -184,8 +151,129 @@ class APIDocumentationParserService:
             raise ContentExtractionError(f"Failed to fetch URL {url}: HTTP {e.response.status_code}")
         except httpx.RequestError as e:
             raise ContentExtractionError(f"Failed to fetch URL {url}: {str(e)}")
+        except ValueError as e:
+            raise ContentExtractionError(str(e))
         except Exception as e:
             raise ContentExtractionError(f"Failed to parse documentation from URL: {str(e)}")
+
+    async def _parse_with_crawler(self, url: str, format_hint: str, base_url: Optional[str]) -> Dict[str, Any]:
+        """Parse documentation using the multi-page crawler.
+
+        Delegates to DocumentationCrawlerService for crawling, then builds
+        a standard doc_structure from the crawl result.
+        """
+        # First-Party
+        from mcpgateway.services.doc_crawler_service import DocumentationCrawlerService  # pylint: disable=import-outside-toplevel
+
+        crawler = DocumentationCrawlerService()
+        crawl_result = await crawler.crawl_documentation(url, enable_crawling=True)
+
+        # If an OpenAPI spec was discovered, include it in the doc_structure
+        if crawl_result.discovered_openapi_spec:
+            logger.info(f"OpenAPI spec auto-detected at {crawl_result.discovered_openapi_spec_url}")
+
+        # Build standard doc_structure from aggregated content
+        doc_structure = await self.parse_aggregated_documentation(crawl_result)
+        doc_structure["source_url"] = url
+
+        # Attach crawl result for downstream consumers
+        doc_structure["crawl_result"] = crawl_result
+
+        # Attach discovered spec info
+        if crawl_result.discovered_openapi_spec_url:
+            doc_structure["discovered_openapi_spec_url"] = crawl_result.discovered_openapi_spec_url
+        if crawl_result.discovered_openapi_spec:
+            doc_structure["discovered_openapi_spec"] = crawl_result.discovered_openapi_spec
+
+        # Deep auth extraction
+        # First-Party
+        from mcpgateway.services.auth_extraction_service import AuthExtractionService  # pylint: disable=import-outside-toplevel
+
+        auth_service = AuthExtractionService()
+        deep_auth = auth_service.extract_auth_from_pages(crawl_result.pages, crawl_result.aggregated_content)
+        doc_structure["authentication_info"] = deep_auth
+
+        # Base URL candidates
+        if crawl_result.base_url_candidates:
+            doc_structure["base_url_candidates"] = crawl_result.base_url_candidates
+
+        doc_structure["crawl_stats"] = crawl_result.crawl_stats
+        return doc_structure
+
+    async def _parse_single_page(self, url: str, format_hint: str, base_url: Optional[str]) -> Dict[str, Any]:
+        """Parse a single documentation page with safe redirect following."""
+        # First-Party
+        from mcpgateway.services.doc_crawler_service import DocumentationCrawlerService  # pylint: disable=import-outside-toplevel
+
+        crawler = DocumentationCrawlerService()
+
+        # Use the crawler's safe redirect following instead of rejecting redirects
+        try:
+            final_url, response = await crawler._fetch_with_redirects(url)
+        except ValueError as e:
+            raise ContentExtractionError(str(e))
+
+        content = response.content
+
+        # Check content size
+        if len(content) > self.max_content_length:
+            raise ContentExtractionError(f"Content size {len(content)} exceeds maximum {self.max_content_length} bytes")
+
+        # Detect format from content-type or URL
+        content_type = response.headers.get("content-type", "").lower()
+        detected_format = self._detect_url_format(final_url, content_type, format_hint)
+
+        logger.info(f"Detected format '{detected_format}' for URL content (final URL: {final_url})")
+
+        # Parse content based on format
+        if detected_format == "pdf":
+            doc_structure = await self._parse_pdf_content(content)
+            doc_structure["source_url"] = url
+            return doc_structure
+        elif detected_format == "html":
+            return await self._parse_html_content(content.decode("utf-8", errors="ignore"), source_url=url)
+        elif detected_format == "markdown":
+            return await self._parse_markdown_content(content.decode("utf-8", errors="ignore"), source_url=url)
+        elif detected_format == "text":
+            return await self._parse_text_content(content.decode("utf-8", errors="ignore"), source_url=url)
+        else:
+            # Default to HTML parsing for web content
+            return await self._parse_html_content(content.decode("utf-8", errors="ignore"), source_url=url)
+
+    async def parse_aggregated_documentation(self, crawl_result) -> Dict[str, Any]:
+        """Build a standard doc_structure from a CrawlResult's aggregated content.
+
+        Args:
+            crawl_result: CrawlResult object from DocumentationCrawlerService.
+
+        Returns:
+            Parsed documentation structure dict.
+        """
+        content = crawl_result.aggregated_content
+        if not content:
+            return {
+                "title": "API Documentation",
+                "description": "No content extracted from crawl.",
+                "source_format": "html",
+                "content_length": 0,
+                "potential_endpoints": [],
+                "authentication_info": {"methods": [], "details": {}},
+                "parameters": [],
+                "raw_content": "",
+            }
+
+        # Use existing text parsing on the aggregated content
+        doc_structure = await self._parse_text_content(content)
+        doc_structure["source_format"] = "html"
+        doc_structure["content_length"] = len(content)
+
+        # Use title from first page if available
+        if crawl_result.pages:
+            first_title = crawl_result.pages[0].title
+            if first_title and len(first_title) > 3:
+                doc_structure["title"] = first_title
+
+        return doc_structure
 
     def _detect_format(self, content: bytes, filename: str, format_hint: str) -> str:
         """Detect file format from content and filename.

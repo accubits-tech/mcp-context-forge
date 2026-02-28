@@ -34,12 +34,41 @@ try:
 except Exception:  # pragma: no cover - environment without anyio
     AnyioClosedResourceError = None  # pylint: disable=invalid-name
 
+# Rebranding map: old names → new names for log output
+_REBRAND_MAP = {
+    "mcp-context-forge": "mcp-foundry",
+    "mcpgateway": "mcpfoundry",
+}
+
+
+def _rebrand(text: str) -> str:
+    """Replace all legacy names with their rebranded equivalents."""
+    for old, new in _REBRAND_MAP.items():
+        if old in text:
+            text = text.replace(old, new)
+    return text
+
+
+class _RebrandFormatter(logging.Formatter):
+    """Formatter that replaces legacy names in log output."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _rebrand(super().format(record))
+
+
+class _RebrandJsonFormatter(jsonlogger.JsonFormatter):
+    """JSON formatter that replaces legacy names in log output."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _rebrand(super().format(record))
+
+
 # First-Party
 # Create a text formatter
-text_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+text_formatter = _RebrandFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 # Create a JSON formatter
-json_formatter = jsonlogger.JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+json_formatter = _RebrandJsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
 
 # Note: Don't use basicConfig here as it conflicts with our custom dual logging setup
 # The LoggingService.initialize() method will properly configure all handlers

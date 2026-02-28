@@ -64,14 +64,31 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from pydantic import Field, field_validator, HttpUrl, model_validator, PositiveInt, SecretStr, ValidationInfo
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+# Rebranding map: ensures log output shows current project names
+_REBRAND_MAP = {
+    "mcp-context-forge": "mcp-foundry",
+    "mcpgateway": "mcpfoundry",
+}
+
+
+class _RebrandFormatter(logging.Formatter):
+    """Formatter that replaces legacy project names in log output."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        result = super().format(record)
+        for old, new in _REBRAND_MAP.items():
+            if old in result:
+                result = result.replace(old, new)
+        return result
+
+
 # Only configure basic logging if no handlers exist yet
 # This prevents conflicts with LoggingService while ensuring config logging works
 if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(_RebrandFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"))
+    logging.getLogger().addHandler(_handler)
+    logging.getLogger().setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -427,6 +444,15 @@ class Settings(BaseSettings):
     llm_timeout: int = Field(default=120, description="Timeout in seconds for LLM API calls")
     llm_max_tokens: int = Field(default=4096, description="Maximum tokens for LLM responses")
     llm_temperature: float = Field(default=0.7, description="Temperature for LLM responses")
+
+    # Documentation Crawler Configuration
+    doc_crawler_max_pages: int = Field(default=30, description="Maximum pages to crawl per documentation site")
+    doc_crawler_max_depth: int = Field(default=3, description="Maximum BFS depth for documentation crawling")
+    doc_crawler_delay: float = Field(default=0.5, description="Delay in seconds between crawl requests (politeness)")
+    doc_crawler_max_concurrent: int = Field(default=5, description="Maximum concurrent crawl requests")
+    doc_crawler_enable_js_rendering: bool = Field(default=False, description="Enable optional Playwright JS rendering for SPA doc sites")
+    doc_crawler_respect_robots_txt: bool = Field(default=True, description="Respect robots.txt when crawling documentation")
+    doc_crawler_max_redirects: int = Field(default=5, description="Maximum redirect hops to follow per URL")
 
     @field_validator("jwt_secret_key", "auth_encryption_secret")
     @classmethod

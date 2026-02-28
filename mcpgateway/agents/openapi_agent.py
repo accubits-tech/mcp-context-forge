@@ -730,7 +730,9 @@ Focus on making tools more discoverable, understandable, and safe to use."""
 
         return enhanced_tools
 
-    async def extract_tools_from_raw_content(self, raw_content: str, base_url: str, source_info: Optional[Dict[str, Any]] = None, chunk_size: int = 20000) -> List[Dict[str, Any]]:
+    async def extract_tools_from_raw_content(
+        self, raw_content: str, base_url: str, source_info: Optional[Dict[str, Any]] = None, chunk_size: int = 20000, auth_context: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """Extract tool definitions directly from raw API documentation content.
 
         This method passes the raw documentation content directly to the LLM,
@@ -742,6 +744,7 @@ Focus on making tools more discoverable, understandable, and safe to use."""
             base_url: Base URL for the API endpoints
             source_info: Optional metadata about the source (filename, url, format)
             chunk_size: Maximum characters per LLM call (default 20000)
+            auth_context: Optional deep auth extraction results from AuthExtractionService
 
         Returns:
             List of tool definition dictionaries ready for ToolCreate
@@ -761,7 +764,7 @@ Focus on making tools more discoverable, understandable, and safe to use."""
 
         for chunk_idx, chunk in enumerate(content_chunks):
             try:
-                chunk_tools = await self._extract_tools_from_chunk(chunk=chunk, base_url=base_url, source_info=source_info, chunk_idx=chunk_idx, total_chunks=total_chunks)
+                chunk_tools = await self._extract_tools_from_chunk(chunk=chunk, base_url=base_url, source_info=source_info, chunk_idx=chunk_idx, total_chunks=total_chunks, auth_context=auth_context)
                 all_tools.extend(chunk_tools)
                 logger.info(f"Extracted {len(chunk_tools)} tools from chunk {chunk_idx + 1}/{total_chunks}")
 
@@ -826,7 +829,9 @@ Focus on making tools more discoverable, understandable, and safe to use."""
 
         return chunks
 
-    async def _extract_tools_from_chunk(self, chunk: str, base_url: str, source_info: Dict[str, Any], chunk_idx: int, total_chunks: int, max_retries: int = 2) -> List[Dict[str, Any]]:
+    async def _extract_tools_from_chunk(
+        self, chunk: str, base_url: str, source_info: Dict[str, Any], chunk_idx: int, total_chunks: int, max_retries: int = 2, auth_context: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """Extract tools from a single content chunk with retry logic.
 
         Args:
@@ -836,11 +841,23 @@ Focus on making tools more discoverable, understandable, and safe to use."""
             chunk_idx: Index of this chunk
             total_chunks: Total number of chunks
             max_retries: Maximum number of retries on transient failures
+            auth_context: Optional deep auth extraction results
 
         Returns:
             List of tool definitions from this chunk
         """
         chunk_context = f"(Part {chunk_idx + 1} of {total_chunks})" if total_chunks > 1 else ""
+
+        # Build auth context section if available
+        auth_context_section = ""
+        if auth_context and auth_context.get("methods"):
+            auth_context_json = json.dumps(auth_context, indent=2, default=str)
+            auth_context_section = f"""
+AUTHENTICATION CONTEXT (from dedicated auth analysis):
+{auth_context_json}
+Use this to accurately set auth_required and auth_type for each endpoint.
+If custom headers are listed above, use the exact header names.
+"""
 
         prompt = f"""You are analyzing API documentation to extract tool definitions for an API gateway.
 {chunk_context}
@@ -848,6 +865,7 @@ Focus on making tools more discoverable, understandable, and safe to use."""
 BASE URL for this API: {base_url}
 Source: {source_info.get('filename') or source_info.get('url') or 'API Documentation'}
 Format: {source_info.get('format', 'unknown')}
+{auth_context_section}
 
 API DOCUMENTATION CONTENT:
 ---
@@ -941,7 +959,7 @@ If no endpoints are found in this content, return: {{"tools": [], "extraction_no
             except LLMAPIError as e:
                 last_error = e
                 if attempt < max_retries:
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s
+                    wait_time = 2**attempt  # Exponential backoff: 1s, 2s
                     logger.warning(f"LLM API error on attempt {attempt + 1}/{max_retries + 1}, retrying in {wait_time}s: {e}")
                     await asyncio.sleep(wait_time)
                 else:
