@@ -23,8 +23,8 @@ from urllib.parse import urljoin, urlparse
 
 # Third-Party
 from bs4 import BeautifulSoup
-from markdown import markdown
 import httpx
+from markdown import markdown
 
 # First-Party
 from mcpgateway.schemas import ToolCreate
@@ -59,24 +59,13 @@ def _validate_url_not_internal(target_url: str) -> None:
     Raises:
         ContentExtractionError: If the URL points to an internal address or uses an unsupported scheme
     """
-    parsed = urlparse(target_url)
-    if parsed.scheme not in ("http", "https"):
-        raise ContentExtractionError(f"Unsupported URL scheme: {parsed.scheme}. Only http and https are allowed.")
-
-    hostname = parsed.hostname
-    if not hostname:
-        raise ContentExtractionError("URL has no hostname")
+    # First-Party
+    from mcpgateway.utils.url_validation import validate_url_not_internal  # pylint: disable=import-outside-toplevel
 
     try:
-        default_port = 443 if parsed.scheme == "https" else 80
-        addr_infos = socket.getaddrinfo(hostname, parsed.port or default_port, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
-        raise ContentExtractionError(f"Cannot resolve hostname: {hostname}")
-
-    for addr_info in addr_infos:
-        ip = ipaddress.ip_address(addr_info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            raise ContentExtractionError(f"URL resolves to internal address ({ip}). External URLs only.")
+        validate_url_not_internal(target_url)
+    except ValueError as e:
+        raise ContentExtractionError(str(e))
 
 
 class APIDocumentationParserService:
@@ -156,8 +145,10 @@ class APIDocumentationParserService:
                 "Accept-Encoding": "gzip, deflate",
             }
 
-            async with httpx.AsyncClient(timeout=self.request_timeout, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=self.request_timeout, follow_redirects=False) as client:
                 response = await client.get(url, headers=headers)
+                if response.is_redirect or response.has_redirect_location:
+                    raise ContentExtractionError(f"URL returned a redirect to {response.headers.get('location', 'unknown')}. Please provide the final URL directly.")
                 response.raise_for_status()
 
                 content = response.content

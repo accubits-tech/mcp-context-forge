@@ -791,6 +791,19 @@ class A2AAgentService:
                 # Use custom A2A format
                 request_data = {"interaction_type": interaction_type, "parameters": parameters, "protocol_version": agent.protocol_version}
 
+            # SSRF protection: validate agent endpoint URL does not point to internal addresses
+            # First-Party
+            from mcpgateway.config import settings as _settings  # pylint: disable=import-outside-toplevel
+
+            if getattr(_settings, "ssrf_protection_enabled", True):
+                # First-Party
+                from mcpgateway.utils.url_validation import validate_url_not_internal  # pylint: disable=import-outside-toplevel
+
+                try:
+                    validate_url_not_internal(agent.endpoint_url)
+                except ValueError as e:
+                    raise A2AAgentError(f"SSRF protection: {e}")
+
             # Make HTTP request to the agent endpoint
             async with httpx.AsyncClient(timeout=30.0) as client:
                 headers = {"Content-Type": "application/json"}

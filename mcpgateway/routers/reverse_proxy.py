@@ -23,9 +23,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 # First-Party
+from mcpgateway.config import settings
 from mcpgateway.db import get_db
 from mcpgateway.services.logging_service import LoggingService
-from mcpgateway.utils.verify_credentials import require_auth
+from mcpgateway.utils.verify_credentials import require_auth, verify_jwt_token
 
 # Initialize logging
 logging_service = LoggingService()
@@ -162,22 +163,26 @@ async def websocket_endpoint(
         websocket: WebSocket connection.
         db: Database session.
     """
-    await websocket.accept()
-
     # Get session ID from headers or generate new one
     session_id = websocket.headers.get("X-Session-ID", uuid.uuid4().hex)
 
-    # Check authentication
+    # Check authentication before accepting the connection
     user = None
-    auth_header = websocket.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
+    if settings.auth_required:
+        auth_header = websocket.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication required")
+            return
         try:
-            # TODO: Validate token and get user
-            pass
+            token = auth_header.split(" ", 1)[1]
+            payload = await verify_jwt_token(token)
+            user = payload.get("sub")
         except Exception as e:
             LOGGER.warning(f"Authentication failed: {e}")
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication failed")
             return
+
+    await websocket.accept()
 
     # Create session
     session = ReverseProxySession(session_id, websocket, user)

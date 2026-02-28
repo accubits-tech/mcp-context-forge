@@ -80,7 +80,7 @@ class TokenScopingMiddleware:
             return None
 
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP address from request.
+        """Extract client IP address from request with trusted proxy support.
 
         Args:
             request: FastAPI request object
@@ -88,18 +88,10 @@ class TokenScopingMiddleware:
         Returns:
             str: Client IP address
         """
-        # Check for X-Forwarded-For header (proxy/load balancer)
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
+        # First-Party
+        from mcpgateway.utils.client_ip import get_client_ip  # pylint: disable=import-outside-toplevel
 
-        # Check for X-Real-IP header
-        real_ip = request.headers.get("X-Real-IP")
-        if real_ip:
-            return real_ip
-
-        # Fall back to direct client IP
-        return request.client.host if request.client else "unknown"
+        return get_client_ip(request)
 
     def _check_ip_restrictions(self, client_ip: str, ip_restrictions: list) -> bool:
         """Check if client IP is allowed by restrictions.

@@ -24,7 +24,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Union
 import uuid
 
 # Third-Party
-from jinja2 import Environment, meta, select_autoescape
+from jinja2 import meta, select_autoescape
+from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import and_, case, delete, desc, Float, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -126,7 +127,7 @@ class PromptService:
             True
         """
         self._event_subscribers: List[asyncio.Queue] = []
-        self._jinja_env = Environment(autoescape=select_autoescape(["html", "xml"]), trim_blocks=True, lstrip_blocks=True)
+        self._jinja_env = SandboxedEnvironment(autoescape=select_autoescape(["html", "xml"]), trim_blocks=True, lstrip_blocks=True)
         # Initialize plugin manager with env overrides for testability
         env_flag = os.getenv("PLUGINS_ENABLED")
         if env_flag is not None:

@@ -24,6 +24,7 @@ from mcpgateway.schemas import (
     ObservabilityTraceWithSpans,
 )
 from mcpgateway.services.observability_service import ObservabilityService
+from mcpgateway.utils.verify_credentials import require_auth
 
 router = APIRouter(prefix="/observability", tags=["Observability"])
 
@@ -55,6 +56,7 @@ def list_traces(
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Result offset"),
     db: Session = Depends(get_db),
+    _: str | dict = Depends(require_auth),
 ):
     """List traces with optional filtering.
 
@@ -125,6 +127,7 @@ def query_traces_advanced(
     # Third-Party
     request_body: dict,
     db: Session = Depends(get_db),
+    _: str | dict = Depends(require_auth),
 ):
     """Advanced trace querying with attribute filtering.
 
@@ -226,7 +229,7 @@ def query_traces_advanced(
 
 
 @router.get("/traces/{trace_id}", response_model=ObservabilityTraceWithSpans)
-def get_trace(trace_id: str, db: Session = Depends(get_db)):
+def get_trace(trace_id: str, db: Session = Depends(get_db), _: str | dict = Depends(require_auth)):
     """Get a trace by ID with all its spans and events.
 
     Returns a complete trace with all nested spans and their events,
@@ -277,6 +280,7 @@ def list_spans(
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Result offset"),
     db: Session = Depends(get_db),
+    _: str | dict = Depends(require_auth),
 ):
     """List spans with optional filtering.
 
@@ -328,6 +332,7 @@ def list_spans(
 def cleanup_old_traces(
     days: int = Query(7, ge=1, description="Delete traces older than this many days"),
     db: Session = Depends(get_db),
+    _: str | dict = Depends(require_auth),
 ):
     """Delete traces older than a specified number of days.
 
@@ -361,6 +366,7 @@ def cleanup_old_traces(
 def get_stats(
     hours: int = Query(24, ge=1, le=168, description="Time window in hours"),
     db: Session = Depends(get_db),
+    _: str | dict = Depends(require_auth),
 ):
     """Get observability statistics.
 
@@ -421,6 +427,7 @@ def export_traces(
     request_body: dict,
     format: str = Query("json", description="Export format (json, csv, ndjson)"),
     db: Session = Depends(get_db),
+    _: str | dict = Depends(require_auth),
 ):
     """Export traces in various formats.
 
@@ -587,7 +594,7 @@ def export_traces(
 
 
 @router.get("/analytics/query-performance")
-def get_query_performance(hours: int = Query(24, ge=1, le=168, description="Time window in hours"), db: Session = Depends(get_db)):
+def get_query_performance(hours: int = Query(24, ge=1, le=168, description="Time window in hours"), db: Session = Depends(get_db), _: str | dict = Depends(require_auth)):
     """Get query performance analytics.
 
     Returns performance metrics about trace queries including:

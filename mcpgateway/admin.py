@@ -3007,11 +3007,11 @@ async def admin_list_teams(
                 <div id="team-card-{team.id}" class="border border-gray-200 dark:border-gray-600 rounded-lg p-4 mb-4">
                     <div class="flex justify-between items-start">
                         <div>
-                            <h4 class="text-lg font-medium text-gray-900 dark:text-white">{team.name}</h4>
+                            <h4 class="text-lg font-medium text-gray-900 dark:text-white">{html.escape(team.name)}</h4>
                             <p class="text-sm text-gray-600 dark:text-gray-400">Slug: {team.slug}</p>
                             <p class="text-sm text-gray-600 dark:text-gray-400">Visibility: {team.visibility}</p>
                             <p class="text-sm text-gray-600 dark:text-gray-400">Members: {member_count}</p>
-                            {f'<p class="text-sm text-gray-600 dark:text-gray-400">{team.description}</p>' if team.description else ""}
+                            {f'<p class="text-sm text-gray-600 dark:text-gray-400">{html.escape(team.description)}</p>' if team.description else ""}
                         </div>
                         <div class="flex space-x-2">
                             <button
@@ -3028,7 +3028,7 @@ async def admin_list_teams(
                             >
                                 Edit
                             </button>
-                            {f'<button onclick="leaveTeam(&quot;{team.id}&quot;, &quot;{team.name}&quot;)" class="px-3 py-1 text-sm font-medium text-orange-600 dark:text-orange-400 hover:text-orange-800 dark:hover:text-orange-300 border border-orange-300 dark:border-orange-600 hover:border-orange-500 dark:hover:border-orange-400 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500">Leave Team</button>' if not team.is_personal and not current_user.is_admin else ""}
+                            {f'<button onclick="leaveTeam(&quot;{team.id}&quot;, &quot;{html.escape(team.name)}&quot;)" class="px-3 py-1 text-sm font-medium text-orange-600 dark:text-orange-400 hover:text-orange-800 dark:hover:text-orange-300 border border-orange-300 dark:border-orange-600 hover:border-orange-500 dark:hover:border-orange-400 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500">Leave Team</button>' if not team.is_personal and not current_user.is_admin else ""}
                             {f'<button class="px-3 py-1 text-sm font-medium text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 border border-red-300 dark:border-red-600 hover:border-red-500 dark:hover:border-red-400 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500" hx-delete="{root_path}/admin/teams/{team.id}" hx-confirm="Are you sure you want to delete this team?" hx-target="#team-card-{team.id}" hx-swap="outerHTML">Delete</button>' if not team.is_personal else ""}
                         </div>
                     </div>
@@ -3101,11 +3101,11 @@ async def admin_create_team(
         <div id="team-card-{team.id}" class="border border-gray-200 dark:border-gray-600 rounded-lg p-4 mb-4">
             <div class="flex justify-between items-start">
                 <div>
-                    <h4 class="text-lg font-medium text-gray-900 dark:text-white">{team.name}</h4>
+                    <h4 class="text-lg font-medium text-gray-900 dark:text-white">{html.escape(team.name)}</h4>
                     <p class="text-sm text-gray-600 dark:text-gray-400">Slug: {team.slug}</p>
                     <p class="text-sm text-gray-600 dark:text-gray-400">Visibility: {team.visibility}</p>
                     <p class="text-sm text-gray-600 dark:text-gray-400">Members: {member_count}</p>
-                    {f'<p class="text-sm text-gray-600 dark:text-gray-400">{team.description}</p>' if team.description else ""}
+                    {f'<p class="text-sm text-gray-600 dark:text-gray-400">{html.escape(team.description)}</p>' if team.description else ""}
                 </div>
                 <div class="flex space-x-2">
                     <button
@@ -3267,7 +3267,7 @@ async def admin_view_team_members(
                         </div>
                         <div class="min-w-0 flex-1">
                             <div class="flex items-center space-x-2">
-                                <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{member_user.full_name or member_user.email}</p>
+                                <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{html.escape(member_user.full_name or member_user.email)}</p>
                                 {" ".join(indicators)}
                             </div>
                             <p class="text-sm text-gray-500 dark:text-gray-400 truncate">{member_user.email}</p>
@@ -3293,7 +3293,7 @@ async def admin_view_team_members(
         management_html = f"""
         <div class="mb-4">
             <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-medium text-gray-900 dark:text-white">Manage Members: {team.name}</h3>
+                <h3 class="text-lg font-medium text-gray-900 dark:text-white">Manage Members: {html.escape(team.name)}</h3>
                 <button onclick="document.getElementById('team-edit-modal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -3340,7 +3340,7 @@ async def admin_view_team_members(
                 available_users = [team_user for team_user in all_users if team_user.email not in member_emails]
 
                 for team_user in available_users:
-                    management_html += f'<option value="{team_user.email}">{team_user.full_name} ({team_user.email})</option>'
+                    management_html += f'<option value="{html.escape(team_user.email)}">{html.escape(team_user.full_name or "")} ({html.escape(team_user.email)})</option>'
             except Exception as e:
                 LOGGER.error(f"Error loading available users for team {team.id}: {e}")
 
@@ -4353,13 +4353,13 @@ async def admin_list_users(
                 <div class="flex justify-between items-start">
                     <div class="flex-1">
                         <div class="flex items-center gap-2 mb-2">
-                            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{user_obj.full_name or "N/A"}</h3>
+                            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{html.escape(user_obj.full_name or "N/A")}</h3>
                             {admin_badge}
                             <span class="px-2 py-1 text-xs font-semibold {status_class} bg-gray-100 dark:bg-gray-700 rounded-full">{status_text}</span>
                             {'<span class="px-2 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full dark:bg-blue-900 dark:text-blue-200">You</span>' if is_current_user else ""}
                             {'<span class="px-2 py-1 text-xs font-semibold bg-yellow-100 text-yellow-800 rounded-full dark:bg-yellow-900 dark:text-yellow-200">Last Admin</span>' if is_last_admin else ""}
                         </div>
-                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">📧 {user_obj.email}</p>
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">📧 {html.escape(user_obj.email)}</p>
                         <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">🔐 Provider: {user_obj.auth_provider}</p>
                         <p class="text-sm text-gray-600 dark:text-gray-400">📅 Created: {user_obj.created_at.strftime("%Y-%m-%d %H:%M")}</p>
                     </div>
@@ -4430,11 +4430,11 @@ async def admin_create_user(
             <div class="flex justify-between items-start">
                 <div class="flex-1">
                     <div class="flex items-center gap-2 mb-2">
-                        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{new_user.full_name or "N/A"}</h3>
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{html.escape(new_user.full_name or "N/A")}</h3>
                         {admin_badge}
                         <span class="px-2 py-1 text-xs font-semibold {status_class} bg-gray-100 dark:bg-gray-700 rounded-full">{status_text}</span>
                     </div>
-                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">📧 {new_user.email}</p>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">📧 {html.escape(new_user.email)}</p>
                     <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">🔐 Provider: {new_user.auth_provider}</p>
                     <p class="text-sm text-gray-600 dark:text-gray-400">📅 Created: {new_user.created_at.strftime("%Y-%m-%d %H:%M")}</p>
                 </div>

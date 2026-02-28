@@ -331,6 +331,12 @@ class Settings(BaseSettings):
     # UI Tool Test Configuration
     mcpgateway_ui_tool_test_timeout: int = Field(default=60000, description="Tool test timeout in milliseconds for the admin UI")
 
+    # Security: SSRF Protection
+    ssrf_protection_enabled: bool = Field(default=True, description="Enable SSRF protection for outbound URL requests (disable for internal-only deployments)")
+
+    # Security: Trusted Proxies for X-Forwarded-For / X-Real-IP
+    trusted_proxies: List[str] = Field(default_factory=list, description="List of trusted proxy IP addresses/CIDRs for X-Forwarded-For (empty = don't trust forwarded headers)")
+
     # A2A (Agent-to-Agent) Feature Flags
     mcpgateway_a2a_enabled: bool = True
     mcpgateway_a2a_max_agents: int = 100

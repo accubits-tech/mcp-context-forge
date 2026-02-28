@@ -232,6 +232,8 @@ async def get_current_user(
                         detail="Token has been revoked",
                         headers={"WWW-Authenticate": "Bearer"},
                     )
+            except HTTPException:
+                raise
             except Exception as revoke_check_error:
                 # Log the error but don't fail authentication for admin tokens
                 logger.warning(f"Token revocation check failed for JTI {jti}: {revoke_check_error}")

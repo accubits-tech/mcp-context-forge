@@ -3004,24 +3004,13 @@ async def process_openapi_url(
 
     def _validate_url_not_internal(target_url: str) -> None:
         """Validate that a URL does not point to internal/private network addresses (SSRF prevention)."""
-        parsed = urlparse(target_url)
-        if parsed.scheme not in ("http", "https"):
-            raise HTTPException(status_code=400, detail=f"URL scheme '{parsed.scheme}' is not allowed. Only http and https are supported.")
+        # First-Party
+        from mcpgateway.utils.url_validation import validate_url_not_internal  # pylint: disable=import-outside-toplevel
 
-        hostname = parsed.hostname
-        if not hostname:
-            raise HTTPException(status_code=400, detail="Invalid URL: no hostname found")
-
-        # Resolve hostname to IP addresses
         try:
-            addr_infos = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
-        except socket.gaierror:
-            raise HTTPException(status_code=400, detail=f"Could not resolve hostname: {hostname}")
-
-        for addr_info in addr_infos:
-            ip = ipaddress.ip_address(addr_info[4][0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                raise HTTPException(status_code=400, detail=f"URL resolves to a private/internal address ({ip}). Only public URLs are allowed.")
+            validate_url_not_internal(target_url)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     try:
         logger.info(f"User {user} processing OpenAPI spec from URL: {url}")
@@ -3035,8 +3024,10 @@ async def process_openapi_url(
         # Fetch OpenAPI specification from URL with size limit
         max_content_size = 20 * 1024 * 1024  # 20MB
 
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, max_redirects=5) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
             response = await client.get(url)
+            if response.is_redirect or response.has_redirect_location:
+                raise HTTPException(status_code=400, detail=f"URL returned a redirect to {response.headers.get('location', 'unknown')}. Please provide the final URL directly.")
             response.raise_for_status()
 
             # Check content length before reading body

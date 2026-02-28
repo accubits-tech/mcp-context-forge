@@ -276,8 +276,9 @@ class TestA2AAgentService:
         with pytest.raises(A2AAgentNotFoundError):
             await service.delete_agent(mock_db, "non-existent-id")
 
+    @patch("mcpgateway.utils.url_validation.validate_url_not_internal", return_value=None)
     @patch("httpx.AsyncClient")
-    async def test_invoke_agent_success(self, mock_client_class, service, mock_db, sample_db_agent):
+    async def test_invoke_agent_success(self, mock_client_class, mock_ssrf_check, service, mock_db, sample_db_agent):
         """Test successful agent invocation."""
         # Mock HTTP client
         mock_client = AsyncMock()
@@ -324,8 +325,9 @@ class TestA2AAgentService:
         with pytest.raises(A2AAgentError, match="disabled"):
             await service.invoke_agent(mock_db, sample_db_agent.name, {"test": "data"})
 
+    @patch("mcpgateway.utils.url_validation.validate_url_not_internal", return_value=None)
     @patch("httpx.AsyncClient")
-    async def test_invoke_agent_http_error(self, mock_client_class, service, mock_db, sample_db_agent):
+    async def test_invoke_agent_http_error(self, mock_client_class, mock_ssrf_check, service, mock_db, sample_db_agent):
         """Test agent invocation with HTTP error."""
         # Mock HTTP client with error response
         mock_client = AsyncMock()

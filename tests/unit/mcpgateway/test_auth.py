@@ -179,7 +179,7 @@ class TestGetCurrentUser:
         jwt_payload = {"sub": "test@example.com", "jti": "token_id_123", "exp": (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()}  # Token with JTI for revocation check
 
         # When a token is revoked, the is_token_revoked check raises an HTTPException
-        # This is caught by the exception handler and logged as a warning
+        # which now correctly propagates and rejects the request
         with patch("mcpgateway.auth.verify_jwt_token", AsyncMock(return_value=jwt_payload)):
             with patch("mcpgateway.services.token_catalog_service.TokenCatalogService") as mock_token_service_class:
                 mock_token_service = MagicMock()
@@ -189,68 +189,33 @@ class TestGetCurrentUser:
                 )
                 mock_token_service_class.return_value = mock_token_service
 
-                # Mock user to return (the revocation check is logged but doesn't fail auth)
-                mock_user = EmailUser(
-                    email="test@example.com",
-                    password_hash="hash",
-                    full_name="Test User",
-                    is_admin=False,
-                    is_active=True,
-                    is_email_verified=True,
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
-                )
-
-                with patch("mcpgateway.services.email_auth_service.EmailAuthService") as mock_auth_service_class:
-                    mock_auth_service = MagicMock()
-                    mock_auth_service.get_user_by_email = AsyncMock(return_value=mock_user)
-                    mock_auth_service_class.return_value = mock_auth_service
-
-                    # The function should succeed but log a warning
-                    user = await get_current_user(credentials=credentials, db=mock_db)
-                    assert user == mock_user
+                # The function should raise 401 for revoked tokens
+                with pytest.raises(HTTPException) as exc_info:
+                    await get_current_user(credentials=credentials, db=mock_db)
+                assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+                assert "revoked" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_jwt_actually_revoked_logs_warning(self, caplog):
-        """Test that when is_token_revoked returns True, warning is logged but auth continues."""
+    async def test_jwt_actually_revoked_raises_401(self):
+        """Test that when is_token_revoked returns True, authentication is rejected with 401."""
         mock_db = MagicMock(spec=Session)
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="revoked_jwt")
 
         jwt_payload = {"sub": "test@example.com", "jti": "token_id_456", "exp": (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()}  # Token with JTI for revocation check
 
-        mock_user = EmailUser(
-            email="test@example.com",
-            password_hash="hash",
-            full_name="Test User",
-            is_admin=False,
-            is_active=True,
-            is_email_verified=True,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-        )
-
-        # Standard
-
-        caplog.set_level(logging.WARNING)
-
         with patch("mcpgateway.auth.verify_jwt_token", AsyncMock(return_value=jwt_payload)):
             with patch("mcpgateway.services.token_catalog_service.TokenCatalogService") as mock_token_service_class:
                 mock_token_service = MagicMock()
-                # When is_token_revoked returns True, it internally raises HTTPException which gets caught
+                # When is_token_revoked returns True, the code raises HTTPException
+                # which now correctly propagates
                 mock_token_service.is_token_revoked = AsyncMock(return_value=True)
                 mock_token_service_class.return_value = mock_token_service
 
-                with patch("mcpgateway.services.email_auth_service.EmailAuthService") as mock_auth_service_class:
-                    mock_auth_service = MagicMock()
-                    mock_auth_service.get_user_by_email = AsyncMock(return_value=mock_user)
-                    mock_auth_service_class.return_value = mock_auth_service
-
-                    # Authentication should succeed despite revoked token (logged as warning)
-                    user = await get_current_user(credentials=credentials, db=mock_db)
-                    assert user == mock_user
-
-                    # Check warning was logged
-                    assert "Token revocation check failed for JTI token_id_456" in caplog.text
+                # Authentication should be rejected for revoked tokens
+                with pytest.raises(HTTPException) as exc_info:
+                    await get_current_user(credentials=credentials, db=mock_db)
+                assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+                assert "revoked" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
     async def test_token_revocation_check_failure_logs_warning(self, caplog):

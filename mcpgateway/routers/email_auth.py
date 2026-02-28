@@ -70,7 +70,7 @@ def get_db():
 
 
 def get_client_ip(request: Request) -> str:
-    """Extract client IP address from request.
+    """Extract client IP address from request with trusted proxy support.
 
     Args:
         request: FastAPI request object
@@ -78,18 +78,10 @@ def get_client_ip(request: Request) -> str:
     Returns:
         str: Client IP address
     """
-    # Check for X-Forwarded-For header (proxy/load balancer)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
+    # First-Party
+    from mcpgateway.utils.client_ip import get_client_ip as _get_client_ip  # pylint: disable=import-outside-toplevel
 
-    # Check for X-Real-IP header
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-
-    # Fall back to direct client IP
-    return request.client.host if request.client else "unknown"
+    return _get_client_ip(request)
 
 
 def get_user_agent(request: Request) -> str:

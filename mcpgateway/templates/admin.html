@@ -1859,8 +1859,8 @@
                   </td>
                   <td class="px-2 py-4 whitespace-nowrap">
                     {% if server.team %}
-                    <span class="text-sm text-gray-900 dark:text-gray-100">
-                      {{ server.team.replace(' ', '<br />')|safe }}
+                    <span class="text-sm text-gray-900 dark:text-gray-100" style="word-break: break-all;">
+                      {{ server.team }}
                     </span>
                     {% else %}
                     <span class="text-gray-500 dark:text-gray-300 text-xs"
@@ -4205,8 +4205,8 @@ Hello &#123;&#123; name &#125;&#125;, welcome to &#123;&#123; company &#125;&#12
                   </td>
                   <td class="px-2 py-4 whitespace-nowrap">
                     {% if gateway.team %}
-                    <span class="text-sm text-gray-900 dark:text-gray-100">
-                      {{ gateway.team.replace(' ', '<br />')|safe }}
+                    <span class="text-sm text-gray-900 dark:text-gray-100" style="word-break: break-all;">
+                      {{ gateway.team }}
                     </span>
                     {% else %}
                     <span class="text-gray-500 dark:text-gray-300 text-xs"

@@ -262,6 +262,13 @@ class TestReverseProxyManager:
 class TestWebSocketEndpoint:
     """Test WebSocket endpoint functionality."""
 
+    @pytest.fixture(autouse=True)
+    def disable_auth(self):
+        """Disable auth_required for WebSocket tests."""
+        with patch("mcpgateway.routers.reverse_proxy.settings") as mock_settings:
+            mock_settings.auth_required = False
+            yield mock_settings
+
     @pytest.mark.asyncio
     async def test_websocket_accept(self, mock_websocket):
         """Test WebSocket connection acceptance."""

@@ -1394,6 +1394,16 @@ class ToolService:
                             if payload.headers is not None:
                                 headers = payload.headers.model_dump()
 
+                    # SSRF protection: validate tool URL does not point to internal addresses
+                    if getattr(settings, "ssrf_protection_enabled", True):
+                        # First-Party
+                        from mcpgateway.utils.url_validation import validate_url_not_internal  # pylint: disable=import-outside-toplevel
+
+                        try:
+                            validate_url_not_internal(tool.url)
+                        except ValueError as e:
+                            raise ToolInvocationError(f"SSRF protection: {e}")
+
                     # Build the payload based on integration type
                     payload = arguments.copy()
 
