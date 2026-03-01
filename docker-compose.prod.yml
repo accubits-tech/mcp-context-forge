@@ -50,32 +50,52 @@ services:
     # No port exposure — accessed only via nginx on the internal network
     networks: [mcpnet]
     environment:
+      # ── Core ──
       - HOST=0.0.0.0
       - PORT=4444
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-mysecretpassword}@postgres:5432/mcp
+      - ENVIRONMENT=production
+      - APP_DOMAIN=${APP_DOMAIN:-localhost}
+      # ── Database & Cache ──
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-mysecretpassword}@postgres:5432/${POSTGRES_DB:-mcp}
       - CACHE_TYPE=redis
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      # ── JWT / Auth ──
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-changeme}
-      - JWT_AUDIENCE=mcpgateway-api
-      - JWT_ISSUER=mcpgateway
+      - JWT_AUDIENCE=${JWT_AUDIENCE:-mcpgateway-api}
+      - JWT_ISSUER=${JWT_ISSUER:-mcpgateway}
+      - REQUIRE_TOKEN_EXPIRATION=${REQUIRE_TOKEN_EXPIRATION:-true}
+      - AUTH_REQUIRED=true
+      - AUTH_ENCRYPTION_SECRET=${AUTH_ENCRYPTION_SECRET:-changeme}
+      # ── Admin Account ──
       - EMAIL_AUTH_ENABLED=true
       - PLATFORM_ADMIN_EMAIL=${PLATFORM_ADMIN_EMAIL:-admin@example.com}
       - PLATFORM_ADMIN_PASSWORD=${PLATFORM_ADMIN_PASSWORD:-changeme}
-      - REQUIRE_TOKEN_EXPIRATION=${REQUIRE_TOKEN_EXPIRATION:-true}
-      - MCPGATEWAY_UI_ENABLED=${MCPGATEWAY_UI_ENABLED:-true}
-      - MCPGATEWAY_ADMIN_API_ENABLED=${MCPGATEWAY_ADMIN_API_ENABLED:-true}
-      - ENVIRONMENT=production
-      - SECURITY_HEADERS_ENABLED=true
-      - CORS_ALLOW_CREDENTIALS=true
-      - SECURE_COOKIES=${SECURE_COOKIES:-true}
-      - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
-      - AUTH_REQUIRED=true
       - MCP_CLIENT_AUTH_ENABLED=true
       - TRUST_PROXY_AUTH=false
+      # ── CORS & Security ──
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - CORS_ALLOW_CREDENTIALS=true
+      - SECURITY_HEADERS_ENABLED=true
+      - SECURE_COOKIES=${SECURE_COOKIES:-true}
+      # ── Features ──
+      - MCPGATEWAY_UI_ENABLED=${MCPGATEWAY_UI_ENABLED:-true}
+      - MCPGATEWAY_ADMIN_API_ENABLED=${MCPGATEWAY_ADMIN_API_ENABLED:-true}
+      - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
+      - MCPGATEWAY_CATALOG_ENABLED=${MCPGATEWAY_CATALOG_ENABLED:-true}
+      - MCPGATEWAY_A2A_ENABLED=${MCPGATEWAY_A2A_ENABLED:-true}
+      # ── SSO (optional — uncomment provider vars in .env) ──
+      - SSO_ENABLED=${SSO_ENABLED:-false}
+      - SSO_KEYCLOAK_ENABLED=${SSO_KEYCLOAK_ENABLED:-false}
+      - SSO_KEYCLOAK_BASE_URL=${SSO_KEYCLOAK_BASE_URL:-}
+      - SSO_KEYCLOAK_REALM=${SSO_KEYCLOAK_REALM:-}
+      - SSO_KEYCLOAK_CLIENT_ID=${SSO_KEYCLOAK_CLIENT_ID:-}
+      - SSO_KEYCLOAK_CLIENT_SECRET=${SSO_KEYCLOAK_CLIENT_SECRET:-}
+      # ── Logging ──
       - LOG_LEVEL=${LOG_LEVEL:-ERROR}
       - DISABLE_ACCESS_LOG=true
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      # ── Runtime paths ──
       - HOME=/app
       - XDG_DATA_HOME=/app/.local/share
       - XDG_CACHE_HOME=/app/.cache

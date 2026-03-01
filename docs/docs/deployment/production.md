@@ -119,14 +119,16 @@ cp .env.example.prod .env
 | `POSTGRES_PASSWORD` | PostgreSQL password | `s3cure-db-p@ss!` |
 | `REDIS_PASSWORD` | Redis authentication password | `r3d1s-s3cret!` |
 | `JWT_SECRET_KEY` | JWT signing secret (min 32 chars) | `a-long-random-string-here-32chars` |
+| `AUTH_ENCRYPTION_SECRET` | AES key for secure auth storage | `another-random-secret-here` |
 | `PLATFORM_ADMIN_PASSWORD` | Initial admin account password | `Adm1n-p@ssw0rd!` |
 
 **Recommended changes:**
 
 | Variable | Default | Recommendation |
 |---|---|---|
+| `APP_DOMAIN` | `localhost` | Your production domain (e.g. `myapp.com`) |
 | `PLATFORM_ADMIN_EMAIL` | `admin@example.com` | Your actual admin email |
-| `ALLOWED_ORIGINS` | `https://yourdomain.com` | Your frontend domain(s), comma-separated |
+| `ALLOWED_ORIGINS` | `*` | Your frontend domain(s) (e.g. `https://myapp.com`) |
 
 **Optional tuning:**
 
@@ -135,9 +137,16 @@ cp .env.example.prod .env
 | `NGINX_PORT` | `8080` | Public-facing proxy port |
 | `FRONTEND_PORT` | `3000` | Frontend UI port |
 | `LOG_LEVEL` | `ERROR` | Set to `INFO` or `DEBUG` for troubleshooting |
+| `LOG_FORMAT` | `json` | Use `text` for human-readable logs |
 | `SECURE_COOKIES` | `true` | Set `false` only if not using HTTPS |
 | `MCPGATEWAY_UI_ENABLED` | `true` | Built-in admin UI |
 | `PLUGINS_ENABLED` | `true` | Plugin framework |
+| `MCPGATEWAY_CATALOG_ENABLED` | `true` | MCP server catalog |
+| `MCPGATEWAY_A2A_ENABLED` | `true` | Agent-to-Agent features |
+
+**SSO (optional):**
+
+Uncomment the SSO variables in `.env` to enable Keycloak or other providers. See the full list in `.env.example.prod`.
 
 Full example `.env`:
 
@@ -145,6 +154,9 @@ Full example `.env`:
 # Ports
 NGINX_PORT=8080
 FRONTEND_PORT=3000
+
+# Domain
+APP_DOMAIN=yourcompany.com
 
 # PostgreSQL
 POSTGRES_USER=postgres
@@ -157,13 +169,14 @@ REDIS_PASSWORD=r3d1s-s3cret!
 # JWT
 JWT_ALGORITHM=HS256
 JWT_SECRET_KEY=a-long-random-string-here-32chars
+AUTH_ENCRYPTION_SECRET=another-random-secret-here
 
 # Admin
 PLATFORM_ADMIN_EMAIL=admin@yourcompany.com
 PLATFORM_ADMIN_PASSWORD=Adm1n-p@ssw0rd!
 
 # CORS
-ALLOWED_ORIGINS=https://yourdomain.com
+ALLOWED_ORIGINS=https://yourcompany.com
 
 # Features
 REQUIRE_TOKEN_EXPIRATION=true
@@ -172,6 +185,7 @@ MCPGATEWAY_ADMIN_API_ENABLED=true
 PLUGINS_ENABLED=true
 SECURE_COOKIES=true
 LOG_LEVEL=ERROR
+LOG_FORMAT=json
 ```
 
 ---
