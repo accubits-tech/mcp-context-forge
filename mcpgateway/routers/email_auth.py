@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from mcpgateway.auth import get_current_user
 from mcpgateway.config import settings
 from mcpgateway.db import EmailUser, SessionLocal
-from mcpgateway.middleware.rbac import require_permission
+from mcpgateway.middleware.rbac import get_current_user_with_permissions, require_permission
 from mcpgateway.schemas import (
     AuthenticationResponse,
     AuthEventResponse,
@@ -389,14 +389,13 @@ async def get_auth_events(limit: int = 50, offset: int = 0, current_user: EmailU
 # Admin-only endpoints
 @email_auth_router.get("/admin/users", response_model=UserListResponse)
 @require_permission("admin.user_management")
-async def list_users(limit: int = 100, offset: int = 0, current_user: EmailUser = Depends(get_current_user), db: Session = Depends(get_db)):
+async def list_users(limit: int = 100, offset: int = 0, user=Depends(get_current_user_with_permissions)):
     """List all users (admin only).
 
     Args:
         limit: Maximum number of users to return
         offset: Number of users to skip
-        current_user: Currently authenticated user
-        db: Database session
+        user: User context dict from RBAC middleware
 
     Returns:
         UserListResponse: List of users with pagination
@@ -408,7 +407,7 @@ async def list_users(limit: int = 100, offset: int = 0, current_user: EmailUser 
         >>> # GET /auth/email/admin/users?limit=10&offset=0
         >>> # Headers: Authorization: Bearer <admin_token>
     """
-
+    db = user["db"]
     auth_service = EmailAuthService(db)
 
     try:
@@ -424,15 +423,14 @@ async def list_users(limit: int = 100, offset: int = 0, current_user: EmailUser 
 
 @email_auth_router.get("/admin/events", response_model=list[AuthEventResponse])
 @require_permission("admin.user_management")
-async def list_all_auth_events(limit: int = 100, offset: int = 0, user_email: Optional[str] = None, current_user: EmailUser = Depends(get_current_user), db: Session = Depends(get_db)):
+async def list_all_auth_events(limit: int = 100, offset: int = 0, user_email: Optional[str] = None, user=Depends(get_current_user_with_permissions)):
     """List authentication events for all users (admin only).
 
     Args:
         limit: Maximum number of events to return
         offset: Number of events to skip
         user_email: Filter events by specific user email
-        current_user: Currently authenticated user
-        db: Database session
+        user: User context dict from RBAC middleware
 
     Returns:
         List[AuthEventResponse]: Authentication events
@@ -444,7 +442,7 @@ async def list_all_auth_events(limit: int = 100, offset: int = 0, user_email: Op
         >>> # GET /auth/email/admin/events?limit=50&user_email=user@example.com
         >>> # Headers: Authorization: Bearer <admin_token>
     """
-
+    db = user["db"]
     auth_service = EmailAuthService(db)
 
     try:
@@ -459,13 +457,12 @@ async def list_all_auth_events(limit: int = 100, offset: int = 0, user_email: Op
 
 @email_auth_router.post("/admin/users", response_model=EmailUserResponse, status_code=status.HTTP_201_CREATED)
 @require_permission("admin.user_management")
-async def create_user(user_request: EmailRegistrationRequest, current_user: EmailUser = Depends(get_current_user), db: Session = Depends(get_db)):
+async def create_user(user_request: EmailRegistrationRequest, user=Depends(get_current_user_with_permissions)):
     """Create a new user account (admin only).
 
     Args:
         user_request: User creation information
-        current_user: Currently authenticated admin user
-        db: Database session
+        user: User context dict from RBAC middleware
 
     Returns:
         EmailUserResponse: Created user information
@@ -482,11 +479,12 @@ async def create_user(user_request: EmailRegistrationRequest, current_user: Emai
               "is_admin": false
             }
     """
+    db = user["db"]
     auth_service = EmailAuthService(db)
 
     try:
         # Create new user with admin privileges
-        user = await auth_service.create_user(
+        new_user = await auth_service.create_user(
             email=user_request.email,
             password=user_request.password,
             full_name=user_request.full_name,
@@ -494,9 +492,9 @@ async def create_user(user_request: EmailRegistrationRequest, current_user: Emai
             auth_provider="local",
         )
 
-        logger.info(f"Admin {current_user.email} created user: {user.email}")
+        logger.info(f"Admin {user['email']} created user: {new_user.email}")
 
-        return EmailUserResponse.from_email_user(user)
+        return EmailUserResponse.from_email_user(new_user)
 
     except EmailValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -511,13 +509,12 @@ async def create_user(user_request: EmailRegistrationRequest, current_user: Emai
 
 @email_auth_router.get("/admin/users/{user_email}", response_model=EmailUserResponse)
 @require_permission("admin.user_management")
-async def get_user(user_email: str, current_user: EmailUser = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_user(user_email: str, user=Depends(get_current_user_with_permissions)):
     """Get user by email (admin only).
 
     Args:
         user_email: Email of user to retrieve
-        current_user: Currently authenticated admin user
-        db: Database session
+        user: User context dict from RBAC middleware
 
     Returns:
         EmailUserResponse: User information
@@ -525,14 +522,15 @@ async def get_user(user_email: str, current_user: EmailUser = Depends(get_curren
     Raises:
         HTTPException: If user not found
     """
+    db = user["db"]
     auth_service = EmailAuthService(db)
 
     try:
-        user = await auth_service.get_user_by_email(user_email)
-        if not user:
+        found_user = await auth_service.get_user_by_email(user_email)
+        if not found_user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-        return EmailUserResponse.from_email_user(user)
+        return EmailUserResponse.from_email_user(found_user)
 
     except Exception as e:
         logger.error(f"Error retrieving user {user_email}: {e}")
@@ -541,14 +539,13 @@ async def get_user(user_email: str, current_user: EmailUser = Depends(get_curren
 
 @email_auth_router.put("/admin/users/{user_email}", response_model=EmailUserResponse)
 @require_permission("admin.user_management")
-async def update_user(user_email: str, user_request: EmailRegistrationRequest, current_user: EmailUser = Depends(get_current_user), db: Session = Depends(get_db)):
+async def update_user(user_email: str, user_request: EmailRegistrationRequest, user=Depends(get_current_user_with_permissions)):
     """Update user information (admin only).
 
     Args:
         user_email: Email of user to update
         user_request: Updated user information
-        current_user: Currently authenticated admin user
-        db: Database session
+        user: User context dict from RBAC middleware
 
     Returns:
         EmailUserResponse: Updated user information
@@ -556,17 +553,18 @@ async def update_user(user_email: str, user_request: EmailRegistrationRequest, c
     Raises:
         HTTPException: If user not found or update fails
     """
+    db = user["db"]
     auth_service = EmailAuthService(db)
 
     try:
         # Get existing user
-        user = await auth_service.get_user_by_email(user_email)
-        if not user:
+        target_user = await auth_service.get_user_by_email(user_email)
+        if not target_user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
         # Update user fields
-        user.full_name = user_request.full_name
-        user.is_admin = getattr(user_request, "is_admin", user.is_admin)
+        target_user.full_name = user_request.full_name
+        target_user.is_admin = getattr(user_request, "is_admin", target_user.is_admin)
 
         # Update password if provided
         if user_request.password:
@@ -580,11 +578,11 @@ async def update_user(user_email: str, user_request: EmailRegistrationRequest, c
             )
 
         db.commit()
-        db.refresh(user)
+        db.refresh(target_user)
 
-        logger.info(f"Admin {current_user.email} updated user: {user.email}")
+        logger.info(f"Admin {user['email']} updated user: {target_user.email}")
 
-        return EmailUserResponse.from_email_user(user)
+        return EmailUserResponse.from_email_user(target_user)
 
     except Exception as e:
         logger.error(f"Error updating user {user_email}: {e}")
@@ -593,13 +591,12 @@ async def update_user(user_email: str, user_request: EmailRegistrationRequest, c
 
 @email_auth_router.delete("/admin/users/{user_email}", response_model=SuccessResponse)
 @require_permission("admin.user_management")
-async def delete_user(user_email: str, current_user: EmailUser = Depends(get_current_user), db: Session = Depends(get_db)):
+async def delete_user(user_email: str, user=Depends(get_current_user_with_permissions)):
     """Delete/deactivate user (admin only).
 
     Args:
         user_email: Email of user to delete
-        current_user: Currently authenticated admin user
-        db: Database session
+        user: User context dict from RBAC middleware
 
     Returns:
         SuccessResponse: Success confirmation
@@ -607,11 +604,12 @@ async def delete_user(user_email: str, current_user: EmailUser = Depends(get_cur
     Raises:
         HTTPException: If user not found or deletion fails
     """
+    db = user["db"]
     auth_service = EmailAuthService(db)
 
     try:
         # Prevent admin from deleting themselves
-        if user_email == current_user.email:
+        if user_email == user["email"]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete your own account")
 
         # Prevent deleting the last active admin user
@@ -621,7 +619,7 @@ async def delete_user(user_email: str, current_user: EmailUser = Depends(get_cur
         # Hard delete using auth service
         await auth_service.delete_user(user_email)
 
-        logger.info(f"Admin {current_user.email} deleted user: {user_email}")
+        logger.info(f"Admin {user['email']} deleted user: {user_email}")
 
         return SuccessResponse(success=True, message=f"User {user_email} has been deleted")
 
