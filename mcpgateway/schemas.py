@@ -3178,9 +3178,10 @@ class GatewayRead(BaseModelWithConfigDict):
         Return a masked version of the model instance with sensitive authentication fields hidden.
 
         This method creates a dictionary representation of the model data and replaces sensitive fields
-        such as `auth_value`, `auth_password`, `auth_token`, and `auth_header_value` with a masked
-        placeholder value defined in `settings.masked_auth_value`. Masking is only applied if the fields
-        are present and not already masked.
+        such as `auth_value`, `auth_password`, `auth_token`, `auth_header_value`, and
+        `oauth_config.client_secret`/`oauth_config.password` with a masked placeholder value defined
+        in `settings.masked_auth_value`. Masking is only applied if the fields are present and not
+        already masked.
 
         Args:
             None
@@ -3212,6 +3213,14 @@ class GatewayRead(BaseModelWithConfigDict):
                 }
                 for header in masked_data["auth_headers"]
             ]
+
+        # Mask sensitive fields in oauth_config
+        oauth_config = masked_data.get("oauth_config")
+        if oauth_config and isinstance(oauth_config, dict):
+            if oauth_config.get("client_secret"):
+                oauth_config["client_secret"] = settings.masked_auth_value
+            if oauth_config.get("password"):
+                oauth_config["password"] = settings.masked_auth_value
 
         masked_data["auth_password_unmasked"] = self.auth_password_unmasked
         masked_data["auth_token_unmasked"] = self.auth_token_unmasked
