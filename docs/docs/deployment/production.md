@@ -66,14 +66,20 @@ The PAT needs the `write:packages` scope. Generate one at **GitHub > Settings > 
 # Backend
 cd mcp-foundry-be
 docker build -f Containerfile.lite -t ghcr.io/accubits-tech/mcp-foundry:latest .
+# x86_64 (linux/amd64)
+docker buildx build --platform linux/amd64 -f Containerfile.lite -t ghcr.io/accubits-tech/mcp-foundry:latest .
 
 # Frontend
 cd ../mcp-foundry-fe
 docker build -t ghcr.io/accubits-tech/mcp-foundry-fe:latest .
+# x86_64 (linux/amd64)
+docker buildx build --platform linux/amd64 -t ghcr.io/accubits-tech/mcp-foundry-fe:latest .
 
 # Nginx
 cd ../mcp-foundry-be
 docker build -t ghcr.io/accubits-tech/mcp-foundry-nginx:latest ./nginx
+# x86_64 (linux/amd64)
+docker buildx build --platform linux/amd64 -t ghcr.io/accubits-tech/mcp-foundry-nginx:latest ./nginx
 ```
 
 To set a custom API base URL for the frontend at build time:

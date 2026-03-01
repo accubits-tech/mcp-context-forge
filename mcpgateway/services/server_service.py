@@ -763,6 +763,8 @@ class ServerService:
                 server.description = server_update.description
             if server_update.icon is not None:
                 server.icon = server_update.icon
+            if server_update.is_active is not None:
+                server.is_active = server_update.is_active
 
             if server_update.visibility is not None:
                 new_visibility = server_update.visibility

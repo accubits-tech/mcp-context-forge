@@ -3645,6 +3645,7 @@ class ServerUpdate(BaseModelWithConfigDict):
     name: Optional[str] = Field(None, description="The server's name")
     description: Optional[str] = Field(None, description="Server description")
     icon: Optional[str] = Field(None, description="URL for the server's icon")
+    is_active: Optional[bool] = Field(None, description="Whether the server is active")
     tags: Optional[List[str]] = Field(None, description="Tags for categorizing the server")
 
     # Team scoping fields
