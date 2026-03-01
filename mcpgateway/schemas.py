@@ -3479,6 +3479,38 @@ class ServerCreate(BaseModel):
     description: Optional[str] = Field(None, description="Server description")
     icon: Optional[str] = Field(None, description="URL for the server's icon")
     tags: Optional[List[str]] = Field(default_factory=list, description="Tags for categorizing the server")
+    transport: Optional[str] = Field(default="sse", description="Transport protocol: sse or streamable-http")
+
+    @field_validator("transport")
+    @classmethod
+    def validate_transport(cls, v: Optional[str]) -> str:
+        """Validate transport protocol value.
+
+        Args:
+            v: Transport protocol string
+
+        Returns:
+            Validated transport string
+
+        Examples:
+            >>> from mcpgateway.schemas import ServerCreate
+            >>> ServerCreate.validate_transport('sse')
+            'sse'
+            >>> ServerCreate.validate_transport('streamable-http')
+            'streamable-http'
+            >>> ServerCreate.validate_transport(None)
+            'sse'
+            >>> ServerCreate.validate_transport('invalid')
+            Traceback (most recent call last):
+                ...
+            ValueError: ...
+        """
+        if v is None:
+            return "sse"
+        allowed = ("sse", "streamable-http")
+        if v not in allowed:
+            raise ValueError(f"Transport must be one of {allowed}, got '{v}'")
+        return v
 
     @field_validator("tags")
     @classmethod
@@ -3656,12 +3688,44 @@ class ServerUpdate(BaseModelWithConfigDict):
     icon: Optional[str] = Field(None, description="URL for the server's icon")
     is_active: Optional[bool] = Field(None, description="Whether the server is active")
     tags: Optional[List[str]] = Field(None, description="Tags for categorizing the server")
+    transport: Optional[str] = Field(None, description="Transport protocol: sse or streamable-http")
 
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
     owner_email: Optional[str] = Field(None, description="Email of the server owner")
     visibility: Optional[str] = Field(None, description="Visibility level (private, team, public)")
     creator_type: Optional[str] = Field(None, description="Type of creator (e.g., user, system, automated)")
+
+    @field_validator("transport")
+    @classmethod
+    def validate_transport(cls, v: Optional[str]) -> Optional[str]:
+        """Validate transport protocol value.
+
+        Args:
+            v: Transport protocol string
+
+        Returns:
+            Validated transport string or None
+
+        Examples:
+            >>> from mcpgateway.schemas import ServerUpdate
+            >>> ServerUpdate.validate_transport('sse')
+            'sse'
+            >>> ServerUpdate.validate_transport('streamable-http')
+            'streamable-http'
+            >>> print(ServerUpdate.validate_transport(None))
+            None
+            >>> ServerUpdate.validate_transport('invalid')
+            Traceback (most recent call last):
+                ...
+            ValueError: ...
+        """
+        if v is None:
+            return v
+        allowed = ("sse", "streamable-http")
+        if v not in allowed:
+            raise ValueError(f"Transport must be one of {allowed}, got '{v}'")
+        return v
 
     @field_validator("tags")
     @classmethod
@@ -3812,6 +3876,7 @@ class ServerRead(BaseModelWithConfigDict):
     associated_a2a_agents: List[str] = []
     metrics: ServerMetrics
     tags: List[str] = Field(default_factory=list, description="Tags for categorizing the server")
+    transport: str = Field(default="sse", description="Transport protocol: sse or streamable-http")
 
     # Comprehensive metadata for audit tracking
     created_by: Optional[str] = Field(None, description="Username who created this entity")

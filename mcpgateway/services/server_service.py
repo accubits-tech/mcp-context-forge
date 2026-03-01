@@ -398,6 +398,7 @@ class ServerService:
                 description=server_in.description,
                 icon=server_in.icon,
                 is_active=True,
+                transport=server_in.transport or "sse",
                 tags=server_in.tags or [],
                 # Team scoping fields - use schema values if provided, otherwise fallback to parameters
                 team_id=getattr(server_in, "team_id", None) or team_id,
@@ -765,6 +766,8 @@ class ServerService:
                 server.icon = server_update.icon
             if server_update.is_active is not None:
                 server.is_active = server_update.is_active
+            if server_update.transport is not None:
+                server.transport = server_update.transport
 
             if server_update.visibility is not None:
                 new_visibility = server_update.visibility

@@ -1090,6 +1090,7 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
             associated_resources=",".join(str(x) for x in associated_resources_list),
             associated_prompts=",".join(str(x) for x in associated_prompts_list),
             tags=tags,
+            transport=form.get("transport", "sse"),
             visibility=visibility,
         )
     except KeyError as e:
@@ -1316,6 +1317,7 @@ async def admin_edit_server(
             associated_resources=",".join(str(x) for x in associated_resources_list),
             associated_prompts=",".join(str(x) for x in associated_prompts_list),
             tags=tags,
+            transport=form.get("transport"),
             visibility=visibility,
             team_id=team_id,
             owner_email=user_email,
