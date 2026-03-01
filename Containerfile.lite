@@ -5,7 +5,7 @@
 #
 # This multi-stage Dockerfile produces an ultra-slim, scratch-based runtime
 # image that automatically tracks the latest Python 3.12.x patch release
-# from the RHEL 10 repositories and is fully patched on each rebuild.
+# from the RHEL 9 repositories and is fully patched on each rebuild.
 #
 # Key design points:
 #   - Builder stage has full DNF + devel headers for wheel compilation
@@ -71,7 +71,7 @@ FROM rust-builder-base AS rust-builder
 ###########################
 # Builder stage
 ###########################
-FROM registry.access.redhat.com/ubi10/ubi:10.0-1760519443 AS builder
+FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 ARG PYTHON_VERSION
@@ -187,8 +187,8 @@ RUN python3 -OO -m compileall -q /app/.venv /app/mcpgateway /app/plugins \
 # hadolint ignore=DL3041
 RUN set -euo pipefail \
     && mkdir -p "${ROOTFS_PATH:?}" \
-    && dnf --installroot="${ROOTFS_PATH:?}" --releasever=10 upgrade -y \
-    && dnf --installroot="${ROOTFS_PATH:?}" --releasever=10 install -y \
+    && dnf --installroot="${ROOTFS_PATH:?}" --releasever=9 upgrade -y \
+    && dnf --installroot="${ROOTFS_PATH:?}" --releasever=9 install -y \
          --setopt=install_weak_deps=0 \
          --setopt=tsflags=nodocs \
          python${PYTHON_VERSION} \

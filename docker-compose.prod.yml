@@ -91,6 +91,10 @@ services:
       - SSO_KEYCLOAK_REALM=${SSO_KEYCLOAK_REALM:-}
       - SSO_KEYCLOAK_CLIENT_ID=${SSO_KEYCLOAK_CLIENT_ID:-}
       - SSO_KEYCLOAK_CLIENT_SECRET=${SSO_KEYCLOAK_CLIENT_SECRET:-}
+      # ── LLM (AI-enhanced tool import) ──
+      - LLM_API_BASE_URL=${LLM_API_BASE_URL:-https://api.openai.com/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       # ── LLM Chat / Playground ──
       - LLMCHAT_ENABLED=${LLMCHAT_ENABLED:-true}
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
