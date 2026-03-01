@@ -768,7 +768,7 @@ class Settings(BaseSettings):
     # ===================================
 
     # Enable observability features (traces, spans, metrics)
-    observability_enabled: bool = Field(default=False, description="Enable observability tracing and metrics collection")
+    observability_enabled: bool = Field(default=True, description="Enable observability tracing and metrics collection")
 
     # Automatic HTTP request tracing
     observability_trace_http_requests: bool = Field(default=True, description="Automatically trace HTTP requests")
