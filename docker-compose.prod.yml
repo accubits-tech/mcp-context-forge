@@ -47,8 +47,7 @@ services:
   gateway:
     image: ghcr.io/accubits-tech/mcp-foundry:latest
     restart: unless-stopped
-    ports:
-      - "${GATEWAY_PORT:-4444}:4444"
+    # No port exposure — accessed only via nginx on the internal network
     networks: [mcpnet]
     environment:
       - HOST=0.0.0.0

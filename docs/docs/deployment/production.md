@@ -23,15 +23,16 @@ Deploy MCP Foundry to a production server using pre-built container images. The 
 │                                                      │
 │  ┌────────┐   ┌─────────┐   ┌──────────┐           │
 │  │ Nginx  │──▶│ Gateway │──▶│ Postgres │           │
-│  │ :8080  │   │  :4444  │   │  :5432   │           │
+│  │ :8080  │   │ internal│   │ internal │           │
 │  └────────┘   └────┬────┘   └──────────┘           │
 │                    │                                 │
 │  ┌──────────┐     │        ┌──────────┐            │
 │  │ Frontend │     └───────▶│  Redis   │            │
-│  │  :3000   │              │  :6379   │            │
+│  │  :3000   │              │ internal │            │
 │  └──────────┘              └──────────┘            │
 │                                                      │
 │  All images pulled from ghcr.io/accubits-tech/       │
+│  Only Nginx (:8080) and Frontend (:3000) are exposed │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -132,7 +133,6 @@ cp .env.example.prod .env
 | Variable | Default | Notes |
 |---|---|---|
 | `NGINX_PORT` | `8080` | Public-facing proxy port |
-| `GATEWAY_PORT` | `4444` | Backend API port |
 | `FRONTEND_PORT` | `3000` | Frontend UI port |
 | `LOG_LEVEL` | `ERROR` | Set to `INFO` or `DEBUG` for troubleshooting |
 | `SECURE_COOKIES` | `true` | Set `false` only if not using HTTPS |
@@ -144,7 +144,6 @@ Full example `.env`:
 ```bash
 # Ports
 NGINX_PORT=8080
-GATEWAY_PORT=4444
 FRONTEND_PORT=3000
 
 # PostgreSQL
@@ -211,17 +210,13 @@ redis       redis:latest                                    Up (healthy)
 ### Test endpoints
 
 ```bash
-# Backend health
-curl http://localhost:4444/health
+# Gateway health (via Nginx proxy — gateway is not exposed directly)
+curl http://localhost:8080/health
 # Expected: {"status":"healthy"}
 
 # Frontend
 curl -s http://localhost:3000 | head -5
 # Expected: HTML response
-
-# Nginx proxy
-curl http://localhost:8080/health
-# Expected: {"status":"healthy"}
 ```
 
 ---
