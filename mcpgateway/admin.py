@@ -9059,6 +9059,7 @@ async def admin_import_tools(
     LOGGER.debug("bulk tool import: user=%s", user)
     try:
         # ---------- robust payload parsing ----------
+        import_options: Dict[str, Any] = {}
         ctype = (request.headers.get("content-type") or "").lower()
         if "application/json" in ctype:
             try:
@@ -9072,6 +9073,18 @@ async def admin_import_tools(
             except Exception as ex:
                 LOGGER.exception("Invalid form body")
                 return JSONResponse({"success": False, "message": f"Invalid form data: {ex}"}, status_code=422)
+            # Extract import options from form fields
+            for opt_key in ("preview_only", "enhance_with_ai"):
+                val = form.get(opt_key)
+                if val is not None:
+                    import_options[opt_key] = str(val).lower() in ("true", "1", "yes")
+            if form.get("base_url"):
+                import_options["base_url"] = str(form.get("base_url"))
+            if form.get("tags"):
+                raw_tags = str(form.get("tags"))
+                import_options["extra_tags"] = [t.strip() for t in raw_tags.split(",") if t.strip()]
+            if form.get("gateway_id"):
+                import_options["gateway_id"] = str(form.get("gateway_id"))
             # Check for file upload first
             if "tools_file" in form:
                 file = form["tools_file"]
@@ -9096,6 +9109,12 @@ async def admin_import_tools(
                     LOGGER.exception("Invalid JSON in form field")
                     return JSONResponse({"success": False, "message": f"Invalid JSON: {ex}"}, status_code=422)
 
+        preview_only = import_options.get("preview_only", False)
+        enhance_with_ai = import_options.get("enhance_with_ai", False)
+        import_base_url = import_options.get("base_url")
+        import_gateway_id = import_options.get("gateway_id")
+        extra_tags = import_options.get("extra_tags", [])
+
         # ---------- detect import format ----------
         # Check if payload is a Postman collection
         is_postman_collection = False
@@ -9111,7 +9130,7 @@ async def admin_import_tools(
         if is_postman_collection:
             try:
                 # First-Party
-                from mcpgateway.services.postman_service import PostmanCollectionService
+                from mcpgateway.services.postman_service import PostmanCollectionService  # pylint: disable=import-outside-toplevel
 
                 postman_service = PostmanCollectionService()
 
@@ -9122,20 +9141,66 @@ async def admin_import_tools(
                 # Get user's email for ownership
                 user_email = user.get("email") if isinstance(user, dict) else None
 
+                # Merge tags
+                postman_tags = ["postman_import"] + extra_tags
+
                 # Convert collection to tools
-                tools = await postman_service.generate_tools_from_collection(
+                postman_tools = await postman_service.generate_tools_from_collection(
                     collection,
-                    gateway_id=None,  # No specific gateway
-                    tags=["postman_import"],
+                    gateway_id=import_gateway_id,
+                    tags=postman_tags,
                     owner_email=user_email,
                     team_id=None,
                     visibility="public",
+                    base_url=import_base_url,
                 )
 
                 # Convert ToolCreate objects to dicts for processing
-                payload = [tool.model_dump() for tool in tools]
+                payload = [tool.model_dump() for tool in postman_tools]
 
                 LOGGER.info(f"Converted Postman collection to {len(payload)} tools")
+
+                # Preview gate: return tools without persisting
+                if preview_only:
+                    return JSONResponse(
+                        {
+                            "success": True,
+                            "status": "preview",
+                            "message": f"Preview: {len(payload)} tools from Postman collection",
+                            "imported": len(payload),
+                            "failed": 0,
+                            "created_count": len(payload),
+                            "failed_count": 0,
+                            "created": [{"index": i, "name": t.get("name")} for i, t in enumerate(payload)],
+                            "errors": [],
+                            "created_tools": payload,
+                            "failed_tools": [],
+                            "collection_info": {
+                                "name": collection.get("info", {}).get("name", "Unknown"),
+                                "description": collection.get("info", {}).get("description", ""),
+                            },
+                            "ai_enhanced": False,
+                        },
+                        status_code=200,
+                    )
+
+                # LLM enhancement gate
+                if enhance_with_ai:
+                    try:
+                        # First-Party
+                        from mcpgateway.services.llm_postprocessor_service import LLMPostProcessorService  # pylint: disable=import-outside-toplevel
+
+                        postprocessor = LLMPostProcessorService()
+                        llm_result = await postprocessor.postprocess_extracted_tools(
+                            raw_tools=payload,
+                            base_url=import_base_url or "",
+                            skip_endpoint_validation=True,
+                        )
+                        if llm_result.tools:
+                            payload = llm_result.tools
+                            LOGGER.info(f"LLM post-processing enriched {len(payload)} Postman tools")
+                    except Exception as ex:
+                        LOGGER.warning(f"LLM post-processing failed, continuing without enhancement: {ex}")
 
             except Exception as ex:
                 LOGGER.exception("Failed to convert Postman collection")
@@ -9228,6 +9293,236 @@ async def admin_import_tools(
     except Exception as ex:
         # absolute catch-all: report instead of crashing
         LOGGER.exception("Fatal error in admin_import_tools")
+        return JSONResponse({"success": False, "message": str(ex)}, status_code=500)
+
+
+@admin_router.post("/tools/import/url/")
+@admin_router.post("/tools/import/url")
+@rate_limit(requests_per_minute=settings.mcpgateway_bulk_import_rate_limit)
+async def admin_import_tools_from_url(
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Import tools from a Postman collection URL.
+
+    Fetches a Postman Collection JSON from the given URL, converts the
+    requests to MCP tool definitions, and optionally persists them.
+
+    Args:
+        request: FastAPI Request containing JSON body with url and options
+        db: Database session
+        user: Authenticated username
+
+    Returns:
+        JSONResponse with import results
+
+    Raises:
+        HTTPException: For authentication, rate limiting, or SSRF failures
+    """
+    if not settings.mcpgateway_bulk_import_enabled:
+        LOGGER.warning("Bulk import (URL) attempted but feature is disabled")
+        raise HTTPException(status_code=403, detail="Bulk import feature is disabled. Enable MCPGATEWAY_BULK_IMPORT_ENABLED to use this endpoint.")
+
+    LOGGER.debug("postman URL import: user=%s", user)
+    try:
+        # ---------- parse request body ----------
+        try:
+            body = await request.json()
+        except Exception as ex:
+            LOGGER.exception("Invalid JSON body for Postman URL import")
+            return JSONResponse({"success": False, "message": f"Invalid JSON: {ex}"}, status_code=422)
+
+        url = body.get("url")
+        if not url or not isinstance(url, str):
+            return JSONResponse({"success": False, "message": "Missing or invalid 'url' field"}, status_code=422)
+
+        base_url = body.get("base_url")
+        gateway_id = body.get("gateway_id")
+        tags_raw = body.get("tags", [])
+        tags = tags_raw if isinstance(tags_raw, list) else [t.strip() for t in str(tags_raw).split(",") if t.strip()]
+        if "postman_import" not in tags:
+            tags.append("postman_import")
+        preview_only = body.get("preview_only", False)
+        enhance_with_ai = body.get("enhance_with_ai", False)
+
+        # ---------- SSRF validation ----------
+        # First-Party
+        from mcpgateway.utils.url_validation import validate_url_not_internal  # pylint: disable=import-outside-toplevel
+
+        try:
+            validate_url_not_internal(url)
+        except ValueError as e:
+            return JSONResponse({"success": False, "message": f"URL validation failed: {e}"}, status_code=400)
+
+        # ---------- fetch URL with safe redirects ----------
+        # First-Party
+        from mcpgateway.services.doc_crawler_service import DocumentationCrawlerService  # pylint: disable=import-outside-toplevel
+
+        crawler = DocumentationCrawlerService()
+        try:
+            final_url, response = await crawler._fetch_with_redirects(url)
+        except ValueError as e:
+            return JSONResponse({"success": False, "message": f"Failed to fetch URL: {e}"}, status_code=400)
+
+        # ---------- content size check ----------
+        max_content_size = 20 * 1024 * 1024  # 20MB
+        content_length_header = response.headers.get("content-length")
+        if content_length_header and int(content_length_header) > max_content_size:
+            return JSONResponse({"success": False, "message": f"Response too large ({content_length_header} bytes). Max {max_content_size}."}, status_code=400)
+
+        content = response.text
+        if len(content.encode("utf-8")) > max_content_size:
+            return JSONResponse({"success": False, "message": f"Response exceeds maximum size of {max_content_size} bytes."}, status_code=400)
+
+        # ---------- parse & validate Postman collection ----------
+        # First-Party
+        from mcpgateway.services.postman_service import PostmanCollectionError, PostmanCollectionService  # pylint: disable=import-outside-toplevel
+
+        postman_service = PostmanCollectionService()
+        try:
+            collection = await postman_service.parse_collection(content)
+            await postman_service.validate_collection(collection)
+        except PostmanCollectionError as e:
+            return JSONResponse({"success": False, "message": f"Invalid Postman collection: {e}"}, status_code=422)
+
+        collection_info = {
+            "name": collection.get("info", {}).get("name", "Unknown"),
+            "description": collection.get("info", {}).get("description", ""),
+        }
+
+        # ---------- generate tools ----------
+        user_email = user.get("email") if isinstance(user, dict) else None
+        try:
+            tools = await postman_service.generate_tools_from_collection(
+                collection,
+                gateway_id=gateway_id,
+                tags=tags,
+                owner_email=user_email,
+                team_id=None,
+                visibility="public",
+                base_url=base_url,
+            )
+        except PostmanCollectionError as e:
+            return JSONResponse({"success": False, "message": f"Failed to generate tools: {e}"}, status_code=422)
+
+        tool_dicts = [tool.model_dump() for tool in tools]
+
+        # ---------- preview mode ----------
+        if preview_only:
+            return JSONResponse(
+                {
+                    "success": True,
+                    "status": "preview",
+                    "message": f"Preview: {len(tools)} tools from Postman collection",
+                    "imported": len(tools),
+                    "failed": 0,
+                    "created_count": len(tools),
+                    "failed_count": 0,
+                    "created": [{"index": i, "name": t.get("name")} for i, t in enumerate(tool_dicts)],
+                    "errors": [],
+                    "created_tools": tool_dicts,
+                    "failed_tools": [],
+                    "collection_info": collection_info,
+                    "source_url": final_url,
+                    "ai_enhanced": False,
+                },
+                status_code=200,
+            )
+
+        # ---------- LLM enhancement ----------
+        ai_enhanced = False
+        if enhance_with_ai:
+            try:
+                # First-Party
+                from mcpgateway.services.llm_postprocessor_service import LLMPostProcessorService  # pylint: disable=import-outside-toplevel
+
+                postprocessor = LLMPostProcessorService()
+                result = await postprocessor.postprocess_extracted_tools(
+                    raw_tools=tool_dicts,
+                    base_url=base_url or "",
+                    skip_endpoint_validation=True,
+                )
+                if result.tools:
+                    tool_dicts = result.tools
+                    # Rebuild ToolCreate objects from enriched dicts
+                    tools = []
+                    for td in tool_dicts:
+                        try:
+                            tools.append(ToolCreate(**td))
+                        except Exception:
+                            tools.append(ToolCreate(**td))
+                    ai_enhanced = True
+                    LOGGER.info(f"LLM post-processing enriched {len(tool_dicts)} tools")
+            except Exception as ex:
+                LOGGER.warning(f"LLM post-processing failed, continuing without enhancement: {ex}")
+
+        # ---------- persist tools ----------
+        import_batch_id = str(uuid.uuid4())
+        base_metadata = MetadataCapture.extract_creation_metadata(request, user, import_batch_id=import_batch_id)
+
+        created, errors = [], []
+        for i, tool in enumerate(tools):
+            name = tool.name
+            try:
+                await tool_service.register_tool(
+                    db,
+                    tool,
+                    created_by=base_metadata["created_by"],
+                    created_from_ip=base_metadata["created_from_ip"],
+                    created_via="postman_url",
+                    created_user_agent=base_metadata["created_user_agent"],
+                    import_batch_id=import_batch_id,
+                    federation_source=base_metadata["federation_source"],
+                )
+                created.append({"index": i, "name": name})
+            except IntegrityError as ex:
+                try:
+                    formatted = ErrorFormatter.format_database_error(ex)
+                except Exception:
+                    formatted = {"message": str(ex)}
+                errors.append({"index": i, "name": name, "error": formatted})
+            except (ValidationError, CoreValidationError) as ex:
+                try:
+                    formatted = ErrorFormatter.format_validation_error(ex)
+                except Exception:
+                    formatted = {"message": str(ex)}
+                errors.append({"index": i, "name": name, "error": formatted})
+            except ToolError as ex:
+                errors.append({"index": i, "name": name, "error": {"message": str(ex)}})
+            except Exception as ex:
+                LOGGER.exception("Unexpected error importing tool %r at index %d", name, i)
+                errors.append({"index": i, "name": name, "error": {"message": str(ex)}})
+
+        # ---------- build response ----------
+        if not errors:
+            message = f"Successfully imported all {len(created)} tools from Postman collection"
+        else:
+            message = f"Imported {len(created)} of {len(tools)} tools. {len(errors)} failed."
+
+        return JSONResponse(
+            {
+                "success": len(errors) == 0,
+                "message": message,
+                "imported": len(created),
+                "failed": len(errors),
+                "created_count": len(created),
+                "failed_count": len(errors),
+                "created": created,
+                "errors": errors,
+                "created_tools": [td for i, td in enumerate(tool_dicts) if not any(e["index"] == i for e in errors)],
+                "failed_tools": [{"index": e["index"], "name": e["name"], "error": e["error"]} for e in errors],
+                "collection_info": collection_info,
+                "source_url": final_url,
+                "ai_enhanced": ai_enhanced,
+            },
+            status_code=200,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as ex:
+        LOGGER.exception("Fatal error in admin_import_tools_from_url")
         return JSONResponse({"success": False, "message": str(ex)}, status_code=500)
 
 

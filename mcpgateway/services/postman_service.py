@@ -13,7 +13,7 @@ to MCP Gateway tool definitions.
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # Third-Party
 from pydantic import ValidationError
@@ -115,6 +115,44 @@ class PostmanCollectionService:
 
         return True
 
+    def load_environment(self, environment: Union[str, Dict]) -> None:
+        """Load a Postman environment file and merge into collection variables.
+
+        Environment variables override collection-level variables.
+
+        Args:
+            environment: Postman environment as JSON string or dictionary.
+                         Expected format: {"values": [{"key": "k", "value": "v", "enabled": true}]}
+        """
+        try:
+            if isinstance(environment, str):
+                env_data = json.loads(environment)
+            else:
+                env_data = environment
+
+            if not isinstance(env_data, dict):
+                logger.warning("Environment must be a JSON object, ignoring")
+                return
+
+            values = env_data.get("values", [])
+            loaded = 0
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("key")
+                value = item.get("value")
+                enabled = item.get("enabled", True)
+                if key and value and enabled:
+                    self.collection_variables[key] = value
+                    loaded += 1
+
+            logger.info(f"Loaded {loaded} environment variables (overrides collection vars)")
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse environment JSON: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to load environment: {e}")
+
     async def generate_tools_from_collection(
         self,
         collection: Dict[str, Any],
@@ -123,6 +161,8 @@ class PostmanCollectionService:
         owner_email: Optional[str] = None,
         team_id: Optional[str] = None,
         visibility: str = "public",
+        base_url: Optional[str] = None,
+        environment: Optional[Union[str, Dict]] = None,
     ) -> List[ToolCreate]:
         """Generate MCP tools from Postman collection.
 
@@ -133,6 +173,8 @@ class PostmanCollectionService:
             owner_email: Email of tool owner
             team_id: Team ID for tool ownership
             visibility: Tool visibility (public, team, private)
+            base_url: Optional base URL override for all tools
+            environment: Optional Postman environment (JSON string or dict)
 
         Returns:
             List of ToolCreate objects
@@ -165,6 +207,10 @@ class PostmanCollectionService:
         self.collection_auth = collection.get("auth")
         self.collection_variables = self._extract_variables(collection)
 
+        # Load environment if provided (overrides collection variables)
+        if environment:
+            self.load_environment(environment)
+
         # Process all items (requests and folders)
         tools: List[ToolCreate] = []
         items = collection.get("item", [])
@@ -179,6 +225,7 @@ class PostmanCollectionService:
                     owner_email=owner_email,
                     team_id=team_id,
                     visibility=visibility,
+                    base_url_override=base_url,
                 )
                 tools.extend(item_tools)
             except Exception as e:
@@ -200,6 +247,7 @@ class PostmanCollectionService:
         owner_email: Optional[str],
         team_id: Optional[str],
         visibility: str,
+        base_url_override: Optional[str] = None,
     ) -> List[ToolCreate]:
         """Process a single item (request or folder).
 
@@ -211,10 +259,15 @@ class PostmanCollectionService:
             owner_email: Owner email
             team_id: Team ID
             visibility: Visibility level
+            base_url_override: Optional base URL override
 
         Returns:
             List of ToolCreate objects
         """
+        # Skip disabled items
+        if item.get("disabled", False):
+            return []
+
         tools: List[ToolCreate] = []
 
         # Check if item is a folder (has nested items)
@@ -232,6 +285,7 @@ class PostmanCollectionService:
                     owner_email=owner_email,
                     team_id=team_id,
                     visibility=visibility,
+                    base_url_override=base_url_override,
                 )
                 tools.extend(sub_tools)
 
@@ -246,6 +300,7 @@ class PostmanCollectionService:
                     owner_email=owner_email,
                     team_id=team_id,
                     visibility=visibility,
+                    base_url_override=base_url_override,
                 )
                 tools.append(tool)
             except ValidationError as e:
@@ -264,6 +319,7 @@ class PostmanCollectionService:
         owner_email: Optional[str],
         team_id: Optional[str],
         visibility: str,
+        base_url_override: Optional[str] = None,
     ) -> ToolCreate:
         """Convert a Postman request to a ToolCreate object.
 
@@ -275,6 +331,7 @@ class PostmanCollectionService:
             owner_email: Owner email
             team_id: Team ID
             visibility: Visibility level
+            base_url_override: Optional base URL override
 
         Returns:
             ToolCreate object
@@ -288,7 +345,7 @@ class PostmanCollectionService:
         url_info = self._extract_url(request)
         headers = self._extract_headers(request)
         body_info = self._extract_body(request)
-        auth = self._extract_auth(request_item, request)
+        auth, auth_metadata = self._extract_auth(request_item, request)
 
         # Build tool name (sanitize for MCP)
         tool_name = self._sanitize_tool_name(item_name, folder_path)
@@ -299,15 +356,18 @@ class PostmanCollectionService:
         # Build input schema
         input_schema = self._build_input_schema(url_info, body_info, headers)
 
+        # Apply base URL override if provided
+        effective_base_url = base_url_override or url_info["base_url"]
+
         # Build description
         description = f"{item_description}\n\nMethod: {method}\nURL: {url_info['raw']}" if item_description else f"{method} {url_info['raw']}"
 
         # Create tool
-        tool_data = {
+        tool_data: Dict[str, Any] = {
             "name": tool_name,
             "displayName": item_name,
             "description": description,
-            "url": url_info["base_url"] + url_info["path"],
+            "url": effective_base_url + url_info["path"],
             "integration_type": "REST",
             "request_type": method,
             "headers": headers if headers else None,
@@ -327,6 +387,29 @@ class PostmanCollectionService:
         # Add body handling
         if body_info:
             tool_data["annotations"] = {"postman_body_mode": body_info.get("mode", "raw")}
+
+        # Add OAuth2 metadata if present
+        if auth_metadata:
+            if "annotations" not in tool_data:
+                tool_data["annotations"] = {}
+            tool_data["annotations"]["oauth2_config"] = auth_metadata
+
+        # Extract response examples
+        responses = request_item.get("response", [])
+        if responses:
+            examples = []
+            for resp in responses[:3]:
+                example: Dict[str, Any] = {"name": resp.get("name", ""), "status": resp.get("code", resp.get("status", 200))}
+                body = resp.get("body", "")
+                if body:
+                    try:
+                        example["body_preview"] = json.loads(body) if len(body) < 2000 else {"_truncated": True}
+                    except (json.JSONDecodeError, TypeError):
+                        example["body_preview"] = body[:500]
+                examples.append(example)
+            if "annotations" not in tool_data:
+                tool_data["annotations"] = {}
+            tool_data["annotations"]["response_examples"] = examples
 
         # Add path template if there are path variables
         if url_info.get("has_path_variables"):
@@ -578,7 +661,7 @@ class PostmanCollectionService:
 
         return body_info
 
-    def _extract_auth(self, request_item: Dict[str, Any], request: Dict[str, Any]) -> Optional[AuthenticationValues]:
+    def _extract_auth(self, request_item: Dict[str, Any], request: Dict[str, Any]) -> Tuple[Optional[AuthenticationValues], Dict[str, Any]]:
         """Extract authentication from request or use collection-level auth.
 
         Args:
@@ -586,13 +669,13 @@ class PostmanCollectionService:
             request: Postman request object (may have auth at request level)
 
         Returns:
-            AuthenticationValues or None
+            Tuple of (AuthenticationValues or None, auth metadata dict for annotations)
         """
         # Priority: request > request_item > collection
         auth = request.get("auth") or request_item.get("auth") or self.collection_auth
 
         if not auth:
-            return None
+            return None, {}
 
         auth_type = auth.get("type")
 
@@ -600,7 +683,7 @@ class PostmanCollectionService:
             token = self._get_auth_param(auth, "bearer", "token")
             if token:
                 token = self._substitute_variables(token)
-                return AuthenticationValues(auth_type="bearer", auth_value=self._encode_auth({"Authorization": f"Bearer {token}"}))
+                return AuthenticationValues(auth_type="bearer", auth_value=self._encode_auth({"Authorization": f"Bearer {token}"})), {}
 
         elif auth_type == "apikey":
             key = self._get_auth_param(auth, "apikey", "key")
@@ -610,7 +693,7 @@ class PostmanCollectionService:
             if key and value:
                 value = self._substitute_variables(value)
                 if add_to == "header":
-                    return AuthenticationValues(auth_type="authheaders", auth_value=self._encode_auth({key: value}))
+                    return AuthenticationValues(auth_type="authheaders", auth_value=self._encode_auth({key: value})), {}
 
         elif auth_type == "basic":
             username = self._get_auth_param(auth, "basic", "username")
@@ -619,14 +702,33 @@ class PostmanCollectionService:
             if username and password:
                 username = self._substitute_variables(username)
                 password = self._substitute_variables(password)
-                # Basic auth format: base64(username:password)
                 # Standard
                 import base64
 
                 credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
-                return AuthenticationValues(auth_type="basic", auth_value=self._encode_auth({"Authorization": f"Basic {credentials}"}))
+                return AuthenticationValues(auth_type="basic", auth_value=self._encode_auth({"Authorization": f"Basic {credentials}"})), {}
 
-        return None
+        elif auth_type == "oauth2":
+            token = self._get_auth_param(auth, "oauth2", "accessToken", "")
+            # Extract OAuth2 metadata for annotations
+            oauth2_metadata: Dict[str, Any] = {}
+            for param_key in ("grant_type", "accessTokenUrl", "authUrl", "scope", "clientId"):
+                val = self._get_auth_param(auth, "oauth2", param_key)
+                if val:
+                    oauth2_metadata[param_key] = self._substitute_variables(str(val))
+
+            if token:
+                token = self._substitute_variables(token)
+                return (
+                    AuthenticationValues(auth_type="bearer", auth_value=self._encode_auth({"Authorization": f"Bearer {token}"})),
+                    oauth2_metadata,
+                )
+            return (
+                AuthenticationValues(auth_type="bearer", auth_value=self._encode_auth({"Authorization": "Bearer REPLACE_WITH_OAUTH2_TOKEN"})),
+                oauth2_metadata,
+            )
+
+        return None, {}
 
     def _get_auth_param(self, auth: Dict[str, Any], auth_type: str, param_key: str, default: Any = None) -> Any:
         """Get authentication parameter value.
@@ -790,6 +892,10 @@ class PostmanCollectionService:
     def _substitute_variables(self, text: str) -> str:
         """Substitute Postman variables in text.
 
+        Known variables are replaced with their values. Unknown variables
+        are replaced with an ``UNRESOLVED_`` prefix so they are visible
+        in the generated tool definitions.
+
         Args:
             text: Text with {{variable}} placeholders
 
@@ -802,10 +908,18 @@ class PostmanCollectionService:
             >>> service._substitute_variables("{{baseUrl}}/users")
             'https://api.example.com/users'
         """
-        if not text or not self.collection_variables:
+        if not text:
             return text
 
-        for key, value in self.collection_variables.items():
-            text = text.replace(f"{{{{{key}}}}}", value)
+        if self.collection_variables:
+            for key, value in self.collection_variables.items():
+                text = text.replace(f"{{{{{key}}}}}", value)
+
+        # Detect and replace any remaining unresolved variables
+        remaining = re.findall(r"\{\{([^}]+)\}\}", text)
+        if remaining:
+            logger.warning(f"Unresolved Postman variables: {remaining}")
+            for var_name in remaining:
+                text = text.replace(f"{{{{{var_name}}}}}", f"UNRESOLVED_{var_name}")
 
         return text
