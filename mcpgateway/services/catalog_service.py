@@ -147,7 +147,7 @@ class CatalogService:
 
         if request.search:
             search_lower = request.search.lower()
-            filtered = [s for s in filtered if search_lower in s.name.lower() or search_lower in s.description.lower()]
+            filtered = [s for s in filtered if search_lower in s.name.lower() or search_lower in s.description.lower() or search_lower in s.provider.lower() or any(search_lower in tag.lower() for tag in s.tags)]
 
         if request.tags:
             filtered = [s for s in filtered if any(tag in s.tags for tag in request.tags)]

@@ -451,9 +451,18 @@ def build_config(input_data: ConnectInput) -> MCPClientConfig:
     server = input_data.server
     llm = input_data.llm
 
+    # Resolve MCP server URL - convert relative paths to absolute internal URLs
+    server_url = fallback(server.url if server else None, "MCP_SERVER_URL", "http://localhost:8000/mcp")
+    if server_url and not server_url.startswith(("http://", "https://")):
+        # Relative URL: resolve against the gateway's own internal address
+        # Use 127.0.0.1 instead of 0.0.0.0 since 0.0.0.0 is a listen address, not connectable
+        host = "127.0.0.1" if settings.host == "0.0.0.0" else settings.host
+        internal_base = f"http://{host}:{settings.port}"
+        server_url = f"{internal_base}{server_url}"
+
     return MCPClientConfig(
         mcp_server=MCPServerConfig(
-            url=fallback(server.url if server else None, "MCP_SERVER_URL", "http://localhost:8000/mcp"),
+            url=server_url,
             transport=fallback(server.transport if server else None, "MCP_SERVER_TRANSPORT", "streamable_http"),
             auth_token=fallback(server.auth_token if server else None, "MCP_SERVER_AUTH_TOKEN"),
         ),
