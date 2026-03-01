@@ -38,6 +38,7 @@ from mcpgateway.schemas import (
     EmailLoginRequest,
     EmailRegistrationRequest,
     EmailUserResponse,
+    EmailUserUpdateRequest,
     SuccessResponse,
     UserListResponse,
 )
@@ -539,12 +540,12 @@ async def get_user(user_email: str, user=Depends(get_current_user_with_permissio
 
 @email_auth_router.put("/admin/users/{user_email}", response_model=EmailUserResponse)
 @require_permission("admin.user_management")
-async def update_user(user_email: str, user_request: EmailRegistrationRequest, user=Depends(get_current_user_with_permissions)):
+async def update_user(user_email: str, user_request: EmailUserUpdateRequest, user=Depends(get_current_user_with_permissions)):
     """Update user information (admin only).
 
     Args:
         user_email: Email of user to update
-        user_request: Updated user information
+        user_request: Updated user information (all fields optional)
         user: User context dict from RBAC middleware
 
     Returns:
@@ -562,9 +563,11 @@ async def update_user(user_email: str, user_request: EmailRegistrationRequest, u
         if not target_user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-        # Update user fields
-        target_user.full_name = user_request.full_name
-        target_user.is_admin = getattr(user_request, "is_admin", target_user.is_admin)
+        # Update user fields only if provided
+        if user_request.full_name is not None:
+            target_user.full_name = user_request.full_name
+        if user_request.is_admin is not None:
+            target_user.is_admin = user_request.is_admin
 
         # Update password if provided
         if user_request.password:

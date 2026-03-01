@@ -4869,6 +4869,47 @@ class EmailRegistrationRequest(BaseModel):
         return v
 
 
+class EmailUserUpdateRequest(BaseModel):
+    """Request schema for admin user updates.
+
+    Attributes:
+        full_name: Updated full name
+        password: Optional new password
+        is_admin: Whether user has admin privileges
+
+    Examples:
+        >>> request = EmailUserUpdateRequest(full_name="Updated Name", is_admin=True)
+        >>> request.full_name
+        'Updated Name'
+        >>> request.password is None
+        True
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    full_name: Optional[str] = Field(None, max_length=255, description="User's full name")
+    password: Optional[str] = Field(None, min_length=8, description="New password (optional)")
+    is_admin: Optional[bool] = Field(None, description="Whether user has admin privileges")
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: Optional[str]) -> Optional[str]:
+        """Validate password meets minimum requirements.
+
+        Args:
+            v: Password string to validate
+
+        Returns:
+            Optional[str]: Validated password or None
+
+        Raises:
+            ValueError: If password doesn't meet requirements
+        """
+        if v is not None and len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        return v
+
+
 class ChangePasswordRequest(BaseModel):
     """Request schema for password change.
 
