@@ -11606,27 +11606,8 @@ function showConfigSelectionModal(serverId, serverName) {
     openModal("config-selection-modal");
 }
 /**
- * Build MCP_SERVER_CATALOG_URL for a given server
- * @param {Object} server
- * @returns {string}
- */
-function getCatalogUrl(server) {
-    const currentHost = window.location.hostname;
-    const currentPort =
-        window.location.port ||
-        (window.location.protocol === "https:" ? "443" : "80");
-    const protocol = window.location.protocol;
-
-    const baseUrl = `${protocol}//${currentHost}${
-        currentPort !== "80" && currentPort !== "443" ? ":" + currentPort : ""
-    }`;
-
-    return `${baseUrl}/servers/${server.id}`;
-}
-
-/**
  * Generate and show configuration for selected type
- * @param {string} configType - Configuration type: 'stdio', 'sse', or 'http'
+ * @param {string} configType - Configuration type: 'sse' or 'http'
  */
 async function generateAndShowConfig(configType) {
     try {
@@ -11667,7 +11648,7 @@ async function generateAndShowConfig(configType) {
 /**
  * Export server configuration in specified format
  * @param {string} serverId - The server UUID
- * @param {string} configType - Configuration type: 'stdio', 'sse', or 'http'
+ * @param {string} configType - Configuration type: 'sse' or 'http'
  */
 async function exportServerConfig(serverId, configType) {
     try {
@@ -11715,7 +11696,9 @@ function generateConfig(server, configType) {
         window.location.port ||
         (window.location.protocol === "https:" ? "443" : "80");
     const protocol = window.location.protocol;
-    const baseUrl = `${protocol}//${currentHost}${currentPort !== "80" && currentPort !== "443" ? ":" + currentPort : ""}`;
+    const portSuffix = currentPort !== "80" && currentPort !== "443" ? ":" + currentPort : "";
+    const rootPath = window.ROOT_PATH || "";
+    const baseUrl = `${protocol}//${currentHost}${portSuffix}${rootPath}`;
 
     // Clean server name for use as config key (alphanumeric and hyphens only)
     const cleanServerName = server.name
@@ -11725,24 +11708,9 @@ function generateConfig(server, configType) {
         .replace(/^-|-$/g, "");
 
     switch (configType) {
-        case "stdio":
-            return {
-                mcpServers: {
-                    "mcpgateway-wrapper": {
-                        command: "python",
-                        args: ["-m", "mcpgateway.wrapper"],
-                        env: {
-                            MCP_AUTH: "Bearer <your-token-here>",
-                            MCP_SERVER_URL: `${baseUrl}/servers/${server.id}`,
-                            MCP_TOOL_CALL_TIMEOUT: "120",
-                        },
-                    },
-                },
-            };
-
         case "sse":
             return {
-                servers: {
+                mcpServers: {
                     [cleanServerName]: {
                         type: "sse",
                         url: `${baseUrl}/servers/${server.id}/sse`,
@@ -11755,7 +11723,7 @@ function generateConfig(server, configType) {
 
         case "http":
             return {
-                servers: {
+                mcpServers: {
                     [cleanServerName]: {
                         type: "http",
                         url: `${baseUrl}/servers/${server.id}/mcp`,
@@ -11779,15 +11747,13 @@ function generateConfig(server, configType) {
  */
 function showConfigDisplayModal(server, configType, config) {
     const descriptions = {
-        stdio: "Configuration for Claude Desktop, CLI tools, and stdio-based MCP clients",
-        sse: "Configuration for LangChain, LlamaIndex, and other SSE-based frameworks",
-        http: "Configuration for REST clients and HTTP-based MCP integrations",
+        sse: "SSE configuration for Claude Desktop, Claude Code, LangChain, and other MCP clients",
+        http: "HTTP configuration for Claude Desktop, Claude Code, and REST-based MCP clients",
     };
 
     const usageInstructions = {
-        stdio: "Save as .mcp.json in your user directory or use in Claude Desktop settings",
-        sse: "Use with MCP client libraries that support Server-Sent Events transport",
-        http: "Use with HTTP clients or REST API wrappers for MCP protocol",
+        sse: "Save as .mcp.json or add to Claude Desktop settings under mcpServers",
+        http: "Save as .mcp.json or add to Claude Desktop settings under mcpServers",
     };
 
     // Update modal content

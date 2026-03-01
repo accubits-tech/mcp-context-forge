@@ -1389,6 +1389,34 @@ def update_url_protocol(request: Request) -> str:
         >>> url = main.update_url_protocol(req_http)
         >>> url.endswith('/')
         False
+
+        Test root_path is included via base_url (e.g. APP_ROOT_PATH=/api):
+        >>> scope_root = {
+        ...     'type': 'http',
+        ...     'scheme': 'https',
+        ...     'server': ('example.com', 443),
+        ...     'path': '/',
+        ...     'headers': [],
+        ...     'root_path': '/api',
+        ... }
+        >>> req_root = Request(scope_root)
+        >>> url = main.update_url_protocol(req_root)
+        >>> url
+        'https://example.com/api'
+
+        Test empty root_path has no effect:
+        >>> scope_no_root = {
+        ...     'type': 'http',
+        ...     'scheme': 'http',
+        ...     'server': ('localhost', 8000),
+        ...     'path': '/',
+        ...     'headers': [],
+        ...     'root_path': '',
+        ... }
+        >>> req_no_root = Request(scope_no_root)
+        >>> url = main.update_url_protocol(req_no_root)
+        >>> url
+        'http://localhost:8000'
     """
     parsed = urlparse(str(request.base_url))
     proto = get_protocol_from_request(request)

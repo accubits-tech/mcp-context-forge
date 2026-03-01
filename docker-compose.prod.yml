@@ -55,6 +55,7 @@ services:
       - PORT=4444
       - ENVIRONMENT=production
       - APP_DOMAIN=${APP_DOMAIN:-localhost}
+      - APP_ROOT_PATH=${APP_ROOT_PATH:-}
       # ── Database & Cache ──
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-mysecretpassword}@postgres:5432/${POSTGRES_DB:-mcp}
       - CACHE_TYPE=redis
@@ -103,6 +104,9 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - OPENAI_TEMPERATURE=${OPENAI_TEMPERATURE:-0.7}
       - OPENAI_MAX_RETRIES=${OPENAI_MAX_RETRIES:-2}
+      # ── Database Pool (Docker networking tuning) ──
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-25}
+      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-300}
       # ── Logging ──
       - LOG_LEVEL=${LOG_LEVEL:-ERROR}
       - DISABLE_ACCESS_LOG=true
