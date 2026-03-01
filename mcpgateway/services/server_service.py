@@ -13,7 +13,7 @@ It also publishes event notifications for server changes.
 
 # Standard
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 # Third-Party
@@ -141,7 +141,7 @@ class ServerService:
         logger.info("Server service shutdown complete")
 
     # get_top_server
-    async def get_top_servers(self, db: Session, limit: Optional[int] = 5) -> List[TopPerformer]:
+    async def get_top_servers(self, db: Session, limit: Optional[int] = 5, hours: Optional[int] = None) -> List[TopPerformer]:
         """Retrieve the top-performing servers based on execution count.
 
         Queries the database to get servers with their metrics, ordered by the number of executions
@@ -151,6 +151,7 @@ class ServerService:
         Args:
             db (Session): Database session for querying server metrics.
             limit (Optional[int]): Maximum number of servers to return. Defaults to 5. If None, returns all servers.
+            hours (Optional[int]): Optional number of hours to filter metrics by. If None, returns all-time data.
 
         Returns:
             List[TopPerformer]: A list of TopPerformer objects, each containing:
@@ -177,9 +178,13 @@ class ServerService:
                 func.max(ServerMetric.timestamp).label("last_execution"),  # pylint: disable=not-callable
             )
             .outerjoin(ServerMetric)
-            .group_by(DbServer.id, DbServer.name)
-            .order_by(desc("execution_count"))
         )
+
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            query = query.filter(or_(ServerMetric.timestamp >= cutoff_time, ServerMetric.id.is_(None)))
+
+        query = query.group_by(DbServer.id, DbServer.name).order_by(desc("execution_count"))
 
         if limit is not None:
             query = query.limit(limit)
@@ -1142,12 +1147,13 @@ class ServerService:
         await self._publish_event(event)
 
     # --- Metrics ---
-    async def aggregate_metrics(self, db: Session) -> ServerMetrics:
+    async def aggregate_metrics(self, db: Session, hours: Optional[int] = None) -> ServerMetrics:
         """
         Aggregate metrics for all server invocations across all servers.
 
         Args:
             db: Database session
+            hours: Optional number of hours to filter metrics by. If None, returns all-time metrics.
 
         Returns:
             ServerMetrics: Aggregated metrics computed from all ServerMetric records.
@@ -1163,19 +1169,24 @@ class ServerService:
             >>> hasattr(result, 'total_executions')
             True
         """
-        total_executions = db.execute(select(func.count()).select_from(ServerMetric)).scalar() or 0  # pylint: disable=not-callable
+        time_filter = []
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            time_filter = [ServerMetric.timestamp >= cutoff_time]
 
-        successful_executions = db.execute(select(func.count()).select_from(ServerMetric).where(ServerMetric.is_success.is_(True))).scalar() or 0  # pylint: disable=not-callable
+        total_executions = db.execute(select(func.count()).select_from(ServerMetric).where(*time_filter)).scalar() or 0  # pylint: disable=not-callable
 
-        failed_executions = db.execute(select(func.count()).select_from(ServerMetric).where(ServerMetric.is_success.is_(False))).scalar() or 0  # pylint: disable=not-callable
+        successful_executions = db.execute(select(func.count()).select_from(ServerMetric).where(ServerMetric.is_success.is_(True), *time_filter)).scalar() or 0  # pylint: disable=not-callable
 
-        min_response_time = db.execute(select(func.min(ServerMetric.response_time))).scalar()
+        failed_executions = db.execute(select(func.count()).select_from(ServerMetric).where(ServerMetric.is_success.is_(False), *time_filter)).scalar() or 0  # pylint: disable=not-callable
 
-        max_response_time = db.execute(select(func.max(ServerMetric.response_time))).scalar()
+        min_response_time = db.execute(select(func.min(ServerMetric.response_time)).where(*time_filter)).scalar()
 
-        avg_response_time = db.execute(select(func.avg(ServerMetric.response_time))).scalar()
+        max_response_time = db.execute(select(func.max(ServerMetric.response_time)).where(*time_filter)).scalar()
 
-        last_execution_time = db.execute(select(func.max(ServerMetric.timestamp))).scalar()
+        avg_response_time = db.execute(select(func.avg(ServerMetric.response_time)).where(*time_filter)).scalar()
+
+        last_execution_time = db.execute(select(func.max(ServerMetric.timestamp)).where(*time_filter)).scalar()
 
         return ServerMetrics(
             total_executions=total_executions,

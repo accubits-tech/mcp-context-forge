@@ -16,7 +16,7 @@ It handles:
 
 # Standard
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from string import Formatter
 import time
@@ -157,7 +157,7 @@ class PromptService:
         self._event_subscribers.clear()
         logger.info("Prompt service shutdown complete")
 
-    async def get_top_prompts(self, db: Session, limit: Optional[int] = 5) -> List[TopPerformer]:
+    async def get_top_prompts(self, db: Session, limit: Optional[int] = 5, hours: Optional[int] = None) -> List[TopPerformer]:
         """Retrieve the top-performing prompts based on execution count.
 
         Queries the database to get prompts with their metrics, ordered by the number of executions
@@ -167,6 +167,7 @@ class PromptService:
         Args:
             db (Session): Database session for querying prompt metrics.
             limit (Optional[int]): Maximum number of prompts to return. Defaults to 5. If None, returns all prompts.
+            hours (Optional[int]): Optional number of hours to filter metrics by. If None, returns all-time data.
 
         Returns:
             List[TopPerformer]: A list of TopPerformer objects, each containing:
@@ -193,9 +194,13 @@ class PromptService:
                 func.max(PromptMetric.timestamp).label("last_execution"),  # pylint: disable=not-callable
             )
             .outerjoin(PromptMetric)
-            .group_by(DbPrompt.id, DbPrompt.name)
-            .order_by(desc("execution_count"))
         )
+
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            query = query.filter(or_(PromptMetric.timestamp >= cutoff_time, PromptMetric.id.is_(None)))
+
+        query = query.group_by(DbPrompt.id, DbPrompt.name).order_by(desc("execution_count"))
 
         if limit is not None:
             query = query.limit(limit)
@@ -1432,12 +1437,13 @@ class PromptService:
             await queue.put(event)
 
     # --- Metrics ---
-    async def aggregate_metrics(self, db: Session) -> Dict[str, Any]:
+    async def aggregate_metrics(self, db: Session, hours: Optional[int] = None) -> Dict[str, Any]:
         """
         Aggregate metrics for all prompt invocations across all prompts.
 
         Args:
             db: Database session
+            hours: Optional number of hours to filter metrics by. If None, returns all-time metrics.
 
         Returns:
             Dict[str, Any]: Aggregated prompt metrics with keys:
@@ -1463,14 +1469,19 @@ class PromptService:
             True
         """
 
-        total = db.execute(select(func.count(PromptMetric.id))).scalar() or 0  # pylint: disable=not-callable
-        successful = db.execute(select(func.count(PromptMetric.id)).where(PromptMetric.is_success.is_(True))).scalar() or 0  # pylint: disable=not-callable
-        failed = db.execute(select(func.count(PromptMetric.id)).where(PromptMetric.is_success.is_(False))).scalar() or 0  # pylint: disable=not-callable
+        time_filter = []
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            time_filter = [PromptMetric.timestamp >= cutoff_time]
+
+        total = db.execute(select(func.count(PromptMetric.id)).where(*time_filter)).scalar() or 0  # pylint: disable=not-callable
+        successful = db.execute(select(func.count(PromptMetric.id)).where(PromptMetric.is_success.is_(True), *time_filter)).scalar() or 0  # pylint: disable=not-callable
+        failed = db.execute(select(func.count(PromptMetric.id)).where(PromptMetric.is_success.is_(False), *time_filter)).scalar() or 0  # pylint: disable=not-callable
         failure_rate = failed / total if total > 0 else 0.0
-        min_rt = db.execute(select(func.min(PromptMetric.response_time))).scalar()
-        max_rt = db.execute(select(func.max(PromptMetric.response_time))).scalar()
-        avg_rt = db.execute(select(func.avg(PromptMetric.response_time))).scalar()
-        last_time = db.execute(select(func.max(PromptMetric.timestamp))).scalar()
+        min_rt = db.execute(select(func.min(PromptMetric.response_time)).where(*time_filter)).scalar()
+        max_rt = db.execute(select(func.max(PromptMetric.response_time)).where(*time_filter)).scalar()
+        avg_rt = db.execute(select(func.avg(PromptMetric.response_time)).where(*time_filter)).scalar()
+        last_time = db.execute(select(func.max(PromptMetric.timestamp)).where(*time_filter)).scalar()
 
         return {
             "total_executions": total,

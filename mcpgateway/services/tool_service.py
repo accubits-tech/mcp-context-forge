@@ -17,7 +17,7 @@ It handles:
 # Standard
 import asyncio
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
@@ -278,7 +278,7 @@ class ToolService:
         await self._http_client.aclose()
         logger.info("Tool service shutdown complete")
 
-    async def get_top_tools(self, db: Session, limit: Optional[int] = 5) -> List[TopPerformer]:
+    async def get_top_tools(self, db: Session, limit: Optional[int] = 5, hours: Optional[int] = None) -> List[TopPerformer]:
         """Retrieve the top-performing tools based on execution count.
 
         Queries the database to get tools with their metrics, ordered by the number of executions
@@ -288,6 +288,7 @@ class ToolService:
         Args:
             db (Session): Database session for querying tool metrics.
             limit (Optional[int]): Maximum number of tools to return. Defaults to 5. If None, returns all tools.
+            hours (Optional[int]): Optional number of hours to filter metrics by. If None, returns all-time data.
 
         Returns:
             List[TopPerformer]: A list of TopPerformer objects, each containing:
@@ -314,9 +315,13 @@ class ToolService:
                 func.max(ToolMetric.timestamp).label("last_execution"),  # pylint: disable=not-callable
             )
             .outerjoin(ToolMetric)
-            .group_by(DbTool.id, DbTool.name)
-            .order_by(desc("execution_count"))
         )
+
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            query = query.filter(or_(ToolMetric.timestamp >= cutoff_time, ToolMetric.id.is_(None)))
+
+        query = query.group_by(DbTool.id, DbTool.name).order_by(desc("execution_count"))
 
         if limit is not None:
             query = query.limit(limit)
@@ -2001,12 +2006,13 @@ class ToolService:
             self._event_subscribers.remove(queue)
 
     # --- Metrics ---
-    async def aggregate_metrics(self, db: Session) -> Dict[str, Any]:
+    async def aggregate_metrics(self, db: Session, hours: Optional[int] = None) -> Dict[str, Any]:
         """
         Aggregate metrics for all tool invocations across all tools.
 
         Args:
             db: Database session
+            hours: Optional number of hours to filter metrics by. If None, returns all-time metrics.
 
         Returns:
             Aggregated metrics computed from all ToolMetric records.
@@ -2023,14 +2029,19 @@ class ToolService:
             True
         """
 
-        total = db.execute(select(func.count(ToolMetric.id))).scalar() or 0  # pylint: disable=not-callable
-        successful = db.execute(select(func.count(ToolMetric.id)).where(ToolMetric.is_success.is_(True))).scalar() or 0  # pylint: disable=not-callable
-        failed = db.execute(select(func.count(ToolMetric.id)).where(ToolMetric.is_success.is_(False))).scalar() or 0  # pylint: disable=not-callable
+        time_filter = []
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            time_filter = [ToolMetric.timestamp >= cutoff_time]
+
+        total = db.execute(select(func.count(ToolMetric.id)).where(*time_filter)).scalar() or 0  # pylint: disable=not-callable
+        successful = db.execute(select(func.count(ToolMetric.id)).where(ToolMetric.is_success.is_(True), *time_filter)).scalar() or 0  # pylint: disable=not-callable
+        failed = db.execute(select(func.count(ToolMetric.id)).where(ToolMetric.is_success.is_(False), *time_filter)).scalar() or 0  # pylint: disable=not-callable
         failure_rate = failed / total if total > 0 else 0.0
-        min_rt = db.execute(select(func.min(ToolMetric.response_time))).scalar()
-        max_rt = db.execute(select(func.max(ToolMetric.response_time))).scalar()
-        avg_rt = db.execute(select(func.avg(ToolMetric.response_time))).scalar()
-        last_time = db.execute(select(func.max(ToolMetric.timestamp))).scalar()
+        min_rt = db.execute(select(func.min(ToolMetric.response_time)).where(*time_filter)).scalar()
+        max_rt = db.execute(select(func.max(ToolMetric.response_time)).where(*time_filter)).scalar()
+        avg_rt = db.execute(select(func.avg(ToolMetric.response_time)).where(*time_filter)).scalar()
+        last_time = db.execute(select(func.max(ToolMetric.timestamp)).where(*time_filter)).scalar()
 
         return {
             "total_executions": total,

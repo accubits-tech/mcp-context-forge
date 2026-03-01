@@ -26,7 +26,7 @@ Examples:
 
 # Standard
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import mimetypes
 import os
 import re
@@ -154,7 +154,7 @@ class ResourceService:
         self._event_subscribers.clear()
         logger.info("Resource service shutdown complete")
 
-    async def get_top_resources(self, db: Session, limit: Optional[int] = 5) -> List[TopPerformer]:
+    async def get_top_resources(self, db: Session, limit: Optional[int] = 5, hours: Optional[int] = None) -> List[TopPerformer]:
         """Retrieve the top-performing resources based on execution count.
 
         Queries the database to get resources with their metrics, ordered by the number of executions
@@ -164,6 +164,7 @@ class ResourceService:
         Args:
             db (Session): Database session for querying resource metrics.
             limit (Optional[int]): Maximum number of resources to return. Defaults to 5. If None, returns all resources.
+            hours (Optional[int]): Optional number of hours to filter metrics by. If None, returns all-time data.
 
         Returns:
             List[TopPerformer]: A list of TopPerformer objects, each containing:
@@ -190,9 +191,13 @@ class ResourceService:
                 func.max(ResourceMetric.timestamp).label("last_execution"),  # pylint: disable=not-callable
             )
             .outerjoin(ResourceMetric)
-            .group_by(DbResource.id, DbResource.uri)
-            .order_by(desc("execution_count"))
         )
+
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            query = query.filter(or_(ResourceMetric.timestamp >= cutoff_time, ResourceMetric.id.is_(None)))
+
+        query = query.group_by(DbResource.id, DbResource.uri).order_by(desc("execution_count"))
 
         if limit is not None:
             query = query.limit(limit)
@@ -1594,12 +1599,13 @@ class ResourceService:
         return [ResourceTemplate.model_validate(t) for t in templates]
 
     # --- Metrics ---
-    async def aggregate_metrics(self, db: Session) -> ResourceMetrics:
+    async def aggregate_metrics(self, db: Session, hours: Optional[int] = None) -> ResourceMetrics:
         """
         Aggregate metrics for all resource invocations across all resources.
 
         Args:
             db: Database session
+            hours: Optional number of hours to filter metrics by. If None, returns all-time metrics.
 
         Returns:
             ResourceMetrics: Aggregated metrics computed from all ResourceMetric records.
@@ -1615,19 +1621,24 @@ class ResourceService:
             >>> hasattr(result, 'total_executions')
             True
         """
-        total_executions = db.execute(select(func.count()).select_from(ResourceMetric)).scalar() or 0  # pylint: disable=not-callable
+        time_filter = []
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            time_filter = [ResourceMetric.timestamp >= cutoff_time]
 
-        successful_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(ResourceMetric.is_success.is_(True))).scalar() or 0  # pylint: disable=not-callable
+        total_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(*time_filter)).scalar() or 0  # pylint: disable=not-callable
 
-        failed_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(ResourceMetric.is_success.is_(False))).scalar() or 0  # pylint: disable=not-callable
+        successful_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(ResourceMetric.is_success.is_(True), *time_filter)).scalar() or 0  # pylint: disable=not-callable
 
-        min_response_time = db.execute(select(func.min(ResourceMetric.response_time))).scalar()
+        failed_executions = db.execute(select(func.count()).select_from(ResourceMetric).where(ResourceMetric.is_success.is_(False), *time_filter)).scalar() or 0  # pylint: disable=not-callable
 
-        max_response_time = db.execute(select(func.max(ResourceMetric.response_time))).scalar()
+        min_response_time = db.execute(select(func.min(ResourceMetric.response_time)).where(*time_filter)).scalar()
 
-        avg_response_time = db.execute(select(func.avg(ResourceMetric.response_time))).scalar()
+        max_response_time = db.execute(select(func.max(ResourceMetric.response_time)).where(*time_filter)).scalar()
 
-        last_execution_time = db.execute(select(func.max(ResourceMetric.timestamp))).scalar()
+        avg_response_time = db.execute(select(func.avg(ResourceMetric.response_time)).where(*time_filter)).scalar()
+
+        last_execution_time = db.execute(select(func.max(ResourceMetric.timestamp)).where(*time_filter)).scalar()
 
         return ResourceMetrics(
             total_executions=total_executions,

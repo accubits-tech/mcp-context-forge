@@ -8568,6 +8568,7 @@ MetricsDict = Dict[str, Union[ToolMetrics, ResourceMetrics, ServerMetrics, Promp
 
 @admin_router.get("/metrics")
 async def get_aggregated_metrics(
+    hours: Optional[int] = Query(None, ge=1, le=168, description="Filter metrics to the last N hours. If omitted, returns all-time metrics."),
     db: Session = Depends(get_db),
     _user=Depends(get_current_user_with_permissions),
 ) -> Dict[str, Any]:
@@ -8578,6 +8579,7 @@ async def get_aggregated_metrics(
     The results are compiled into a dictionary for administrative monitoring.
 
     Args:
+        hours (Optional[int]): Optional number of hours to filter metrics by (1-168). If omitted, returns all-time metrics.
         db (Session): Database session dependency for querying metrics.
 
     Returns:
@@ -8591,15 +8593,15 @@ async def get_aggregated_metrics(
               and servers with their metrics.
     """
     metrics = {
-        "tools": await tool_service.aggregate_metrics(db),
-        "resources": await resource_service.aggregate_metrics(db),
-        "prompts": await prompt_service.aggregate_metrics(db),
-        "servers": await server_service.aggregate_metrics(db),
+        "tools": await tool_service.aggregate_metrics(db, hours=hours),
+        "resources": await resource_service.aggregate_metrics(db, hours=hours),
+        "prompts": await prompt_service.aggregate_metrics(db, hours=hours),
+        "servers": await server_service.aggregate_metrics(db, hours=hours),
         "topPerformers": {
-            "tools": await tool_service.get_top_tools(db, limit=None),
-            "resources": await resource_service.get_top_resources(db, limit=None),
-            "prompts": await prompt_service.get_top_prompts(db, limit=None),
-            "servers": await server_service.get_top_servers(db, limit=None),
+            "tools": await tool_service.get_top_tools(db, limit=None, hours=hours),
+            "resources": await resource_service.get_top_resources(db, limit=None, hours=hours),
+            "prompts": await prompt_service.get_top_prompts(db, limit=None, hours=hours),
+            "servers": await server_service.get_top_servers(db, limit=None, hours=hours),
         },
     }
     return metrics
