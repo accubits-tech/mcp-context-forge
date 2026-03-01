@@ -11713,7 +11713,7 @@ function generateConfig(server, configType) {
                 mcpServers: {
                     [cleanServerName]: {
                         type: "sse",
-                        url: `${baseUrl}/servers/${server.id}/sse`,
+                        url: `${baseUrl}/api/servers/${server.id}/sse`,
                         headers: {
                             Authorization: "Bearer your-token-here",
                         },
@@ -11726,7 +11726,7 @@ function generateConfig(server, configType) {
                 mcpServers: {
                     [cleanServerName]: {
                         type: "http",
-                        url: `${baseUrl}/servers/${server.id}/mcp`,
+                        url: `${baseUrl}/api/servers/${server.id}/mcp`,
                         headers: {
                             Authorization: "Bearer your-token-here",
                         },
