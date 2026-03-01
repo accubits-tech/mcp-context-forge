@@ -529,7 +529,7 @@ async def fetch_tools_after_oauth(gateway_id: str, current_user: EmailUserRespon
         result = await gateway_service.fetch_tools_after_oauth(db, gateway_id, current_user.get("email"))
         tools_count = len(result.get("tools", []))
 
-        return {"success": True, "message": f"Successfully fetched and created {tools_count} tools"}
+        return {"success": True, "message": f"Successfully fetched and created {tools_count} tools", "tool_count": tools_count}
 
     except Exception as e:
         logger.error(f"Failed to fetch tools after OAuth for gateway {gateway_id}: {e}")
