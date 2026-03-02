@@ -1791,6 +1791,72 @@ async def toggle_server_status(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@server_router.post("/{server_id}/activate", response_model=ServerRead)
+@require_permission("servers.update")
+async def activate_server(
+    server_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> ServerRead:
+    """
+    Activates a server by its ID.
+
+    Args:
+        server_id (str): The ID of the server to activate.
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        ServerRead: The server object after activation.
+
+    Raises:
+        HTTPException: If the server is not found or there is an error.
+    """
+    try:
+        user_email = user.get("email") if isinstance(user, dict) else str(user)
+        logger.debug(f"User {user} is activating server with ID {server_id}")
+        return await server_service.toggle_server_status(db, server_id, True, user_email=user_email)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ServerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ServerError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@server_router.post("/{server_id}/deactivate", response_model=ServerRead)
+@require_permission("servers.update")
+async def deactivate_server(
+    server_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> ServerRead:
+    """
+    Deactivates a server by its ID.
+
+    Args:
+        server_id (str): The ID of the server to deactivate.
+        db (Session): The database session used to interact with the data store.
+        user (str): The authenticated user making the request.
+
+    Returns:
+        ServerRead: The server object after deactivation.
+
+    Raises:
+        HTTPException: If the server is not found or there is an error.
+    """
+    try:
+        user_email = user.get("email") if isinstance(user, dict) else str(user)
+        logger.debug(f"User {user} is deactivating server with ID {server_id}")
+        return await server_service.toggle_server_status(db, server_id, False, user_email=user_email)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ServerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ServerError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @server_router.delete("/{server_id}", response_model=Dict[str, str])
 @require_permission("servers.delete")
 async def delete_server(server_id: str, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> Dict[str, str]:
