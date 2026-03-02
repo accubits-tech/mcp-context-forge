@@ -1137,8 +1137,18 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
         return JSONResponse(content=ErrorFormatter.format_validation_error(ex), status_code=422)
     except IntegrityError as ex:
         return JSONResponse(content=ErrorFormatter.format_database_error(ex), status_code=409)
+    except (ConnectionError, TimeoutError, OSError) as ex:
+        LOGGER.error(f"Connection error during server registration: {ex}")
+        return JSONResponse(
+            content={
+                "message": "Unable to connect to the upstream server. Please verify the server is running and accessible, then try again.",
+                "success": False,
+            },
+            status_code=503,
+        )
     except Exception as ex:
-        return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
+        LOGGER.error(f"Unexpected error during server creation: {ex}")
+        return JSONResponse(content={"message": f"An unexpected error occurred while creating the server: {str(ex)}", "success": False}, status_code=500)
 
 
 @admin_router.post("/servers/{server_id}/edit")
@@ -4823,9 +4833,21 @@ async def admin_delete_user(
         # Return empty content to remove the user from the list
         return HTMLResponse(content="", status_code=200)
 
+    except ValueError as e:
+        LOGGER.warning(f"Cannot delete user {user_email}: {e}")
+        return HTMLResponse(content=f'<div class="text-red-500">{str(e)}</div>', status_code=400)
+    except IntegrityError as e:
+        LOGGER.error(f"Database integrity error deleting user {user_email}: {e}")
+        return HTMLResponse(
+            content='<div class="text-red-500">Cannot delete user due to existing references. Please remove associated data first.</div>',
+            status_code=409,
+        )
     except Exception as e:
-        LOGGER.error(f"Error deleting user {user_email}: {e}")
-        return HTMLResponse(content=f'<div class="text-red-500">Error deleting user: {str(e)}</div>', status_code=400)
+        LOGGER.error(f"Unexpected error deleting user {user_email}: {e}", exc_info=True)
+        return HTMLResponse(
+            content='<div class="text-red-500">An unexpected error occurred while deleting the user. Please try again or contact support.</div>',
+            status_code=500,
+        )
 
 
 @admin_router.get("/tools")
