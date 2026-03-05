@@ -1398,6 +1398,31 @@ catalog_servers:
     documentation_url: "https://docs.manifold.markets/api/mcp"
     tools: ["search_markets", "get_market", "create_prediction", "place_bet", "resolve_market", "get_user_portfolio", "list_events", "create_event", "get_market_history", "list_categories"]
 
+  # Cloud Infrastructure
+  - id: azure-mcp
+    name: "Azure MCP Server"
+    category: "Cloud Infrastructure"
+    url: "http://azure-mcp:5000"
+    auth_type: "API Key"
+    provider: "Microsoft"
+    description: "Microsoft's official MCP server for Azure, enabling AI agents to manage 40+ Azure services including resource groups, VMs, storage, Cosmos DB, Key Vault, AKS, App Service, Container Apps, and more through natural language."
+    requires_api_key: true
+    tags: ["cloud", "azure", "infrastructure", "devops"]
+    logo_url: "https://img.logo.dev/azure.microsoft.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://learn.microsoft.com/en-us/azure/developer/azure-mcp-server/get-started"
+    tools: ["list_resource_groups", "create_resource_group", "list_resources", "get_resource", "list_subscriptions", "get_subscription", "list_storage_accounts", "create_storage_account", "list_containers", "upload_blob", "download_blob", "list_key_vaults", "get_secret", "set_secret", "list_cosmos_accounts", "query_cosmos", "list_app_services", "create_web_app", "list_container_apps", "deploy_container_app", "list_aks_clusters", "get_aks_cluster", "list_sql_databases", "query_sql", "list_redis_caches", "get_advisor_recommendations", "list_policy_assignments"]
+    env_config:
+      required_vars:
+        - AZURE_TENANT_ID
+        - AZURE_CLIENT_ID
+        - AZURE_CLIENT_SECRET
+      setup_guide: |
+        Authentication uses Azure Entra ID (Service Principal) via environment variables.
+        1. Create a service principal: az ad sp create-for-rbac --name "mcp-server" --role contributor --scopes /subscriptions/<sub-id>
+        2. Set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET from the output
+        3. These are passed as container environment variables (not HTTP headers)
+        4. The server authenticates with Azure APIs internally using EnvironmentCredential
+
   # Local Development Servers
   - id: fast-time-server
     name: "Fast Time Server"
@@ -1452,6 +1477,7 @@ categories:
   - Database
   - Observability
   - Time Services
+  - Cloud Infrastructure
 
 # Auth types for filtering
 auth_types:

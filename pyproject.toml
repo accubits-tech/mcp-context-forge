@@ -53,6 +53,7 @@ dependencies = [
     "copier>=9.10.3",
     "cryptography>=46.0.3",
     "fastapi>=0.121.1",
+    "firecrawl-py>=1.5.0",
     "filelock>=3.20.0",
     "gunicorn>=23.0.0",
     "httpx>=0.28.1",

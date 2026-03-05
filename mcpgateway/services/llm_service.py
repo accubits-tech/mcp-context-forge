@@ -4,14 +4,14 @@
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
 
-This module provides a lightweight service for making direct HTTP calls to OpenAI-compatible
-LLM APIs. It replaces the CrewAI dependency with simple HTTP requests for better Python
-version compatibility.
+This module provides a lightweight service for making direct HTTP calls to
+Anthropic's Messages API for LLM completions.
 """
 
 # Standard
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 # Third-Party
@@ -36,10 +36,10 @@ class LLMAPIError(LLMServiceError):
 
 
 class LLMService:
-    """Direct HTTP client for OpenAI-compatible LLM APIs.
+    """Direct HTTP client for Anthropic's Messages API.
 
     This service provides a simple interface for making chat completion requests
-    to OpenAI-compatible APIs without requiring the CrewAI dependency.
+    to Anthropic's Messages API.
 
     Examples:
         >>> service = LLMService()
@@ -90,16 +90,15 @@ class LLMService:
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Make a chat completion request to the LLM API.
+        """Make a chat completion request to the Anthropic Messages API.
 
         Args:
             messages: List of message dictionaries with 'role' and 'content' keys.
+                      System messages are extracted and sent as the top-level 'system' field.
             model: Model to use (overrides default).
             temperature: Temperature for this request (overrides default).
             max_tokens: Max tokens for this request (overrides default).
-            response_format: Optional response format specification (e.g., {"type": "json_object"}).
 
         Returns:
             The assistant's response content as a string.
@@ -111,30 +110,70 @@ class LLMService:
         if not self.is_configured():
             raise LLMConfigurationError("LLM service is not configured. Set LLM_API_KEY and LLM_API_BASE_URL environment variables.")
 
-        url = f"{self.base_url}/chat/completions"
+        url = f"{self.base_url}/v1/messages"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
 
+        resolved_model = model or self.model
+        resolved_max_tokens = max_tokens or self.max_tokens
+        resolved_temperature = temperature if temperature is not None else self.temperature
+
+        # Extract system messages into top-level system field (Anthropic API requirement)
+        # If the last message is role=assistant, it serves as a prefill — Anthropic
+        # continues from where the prefill left off, so we prepend it to the response.
+        system_parts = []
+        non_system_messages = []
+        assistant_prefill = ""
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_parts.append(msg.get("content", ""))
+            else:
+                non_system_messages.append(msg)
+
+        if non_system_messages and non_system_messages[-1].get("role") == "assistant":
+            assistant_prefill = non_system_messages[-1].get("content", "")
+
         payload: Dict[str, Any] = {
-            "model": model or self.model,
-            "messages": messages,
-            "temperature": temperature if temperature is not None else self.temperature,
-            "max_tokens": max_tokens or self.max_tokens,
+            "model": resolved_model,
+            "messages": non_system_messages,
+            "max_tokens": resolved_max_tokens,
+            "temperature": resolved_temperature,
         }
 
-        if response_format:
-            payload["response_format"] = response_format
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+
+        # Log the request payload (excluding full message content for brevity)
+        log_payload = {k: v for k, v in payload.items() if k not in ("messages", "system")}
+        log_payload["message_count"] = len(payload["messages"])
+        log_payload["has_system"] = "system" in payload
+        log_payload["total_prompt_chars"] = sum(len(m.get("content", "")) for m in messages)
+        logger.info(f"LLM request: {json.dumps(log_payload)}")
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                logger.debug(f"LLM request to {url} with model={payload['model']}")
                 response = await client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
 
                 data = response.json()
-                content = data["choices"][0]["message"]["content"]
+                content = assistant_prefill + data["content"][0]["text"]
+                usage = data.get("usage", {})
+                stop_reason = data.get("stop_reason", "unknown")
+
+                logger.info(
+                    f"LLM response: stop_reason={stop_reason}, "
+                    f"input_tokens={usage.get('input_tokens', '?')}, "
+                    f"output_tokens={usage.get('output_tokens', '?')}, "
+                    f"content_length={len(content) if content else 0}"
+                )
+
+                if not content:
+                    logger.error(f"LLM returned empty content. Full response: {json.dumps(data)[:2000]}")
+                    raise LLMAPIError(f"LLM returned empty content (stop_reason={stop_reason})")
+
                 logger.debug(f"LLM response (first 500 chars): {content[:500]}")
                 return content
 
@@ -151,6 +190,68 @@ class LLMService:
             logger.error(f"Failed to parse LLM API response: {e}")
             raise LLMAPIError(f"Failed to parse LLM API response: {e}") from e
 
+    @staticmethod
+    def _extract_json(text: str) -> Dict[str, Any]:
+        """Extract a JSON object from text that may contain markdown fences or be truncated.
+
+        Handles these cases in order:
+        1. Direct JSON parse
+        2. JSON wrapped in ```json ... ``` or ``` ... ``` fences
+        3. First { to last } substring
+        4. Truncated JSON (stop_reason=max_tokens) — close open arrays/objects
+
+        Args:
+            text: Raw text potentially containing JSON.
+
+        Returns:
+            Parsed JSON dictionary.
+
+        Raises:
+            json.JSONDecodeError: If no valid JSON could be extracted.
+        """
+        stripped = text.strip()
+
+        # 1. Direct parse
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+
+        # 2. Extract from markdown code fences
+        fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
+        if fence_match:
+            try:
+                return json.loads(fence_match.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Find the outermost { ... } span
+        first_brace = stripped.find("{")
+        if first_brace >= 0:
+            last_brace = stripped.rfind("}")
+            if last_brace > first_brace:
+                try:
+                    return json.loads(stripped[first_brace : last_brace + 1])
+                except json.JSONDecodeError:
+                    pass
+
+            # 4. Truncated JSON — try to close open brackets/braces
+            candidate = stripped[first_brace:]
+            # Remove any trailing incomplete string value (unmatched quote)
+            candidate = re.sub(r',\s*"[^"]*$', "", candidate)
+            candidate = re.sub(r',\s*$', "", candidate)
+            # Count open/close brackets
+            open_braces = candidate.count("{") - candidate.count("}")
+            open_brackets = candidate.count("[") - candidate.count("]")
+            if open_braces > 0 or open_brackets > 0:
+                candidate += "]" * open_brackets + "}" * open_braces
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    pass
+
+        raise json.JSONDecodeError("No valid JSON found", text, 0)
+
     async def chat_completion_json(
         self,
         messages: List[Dict[str, str]],
@@ -160,7 +261,9 @@ class LLMService:
     ) -> Dict[str, Any]:
         """Make a chat completion request expecting a JSON response.
 
-        This method requests JSON output format from the API and parses the response.
+        This method relies on prompt engineering to get JSON output from the API
+        and parses the response. It robustly handles markdown-wrapped and
+        truncated JSON responses.
 
         Args:
             messages: List of message dictionaries with 'role' and 'content' keys.
@@ -175,38 +278,18 @@ class LLMService:
             LLMConfigurationError: If the service is not properly configured.
             LLMAPIError: If the API request fails or response is not valid JSON.
         """
-        # Request JSON response format
         response_text = await self.chat_completion(
             messages=messages,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"},
         )
 
         try:
-            result = json.loads(response_text)
+            result = self._extract_json(response_text)
             logger.debug(f"LLM JSON response keys: {list(result.keys()) if isinstance(result, dict) else f'array[{len(result)}]'}")
             return result
         except json.JSONDecodeError as e:
-            # Try to extract JSON from the response if it's wrapped in markdown
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                if json_end > json_start:
-                    try:
-                        return json.loads(response_text[json_start:json_end].strip())
-                    except json.JSONDecodeError:
-                        pass
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                if json_end > json_start:
-                    try:
-                        return json.loads(response_text[json_start:json_end].strip())
-                    except json.JSONDecodeError:
-                        pass
-
             logger.error(f"LLM response is not valid JSON: {response_text[:500]}")
             raise LLMAPIError(f"LLM response is not valid JSON: {e}") from e
 

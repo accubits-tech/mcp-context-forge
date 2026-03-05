@@ -16,9 +16,9 @@ from dataclasses import dataclass
 class LLMConfig:
     """LLM configuration settings."""
 
-    api_base_url: str = "https://api.openai.com/v1"
+    api_base_url: str = "https://api.anthropic.com"
     api_key: str = ""
-    model: str = "gpt-4o"
+    model: str = "claude-sonnet-4-5-20250929"
     timeout: int = 120
     temperature: float = 0.7
     max_tokens: int = 4096
@@ -27,9 +27,9 @@ class LLMConfig:
     def from_env(cls) -> "LLMConfig":
         """Load configuration from environment variables."""
         return cls(
-            api_base_url=os.getenv("MCP_CREATOR_LLM_API_BASE_URL", "https://api.openai.com/v1"),
+            api_base_url=os.getenv("MCP_CREATOR_LLM_API_BASE_URL", "https://api.anthropic.com"),
             api_key=os.getenv("MCP_CREATOR_LLM_API_KEY", ""),
-            model=os.getenv("MCP_CREATOR_LLM_MODEL", "gpt-4o"),
+            model=os.getenv("MCP_CREATOR_LLM_MODEL", "claude-sonnet-4-5-20250929"),
             timeout=int(os.getenv("MCP_CREATOR_LLM_TIMEOUT", "120")),
             temperature=float(os.getenv("MCP_CREATOR_LLM_TEMPERATURE", "0.7")),
             max_tokens=int(os.getenv("MCP_CREATOR_LLM_MAX_TOKENS", "4096")),

@@ -438,9 +438,9 @@ class Settings(BaseSettings):
     llmchat_chat_history_max_messages: int = Field(default=50, description="Maximum message history to store per user")
 
     # LLM Configuration for AI-enhanced analysis (OpenAPI/API docs parsing)
-    llm_api_base_url: str = Field(default="https://api.openai.com/v1", description="Base URL for OpenAI-compatible LLM API")
+    llm_api_base_url: str = Field(default="https://api.anthropic.com", description="Base URL for Anthropic LLM API")
     llm_api_key: SecretStr = Field(default=SecretStr(""), description="API key for LLM service")
-    llm_model: str = Field(default="gpt-4o", description="Model name for LLM API")
+    llm_model: str = Field(default="claude-sonnet-4-5-20250929", description="Model name for LLM API")
     llm_timeout: int = Field(default=120, description="Timeout in seconds for LLM API calls")
     llm_max_tokens: int = Field(default=4096, description="Maximum tokens for LLM responses")
     llm_temperature: float = Field(default=0.7, description="Temperature for LLM responses")
@@ -453,6 +453,11 @@ class Settings(BaseSettings):
     doc_crawler_enable_js_rendering: bool = Field(default=False, description="Enable optional Playwright JS rendering for SPA doc sites")
     doc_crawler_respect_robots_txt: bool = Field(default=True, description="Respect robots.txt when crawling documentation")
     doc_crawler_max_redirects: int = Field(default=5, description="Maximum redirect hops to follow per URL")
+
+    # Firecrawl Configuration (optional, replaces custom crawler when enabled)
+    firecrawl_api_url: str = Field(default="https://api.firecrawl.dev", description="Firecrawl API URL (default: hosted API, or self-hosted e.g., http://localhost:3002)")
+    firecrawl_api_key: str = Field(default="", description="Firecrawl API key (required for hosted API at api.firecrawl.dev, not needed for self-hosted)")
+    firecrawl_enabled: bool = Field(default=False, description="Use Firecrawl for documentation crawling instead of custom crawler")
 
     @field_validator("jwt_secret_key", "auth_encryption_secret")
     @classmethod

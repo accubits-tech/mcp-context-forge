@@ -32,7 +32,11 @@ and generating clear, accurate descriptions for tools. You pay special attention
 parameter validation, proper HTTP method usage, and can intelligently extract API information from
 incomplete or unstructured documentation.
 
-Always respond with valid JSON when asked to provide structured output."""
+CRITICAL OUTPUT RULES:
+- Respond with ONLY raw JSON. No markdown, no code fences (```), no backticks, no explanatory text.
+- Your response must start with the character '{' and end with '}'.
+- Do NOT wrap your response in ```json``` or any other formatting.
+- Keep responses concise — include only the requested fields, no extra commentary."""
 
 
 class OpenAPIAgent:
@@ -731,20 +735,21 @@ Focus on making tools more discoverable, understandable, and safe to use."""
         return enhanced_tools
 
     async def extract_tools_from_raw_content(
-        self, raw_content: str, base_url: str, source_info: Optional[Dict[str, Any]] = None, chunk_size: int = 20000, auth_context: Optional[Dict[str, Any]] = None
+        self, raw_content: str, base_url: str, source_info: Optional[Dict[str, Any]] = None, chunk_size: int = 10000, auth_context: Optional[Dict[str, Any]] = None, max_parallel: int = 5
     ) -> List[Dict[str, Any]]:
         """Extract tool definitions directly from raw API documentation content.
 
         This method passes the raw documentation content directly to the LLM,
         which analyzes it and returns complete tool definitions. For large documents,
-        it automatically chunks the content and makes multiple LLM calls.
+        it automatically chunks the content and makes parallel LLM calls.
 
         Args:
             raw_content: Raw API documentation content (text, HTML, markdown, etc.)
             base_url: Base URL for the API endpoints
             source_info: Optional metadata about the source (filename, url, format)
-            chunk_size: Maximum characters per LLM call (default 20000)
+            chunk_size: Maximum characters per LLM call (default 10000)
             auth_context: Optional deep auth extraction results from AuthExtractionService
+            max_parallel: Maximum number of parallel LLM calls (default 5)
 
         Returns:
             List of tool definition dictionaries ready for ToolCreate
@@ -760,17 +765,27 @@ Focus on making tools more discoverable, understandable, and safe to use."""
         content_chunks = self._chunk_content(raw_content, chunk_size)
         total_chunks = len(content_chunks)
 
-        logger.info(f"Extracting tools from {len(raw_content)} chars of content ({total_chunks} chunk(s))")
+        logger.info(f"Extracting tools from {len(raw_content)} chars of content ({total_chunks} chunk(s), max_parallel={max_parallel})")
 
-        for chunk_idx, chunk in enumerate(content_chunks):
-            try:
-                chunk_tools = await self._extract_tools_from_chunk(chunk=chunk, base_url=base_url, source_info=source_info, chunk_idx=chunk_idx, total_chunks=total_chunks, auth_context=auth_context)
-                all_tools.extend(chunk_tools)
-                logger.info(f"Extracted {len(chunk_tools)} tools from chunk {chunk_idx + 1}/{total_chunks}")
+        # Process chunks in parallel batches
+        for batch_start in range(0, total_chunks, max_parallel):
+            batch_end = min(batch_start + max_parallel, total_chunks)
+            batch = content_chunks[batch_start:batch_end]
 
-            except Exception as e:
-                logger.error(f"Failed to extract tools from chunk {chunk_idx + 1}: {e}")
-                continue
+            tasks = [
+                self._extract_tools_from_chunk(chunk=chunk, base_url=base_url, source_info=source_info, chunk_idx=batch_start + i, total_chunks=total_chunks, auth_context=auth_context)
+                for i, chunk in enumerate(batch)
+            ]
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for i, result in enumerate(results):
+                chunk_idx = batch_start + i
+                if isinstance(result, Exception):
+                    logger.error(f"Failed to extract tools from chunk {chunk_idx + 1}: {result}")
+                else:
+                    all_tools.extend(result)
+                    logger.info(f"Extracted {len(result)} tools from chunk {chunk_idx + 1}/{total_chunks}")
 
         # Deduplicate tools by name
         seen_names = set()
@@ -928,15 +943,23 @@ Return a JSON object with this structure:
 }}
 
 If no endpoints are found in this content, return: {{"tools": [], "extraction_notes": "No API endpoints found in this section"}}
+
+REMINDER: Output ONLY the raw JSON object. Do NOT wrap it in ```json``` or any markdown. Start with {{ and end with }}.
 """
 
-        messages = [{"role": "system", "content": OPENAPI_ANALYST_SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+        base_messages = [
+            {"role": "system", "content": OPENAPI_ANALYST_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "{"},
+        ]
 
-        # Retry loop for transient LLM failures
+        # Retry loop for transient LLM failures — on retry, feed back the error
+        # so the LLM can correct its output format.
         last_error = None
+        messages = list(base_messages)
         for attempt in range(max_retries + 1):
             try:
-                response = await self.llm_service.chat_completion_json(messages, max_tokens=8000)
+                response = await self.llm_service.chat_completion_json(messages, max_tokens=8192)
 
                 tools = response.get("tools", [])
 
@@ -962,6 +985,15 @@ If no endpoints are found in this content, return: {{"tools": [], "extraction_no
                     wait_time = 2**attempt  # Exponential backoff: 1s, 2s
                     logger.warning(f"LLM API error on attempt {attempt + 1}/{max_retries + 1}, retrying in {wait_time}s: {e}")
                     await asyncio.sleep(wait_time)
+
+                    # Rebuild messages with error feedback for the next attempt
+                    messages = [
+                        {"role": "system", "content": OPENAPI_ANALYST_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": "{"},
+                        {"role": "user", "content": f"Your previous response failed to parse: {e}\n\nPlease try again. Respond with ONLY a raw JSON object — no markdown, no code fences. Start with {{ and end with }}. Keep the response concise to avoid truncation."},
+                        {"role": "assistant", "content": "{"},
+                    ]
                 else:
                     logger.error(f"LLM API error after {max_retries + 1} attempts: {e}")
 

@@ -12,7 +12,6 @@ base URL inference, robots.txt respect, and politeness controls.
 # Standard
 import asyncio
 from dataclasses import dataclass, field
-import re
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
@@ -24,6 +23,11 @@ import httpx
 
 # First-Party
 from mcpgateway.config import settings
+from mcpgateway.services.doc_post_processing import (
+    classify_page_as_auth,
+    detect_openapi_spec,
+    infer_base_urls,
+)
 from mcpgateway.services.logging_service import LoggingService
 
 logging_service = LoggingService()
@@ -111,39 +115,6 @@ _SKIP_EXTENSIONS = frozenset(
     ]
 )
 
-# Common paths where OpenAPI specs are often served
-_COMMON_SPEC_PATHS = [
-    "/openapi.json",
-    "/openapi.yaml",
-    "/swagger.json",
-    "/swagger.yaml",
-    "/v3/api-docs",
-    "/api/openapi.json",
-    "/api/swagger.json",
-    "/api/v1/openapi.json",
-    "/api/v2/openapi.json",
-    "/api/v3/openapi.json",
-    "/docs/openapi.json",
-    "/api-docs",
-    "/api-docs.json",
-]
-
-# Keywords in URL or title that suggest an authentication/authorization page
-_AUTH_PAGE_KEYWORDS = [
-    "auth",
-    "authentication",
-    "authorization",
-    "oauth",
-    "api-key",
-    "api-keys",
-    "apikey",
-    "credentials",
-    "security",
-    "token",
-    "tokens",
-    "getting-started/authentication",
-]
-
 
 class DocumentationCrawlerService:
     """Multi-page documentation crawler with OpenAPI auto-detection."""
@@ -181,7 +152,15 @@ class DocumentationCrawlerService:
             final_url, response = await self._fetch_with_redirects(url)
 
             # Step 2: Check if the response IS an OpenAPI spec or links to one
-            spec_url, spec_dict = await self._detect_openapi_spec(final_url, response)
+            async def _fetch_spec_url(spec_url: str) -> Tuple[str, str]:
+                """Fetch a spec URL and return (final_url, text)."""
+                fu, resp = await self._fetch_with_redirects(spec_url)
+                return fu, resp.text
+
+            content_type = response.headers.get("content-type", "").lower()
+            spec_url, spec_dict = await detect_openapi_spec(
+                final_url, content_type, response.text, _fetch_spec_url, user_agent=self._user_agent
+            )
             if spec_url:
                 result.discovered_openapi_spec_url = spec_url
             if spec_dict:
@@ -196,12 +175,13 @@ class DocumentationCrawlerService:
 
             # Step 4: Classify auth pages
             for page in pages:
-                page.is_auth_page = self._classify_page_as_auth(page)
+                page.is_auth_page = classify_page_as_auth(page.url, page.title, page.content)
                 if page.is_auth_page:
                     result.auth_pages.append(page)
 
             # Step 5: Infer base URLs
-            result.base_url_candidates = self._infer_base_urls(pages, url)
+            pages_content = [(p.url, p.content) for p in pages]
+            result.base_url_candidates = infer_base_urls(pages_content, url)
 
             # Step 6: Aggregate content
             result.pages = pages
@@ -273,131 +253,6 @@ class DocumentationCrawlerService:
                 return current_url, response
 
         raise ValueError(f"Too many redirects ({self.max_redirects}) starting from {url}")
-
-    # ------------------------------------------------------------------
-    # OpenAPI spec detection
-    # ------------------------------------------------------------------
-
-    async def _detect_openapi_spec(self, url: str, response: httpx.Response) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """Check if the response IS an OpenAPI spec or embeds/links to one.
-
-        Returns:
-            Tuple of (spec_url_or_None, parsed_spec_dict_or_None).
-        """
-        content_type = response.headers.get("content-type", "").lower()
-        content_text = response.text
-
-        # Check if response itself is a spec (JSON or YAML)
-        if "json" in content_type or "yaml" in content_type:
-            spec = self._try_parse_spec(content_text)
-            if spec:
-                return url, spec
-
-        # If HTML, look for embedded spec references
-        if "html" in content_type:
-            spec_url = self._extract_spec_url_from_html(content_text, url)
-            if spec_url:
-                try:
-                    spec_final_url, spec_response = await self._fetch_with_redirects(spec_url)
-                    spec = self._try_parse_spec(spec_response.text)
-                    if spec:
-                        return spec_final_url, spec
-                except Exception as e:
-                    logger.warning(f"Failed to fetch detected spec URL {spec_url}: {e}")
-
-        # Probe common spec paths
-        spec_url, spec = await self._probe_common_spec_paths(url)
-        if spec_url:
-            return spec_url, spec
-
-        return None, None
-
-    def _try_parse_spec(self, content: str) -> Optional[Dict[str, Any]]:
-        """Try to parse content as OpenAPI spec (JSON or YAML)."""
-        # Standard
-        import json
-
-        # Third-Party
-        import yaml
-
-        # Try JSON
-        try:
-            data = json.loads(content)
-            if isinstance(data, dict) and ("openapi" in data or "swagger" in data):
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # Try YAML
-        try:
-            data = yaml.safe_load(content)
-            if isinstance(data, dict) and ("openapi" in data or "swagger" in data):
-                return data
-        except Exception:
-            pass
-
-        return None
-
-    def _extract_spec_url_from_html(self, html: str, base_url: str) -> Optional[str]:
-        """Extract OpenAPI/Swagger spec URL from HTML content.
-
-        Looks for:
-        - SwaggerUIBundle({url: "..."}) in script tags
-        - <redoc spec-url="..."> elements
-        - <link> tags with openapi/swagger in href
-        """
-        # SwaggerUIBundle url pattern
-        swagger_ui_match = re.search(r'SwaggerUIBundle\s*\(\s*\{[^}]*url\s*:\s*["\']([^"\']+)["\']', html)
-        if swagger_ui_match:
-            return urljoin(base_url, swagger_ui_match.group(1))
-
-        # Redoc spec-url attribute
-        redoc_match = re.search(r'<redoc[^>]+spec-url\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
-        if redoc_match:
-            return urljoin(base_url, redoc_match.group(1))
-
-        # spec-url in any element (some custom doc renderers)
-        spec_url_match = re.search(r'spec-url\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
-        if spec_url_match:
-            return urljoin(base_url, spec_url_match.group(1))
-
-        # Link tags with openapi/swagger references
-        soup = BeautifulSoup(html, "html.parser")
-        for link in soup.find_all("link", href=True):
-            href = link["href"].lower()
-            if any(kw in href for kw in ["openapi", "swagger", "api-docs"]):
-                return urljoin(base_url, link["href"])
-
-        # Script tags with spec URL references
-        for script in soup.find_all("script"):
-            if script.string:
-                # Look for spec URL assignment patterns
-                url_match = re.search(r'(?:spec|swagger|openapi)(?:Url|_url|URL)\s*[:=]\s*["\']([^"\']+)["\']', script.string)
-                if url_match:
-                    return urljoin(base_url, url_match.group(1))
-
-        return None
-
-    async def _probe_common_spec_paths(self, doc_url: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """HEAD/GET common spec paths to find an OpenAPI spec."""
-        parsed = urlparse(doc_url)
-        base = f"{parsed.scheme}://{parsed.netloc}"
-
-        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-            for path in _COMMON_SPEC_PATHS:
-                probe_url = base + path
-                try:
-                    _validate_url_not_internal(probe_url)
-                    resp = await client.get(probe_url, headers={"User-Agent": self._user_agent, "Accept": "application/json,application/yaml"})
-                    if resp.status_code == 200:
-                        spec = self._try_parse_spec(resp.text)
-                        if spec:
-                            logger.info(f"Found OpenAPI spec at probed path: {probe_url}")
-                            return probe_url, spec
-                except Exception:
-                    continue
-
-        return None, None
 
     # ------------------------------------------------------------------
     # Multi-page BFS crawl
@@ -609,87 +464,6 @@ class DocumentationCrawlerService:
                 links.append(full_url)
 
         return links
-
-    # ------------------------------------------------------------------
-    # Auth page classification
-    # ------------------------------------------------------------------
-
-    def _classify_page_as_auth(self, page: CrawledPage) -> bool:
-        """Detect if a page is about authentication/authorization."""
-        url_lower = page.url.lower()
-        title_lower = page.title.lower()
-
-        # Check URL path
-        for keyword in _AUTH_PAGE_KEYWORDS:
-            if keyword in url_lower:
-                return True
-
-        # Check title
-        for keyword in _AUTH_PAGE_KEYWORDS:
-            if keyword in title_lower:
-                return True
-
-        # Check content keyword density (at least 5 auth mentions in first 2000 chars)
-        content_sample = page.content[:2000].lower()
-        auth_mentions = sum(1 for kw in ["authentication", "authorization", "api key", "bearer token", "oauth", "credentials", "access token"] if kw in content_sample)
-        return auth_mentions >= 3
-
-    # ------------------------------------------------------------------
-    # Base URL inference
-    # ------------------------------------------------------------------
-
-    def _infer_base_urls(self, pages: List[CrawledPage], doc_url: str) -> List[str]:
-        """Extract API base URL candidates from crawled content.
-
-        Checks for:
-        - Explicit "Base URL:" declarations
-        - curl example domains
-        - Most frequent API domain in code examples
-        - api.{root_domain} derivation
-        """
-        candidates: Dict[str, int] = {}
-
-        all_content = "\n".join(p.content for p in pages)
-
-        # Pattern 1: Explicit base URL declarations
-        base_url_patterns = [
-            r"(?:base\s*url|api\s*(?:base|root)\s*url|endpoint)\s*[:=]\s*(https?://[^\s,\"'`]+)",
-            r"(?:Base URL|BASE_URL|baseUrl|baseURL)\s*[:=]\s*[\"']?(https?://[^\s,\"'`]+)",
-        ]
-        for pattern in base_url_patterns:
-            for match in re.finditer(pattern, all_content, re.IGNORECASE):
-                url = match.group(1).rstrip("/")
-                candidates[url] = candidates.get(url, 0) + 10  # high weight
-
-        # Pattern 2: curl example domains
-        curl_pattern = r"curl\s+(?:-[^\s]+\s+)*[\"']?(https?://[^\s\"']+)"
-        for match in re.finditer(curl_pattern, all_content):
-            full_url = match.group(1)
-            parsed = urlparse(full_url)
-            base = f"{parsed.scheme}://{parsed.netloc}"
-            if parsed.netloc != urlparse(doc_url).netloc:  # different from doc domain
-                candidates[base] = candidates.get(base, 0) + 5
-
-        # Pattern 3: Code example URLs (any https:// in content that differs from doc domain)
-        code_url_pattern = r"(https?://(?:api|rest|gateway|service)\.[^\s\"'`\])<>]+)"
-        for match in re.finditer(code_url_pattern, all_content, re.IGNORECASE):
-            parsed = urlparse(match.group(1))
-            base = f"{parsed.scheme}://{parsed.netloc}"
-            candidates[base] = candidates.get(base, 0) + 3
-
-        # Pattern 4: Derive api.{root_domain} from doc URL
-        parsed_doc = urlparse(doc_url)
-        doc_domain = parsed_doc.netloc
-        domain_parts = doc_domain.split(".")
-        if len(domain_parts) >= 2:
-            root_domain = ".".join(domain_parts[-2:])
-            api_candidate = f"{parsed_doc.scheme}://api.{root_domain}"
-            if api_candidate not in candidates:
-                candidates[api_candidate] = 1
-
-        # Sort by score descending
-        sorted_candidates = sorted(candidates.items(), key=lambda x: x[1], reverse=True)
-        return [url for url, _ in sorted_candidates[:5]]
 
     # ------------------------------------------------------------------
     # robots.txt

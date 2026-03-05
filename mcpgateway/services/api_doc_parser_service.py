@@ -25,6 +25,7 @@ import httpx
 from markdown import markdown
 
 # First-Party
+from mcpgateway.config import settings
 from mcpgateway.schemas import ToolCreate
 from mcpgateway.services.logging_service import LoggingService
 
@@ -159,13 +160,20 @@ class APIDocumentationParserService:
     async def _parse_with_crawler(self, url: str, format_hint: str, base_url: Optional[str]) -> Dict[str, Any]:
         """Parse documentation using the multi-page crawler.
 
-        Delegates to DocumentationCrawlerService for crawling, then builds
-        a standard doc_structure from the crawl result.
+        Delegates to DocumentationCrawlerService or FirecrawlCrawlerService
+        (based on settings) for crawling, then builds a standard doc_structure
+        from the crawl result.
         """
-        # First-Party
-        from mcpgateway.services.doc_crawler_service import DocumentationCrawlerService  # pylint: disable=import-outside-toplevel
+        if getattr(settings, "firecrawl_enabled", False) and getattr(settings, "firecrawl_api_url", ""):
+            # First-Party
+            from mcpgateway.services.firecrawl_crawler_service import FirecrawlCrawlerService  # pylint: disable=import-outside-toplevel
 
-        crawler = DocumentationCrawlerService()
+            crawler = FirecrawlCrawlerService()
+        else:
+            # First-Party
+            from mcpgateway.services.doc_crawler_service import DocumentationCrawlerService  # pylint: disable=import-outside-toplevel
+
+            crawler = DocumentationCrawlerService()
         crawl_result = await crawler.crawl_documentation(url, enable_crawling=True)
 
         # If an OpenAPI spec was discovered, include it in the doc_structure
