@@ -27,6 +27,7 @@ Structure:
 
 # Standard
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 from datetime import datetime
 import json
@@ -98,6 +99,7 @@ from mcpgateway.schemas import (
     A2AAgentCreate,
     A2AAgentRead,
     A2AAgentUpdate,
+    AuthenticationValues,
     BatchAuthSummary,
     BulkAuthConfigRequest,
     BulkAuthConfigResponse,
@@ -146,6 +148,7 @@ from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, T
 from mcpgateway.transports.sse_transport import SSETransport
 from mcpgateway.transports.streamablehttp_transport import SessionManagerWrapper, streamable_http_auth
 from mcpgateway.utils.db_isready import wait_for_db_ready
+from mcpgateway.utils.services_auth import encode_auth
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.metadata_capture import MetadataCapture
 from mcpgateway.utils.orjson_response import ORJSONResponse
@@ -2878,6 +2881,12 @@ async def upload_openapi_spec(
     tags: Optional[str] = None,
     preview_only: bool = False,
     enhance_with_ai: bool = True,
+    auth_type: Optional[str] = None,
+    auth_username: Optional[str] = None,
+    auth_password: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    auth_header_key: Optional[str] = None,
+    auth_header_value: Optional[str] = None,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> Dict[str, Any]:
@@ -2890,6 +2899,12 @@ async def upload_openapi_spec(
         tags: Comma-separated additional tags for tools
         preview_only: If True, only preview tools without creating them
         enhance_with_ai: If True, use CrewAI agent to enhance descriptions
+        auth_type: Override auth type for all generated tools (basic, bearer, apiKey, none)
+        auth_username: Username for basic auth override
+        auth_password: Password for basic auth override
+        auth_token: Token for bearer auth override
+        auth_header_key: Header name for API key auth override
+        auth_header_value: Header value for API key auth override
         db: Database session
         user: Authenticated user
 
@@ -2936,6 +2951,12 @@ async def upload_openapi_spec(
 
         # Generate tools from specification
         tools = await openapi_service.generate_tools_from_spec(spec, base_url=base_url, gateway_id=gateway_id, tags=additional_tags)
+
+        # Apply auth override if provided
+        auth_override_obj = _build_auth_override_from_params(auth_type, auth_username, auth_password, auth_token, auth_header_key, auth_header_value)
+        if auth_override_obj:
+            logger.info(f"Applying auth override ({auth_type}) to {len(tools)} tools")
+            _apply_auth_override_to_tools(tools, auth_override_obj)
 
         # Enhance tools with AI if requested
         if enhance_with_ai and tools:
@@ -2992,6 +3013,8 @@ async def upload_openapi_spec(
 
         mock_request = _MockRequest()
 
+        auth_overridden = auth_override_obj is not None
+
         for tool in tools:
             try:
                 metadata = MetadataCapture.extract_creation_metadata(mock_request, user)
@@ -3013,7 +3036,7 @@ async def upload_openapi_spec(
                 auth_required = tool.auth is not None and tool.auth.auth_type is not None
                 tool_data["auth_required"] = auth_required
                 tool_data["auth_type"] = tool.auth.auth_type if tool.auth else None
-                tool_data["auth_configured"] = False  # Placeholders are not configured
+                tool_data["auth_configured"] = auth_overridden
                 created_tools.append(tool_data)
 
             except Exception as tool_error:
@@ -3023,11 +3046,14 @@ async def upload_openapi_spec(
         # Build auth summary
         auth_types_seen = set()
         tools_requiring_auth = 0
+        tools_configured = 0
         for t in created_tools:
             if t.get("auth_required"):
                 tools_requiring_auth += 1
                 if t.get("auth_type"):
                     auth_types_seen.add(t["auth_type"])
+                if t.get("auth_configured"):
+                    tools_configured += 1
 
         return {
             "status": "success",
@@ -3041,8 +3067,9 @@ async def upload_openapi_spec(
             "ai_enhanced": enhance_with_ai and len(tools) > 0,
             "auth_summary": {
                 "tools_requiring_auth": tools_requiring_auth,
-                "tools_configured": 0,
+                "tools_configured": tools_configured,
                 "auth_types": list(auth_types_seen),
+                "auth_overridden": auth_overridden,
             },
         }
 
@@ -3068,6 +3095,12 @@ async def process_openapi_url(
     tags: Optional[str] = Body(None),
     preview_only: bool = Body(False),
     enhance_with_ai: bool = Body(True),
+    auth_type: Optional[str] = Body(None),
+    auth_username: Optional[str] = Body(None),
+    auth_password: Optional[str] = Body(None),
+    auth_token: Optional[str] = Body(None),
+    auth_header_key: Optional[str] = Body(None),
+    auth_header_value: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> Dict[str, Any]:
@@ -3080,6 +3113,12 @@ async def process_openapi_url(
         tags: Comma-separated additional tags for tools
         preview_only: If True, only preview tools without creating them
         enhance_with_ai: If True, use AI agent to enhance descriptions
+        auth_type: Override auth type for all generated tools (basic, bearer, apiKey, none)
+        auth_username: Username for basic auth override
+        auth_password: Password for basic auth override
+        auth_token: Token for bearer auth override
+        auth_header_key: Header name for API key auth override
+        auth_header_value: Header value for API key auth override
         db: Database session
         user: Authenticated user
 
@@ -3195,6 +3234,12 @@ async def process_openapi_url(
         # Generate tools from specification
         tools = await openapi_service.generate_tools_from_spec(spec, base_url=base_url, gateway_id=gateway_id, tags=additional_tags)
 
+        # Apply auth override if provided
+        auth_override_obj = _build_auth_override_from_params(auth_type, auth_username, auth_password, auth_token, auth_header_key, auth_header_value)
+        if auth_override_obj:
+            logger.info(f"Applying auth override ({auth_type}) to {len(tools)} tools")
+            _apply_auth_override_to_tools(tools, auth_override_obj)
+
         # Enhance tools with AI if requested
         if enhance_with_ai and tools:
             logger.info("Enhancing tool descriptions with AI agent")
@@ -3250,6 +3295,8 @@ async def process_openapi_url(
 
         mock_request = _MockRequest()
 
+        auth_overridden = auth_override_obj is not None
+
         for tool in tools:
             try:
                 metadata = MetadataCapture.extract_creation_metadata(mock_request, user)
@@ -3271,7 +3318,7 @@ async def process_openapi_url(
                 auth_required = tool.auth is not None and tool.auth.auth_type is not None
                 tool_data["auth_required"] = auth_required
                 tool_data["auth_type"] = tool.auth.auth_type if tool.auth else None
-                tool_data["auth_configured"] = False  # Placeholders are not configured
+                tool_data["auth_configured"] = auth_overridden
                 created_tools.append(tool_data)
 
             except Exception as tool_error:
@@ -3281,11 +3328,14 @@ async def process_openapi_url(
         # Build auth summary
         auth_types_seen = set()
         tools_requiring_auth = 0
+        tools_configured = 0
         for t in created_tools:
             if t.get("auth_required"):
                 tools_requiring_auth += 1
                 if t.get("auth_type"):
                     auth_types_seen.add(t["auth_type"])
+                if t.get("auth_configured"):
+                    tools_configured += 1
 
         return {
             "status": "success",
@@ -3300,8 +3350,9 @@ async def process_openapi_url(
             "ai_enhanced": enhance_with_ai and len(tools) > 0,
             "auth_summary": {
                 "tools_requiring_auth": tools_requiring_auth,
-                "tools_configured": 0,
+                "tools_configured": tools_configured,
                 "auth_types": list(auth_types_seen),
+                "auth_overridden": auth_overridden,
             },
         }
 
@@ -3322,6 +3373,72 @@ async def process_openapi_url(
     except Exception as e:
         logger.error(f"Unexpected error processing {url}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+def _build_auth_override_from_params(
+    auth_type: Optional[str],
+    auth_username: Optional[str] = None,
+    auth_password: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    auth_header_key: Optional[str] = None,
+    auth_header_value: Optional[str] = None,
+) -> Optional[AuthenticationValues]:
+    """Build an AuthenticationValues override from individual form parameters.
+
+    Args:
+        auth_type: Auth type (basic, bearer, apiKey, none)
+        auth_username: Username for basic auth
+        auth_password: Password for basic auth
+        auth_token: Token for bearer auth
+        auth_header_key: Header name for API key auth
+        auth_header_value: Header value for API key auth
+
+    Returns:
+        AuthenticationValues if auth_type is provided and not 'none', else None
+    """
+    if not auth_type or auth_type.lower() == "none":
+        return None
+
+    auth_type_lower = auth_type.lower()
+
+    if auth_type_lower == "basic":
+        if not auth_username or not auth_password:
+            return None
+        encoded = encode_auth({"Authorization": f"Basic {base64.b64encode(f'{auth_username}:{auth_password}'.encode()).decode()}"})
+        return AuthenticationValues(auth_type="basic", auth_value=encoded)
+
+    elif auth_type_lower == "bearer":
+        if not auth_token:
+            return None
+        encoded = encode_auth({"Authorization": f"Bearer {auth_token}"})
+        return AuthenticationValues(auth_type="bearer", auth_value=encoded)
+
+    elif auth_type_lower in ("apikey", "api_key", "authheaders"):
+        if not auth_header_key or not auth_header_value:
+            return None
+        encoded = encode_auth({auth_header_key: auth_header_value})
+        return AuthenticationValues(auth_type="authheaders", auth_value=encoded)
+
+    return None
+
+
+def _apply_auth_override_to_tools(tools: List, auth_override: Optional[AuthenticationValues]) -> List:
+    """Apply auth override to all tools in the list.
+
+    Args:
+        tools: List of ToolCreate objects
+        auth_override: AuthenticationValues to apply to all tools, or None to skip
+
+    Returns:
+        The same list with auth overridden
+    """
+    if not auth_override:
+        return tools
+
+    for tool in tools:
+        tool.auth = auth_override
+
+    return tools
 
 
 ################################
@@ -3477,6 +3594,12 @@ async def upload_api_documentation(
     tags: Optional[str] = None,
     preview_only: bool = False,
     enhance_with_ai: bool = True,
+    auth_type: Optional[str] = None,
+    auth_username: Optional[str] = None,
+    auth_password: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    auth_header_key: Optional[str] = None,
+    auth_header_value: Optional[str] = None,
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> Dict[str, Any]:
@@ -3490,6 +3613,12 @@ async def upload_api_documentation(
         tags: Comma-separated additional tags for tools
         preview_only: If True, only preview tools without creating them
         enhance_with_ai: If True, use AI agent to enhance descriptions
+        auth_type: Override auth type for all generated tools (basic, bearer, apiKey, none)
+        auth_username: Username for basic auth override
+        auth_password: Password for basic auth override
+        auth_token: Token for bearer auth override
+        auth_header_key: Header name for API key auth override
+        auth_header_value: Header value for API key auth override
         db: Database session
         user: Authenticated user
 
@@ -3586,6 +3715,12 @@ async def upload_api_documentation(
             tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
             analysis = {"extraction_method": "regex", "ai_enabled": False}
 
+        # Apply auth override if provided
+        auth_override_obj = _build_auth_override_from_params(auth_type, auth_username, auth_password, auth_token, auth_header_key, auth_header_value)
+        if auth_override_obj:
+            logger.info(f"Applying auth override ({auth_type}) to {len(tools)} tools")
+            _apply_auth_override_to_tools(tools, auth_override_obj)
+
         return await _finalize_api_doc_tools(
             tools=tools,
             analysis=analysis,
@@ -3597,6 +3732,7 @@ async def upload_api_documentation(
             doc_structure=doc_structure,
             enhance_with_ai=enhance_with_ai,
             postprocessed=postprocessed,
+            auth_overridden=auth_override_obj is not None,
         )
 
     except HTTPException:
@@ -3626,6 +3762,7 @@ async def _finalize_api_doc_tools(
     doc_structure: Dict[str, Any],
     enhance_with_ai: bool,
     postprocessed=None,
+    auth_overridden: bool = False,
 ) -> Dict[str, Any]:
     """Shared finalization logic for API doc tool endpoints (preview, create, response building).
 
@@ -3640,6 +3777,7 @@ async def _finalize_api_doc_tools(
         doc_structure: Parsed documentation structure.
         enhance_with_ai: Whether AI was used.
         postprocessed: Optional PostProcessedResult from LLM post-processor.
+        auth_overridden: Whether auth was overridden by user-provided credentials.
     """
     # Check if any tools were found
     if not tools:
@@ -3707,7 +3845,7 @@ async def _finalize_api_doc_tools(
                     "tags": db_tool.tags or [],
                     "auth_required": auth_required,
                     "auth_type": tool.auth.auth_type if tool.auth else None,
-                    "auth_configured": False,
+                    "auth_configured": auth_overridden,
                 }
             )
             logger.info(f"Created tool: {db_tool.name}")
@@ -3719,11 +3857,14 @@ async def _finalize_api_doc_tools(
     # Build auth summary
     auth_types_seen = set()
     tools_requiring_auth = 0
+    tools_configured = 0
     for t in created_tools:
         if t.get("auth_required"):
             tools_requiring_auth += 1
             if t.get("auth_type"):
                 auth_types_seen.add(t["auth_type"])
+            if t.get("auth_configured"):
+                tools_configured += 1
 
     result = {
         "success": len(created_tools) > 0,
@@ -3734,8 +3875,9 @@ async def _finalize_api_doc_tools(
         "analysis": analysis,
         "auth_summary": {
             "tools_requiring_auth": tools_requiring_auth,
-            "tools_configured": 0,
+            "tools_configured": tools_configured,
             "auth_types": list(auth_types_seen),
+            "auth_overridden": auth_overridden,
         },
     }
 
@@ -3766,6 +3908,12 @@ async def process_api_documentation_url(
     preview_only: bool = Body(False),
     enhance_with_ai: bool = Body(True),
     enable_crawling: bool = Body(True),
+    auth_type: Optional[str] = Body(None),
+    auth_username: Optional[str] = Body(None),
+    auth_password: Optional[str] = Body(None),
+    auth_token: Optional[str] = Body(None),
+    auth_header_key: Optional[str] = Body(None),
+    auth_header_value: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ) -> Dict[str, Any]:
@@ -3783,6 +3931,12 @@ async def process_api_documentation_url(
         preview_only: If True, only preview tools without creating them
         enhance_with_ai: If True, use AI agent to enhance descriptions
         enable_crawling: If True, enable multi-page documentation crawling
+        auth_type: Override auth type for all generated tools (basic, bearer, apiKey, none)
+        auth_username: Username for basic auth override
+        auth_password: Password for basic auth override
+        auth_token: Token for bearer auth override
+        auth_header_key: Header name for API key auth override
+        auth_header_value: Header value for API key auth override
         db: Database session
         user: Authenticated user
 
@@ -3843,6 +3997,12 @@ async def process_api_documentation_url(
                     # Use the OpenAPI-derived tools directly (they're already ToolCreate objects)
                     tools = spec_tools
 
+                    # Apply auth override if provided
+                    url_auth_override = _build_auth_override_from_params(auth_type, auth_username, auth_password, auth_token, auth_header_key, auth_header_value)
+                    if url_auth_override:
+                        logger.info(f"Applying auth override ({auth_type}) to {len(tools)} OpenAPI-derived tools")
+                        _apply_auth_override_to_tools(tools, url_auth_override)
+
                     # Skip to tool creation / preview below
                     return await _finalize_api_doc_tools(
                         tools=tools,
@@ -3855,6 +4015,7 @@ async def process_api_documentation_url(
                         doc_structure=doc_structure,
                         enhance_with_ai=enhance_with_ai,
                         postprocessed=postprocessed,
+                        auth_overridden=url_auth_override is not None,
                     )
             except Exception as e:
                 logger.warning(f"OpenAPI spec processing failed ({e}), falling back to doc extraction")
@@ -3935,6 +4096,12 @@ async def process_api_documentation_url(
             tools = await api_doc_parser_service.generate_tools_from_documentation(doc_structure, base_url, gateway_id=gateway_id, tags=additional_tags)
             analysis = {"extraction_method": "regex", "ai_enabled": False, "crawl_stats": crawl_stats}
 
+        # Apply auth override if provided
+        url_auth_override = _build_auth_override_from_params(auth_type, auth_username, auth_password, auth_token, auth_header_key, auth_header_value)
+        if url_auth_override:
+            logger.info(f"Applying auth override ({auth_type}) to {len(tools)} tools")
+            _apply_auth_override_to_tools(tools, url_auth_override)
+
         return await _finalize_api_doc_tools(
             tools=tools,
             analysis=analysis,
@@ -3946,6 +4113,7 @@ async def process_api_documentation_url(
             doc_structure=doc_structure,
             enhance_with_ai=enhance_with_ai,
             postprocessed=postprocessed,
+            auth_overridden=url_auth_override is not None,
         )
 
     except HTTPException:

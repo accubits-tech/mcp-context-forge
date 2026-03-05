@@ -1403,10 +1403,11 @@ catalog_servers:
     name: "Azure MCP Server"
     category: "Cloud Infrastructure"
     url: "http://azure-mcp:5000"
-    auth_type: "API Key"
+    transport: "STREAMABLEHTTP"
+    auth_type: "Open"
     provider: "Microsoft"
     description: "Microsoft's official MCP server for Azure, enabling AI agents to manage 40+ Azure services including resource groups, VMs, storage, Cosmos DB, Key Vault, AKS, App Service, Container Apps, and more through natural language."
-    requires_api_key: true
+    requires_api_key: false
     tags: ["cloud", "azure", "infrastructure", "devops"]
     logo_url: "https://img.logo.dev/azure.microsoft.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
     documentation_url: "https://learn.microsoft.com/en-us/azure/developer/azure-mcp-server/get-started"
@@ -1417,11 +1418,12 @@ catalog_servers:
         - AZURE_CLIENT_ID
         - AZURE_CLIENT_SECRET
       setup_guide: |
-        Authentication uses Azure Entra ID (Service Principal) via environment variables.
+        Authentication uses Azure Entra ID (Service Principal) via container environment variables.
+        No HTTP headers needed — the Azure MCP server authenticates outbound to Azure APIs
+        internally using EnvironmentCredential (AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET).
         1. Create a service principal: az ad sp create-for-rbac --name "mcp-server" --role contributor --scopes /subscriptions/<sub-id>
-        2. Set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET from the output
-        3. These are passed as container environment variables (not HTTP headers)
-        4. The server authenticates with Azure APIs internally using EnvironmentCredential
+        2. Set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET in your .env file
+        3. Docker compose passes these as container environment variables automatically
 
   # Local Development Servers
   - id: fast-time-server
