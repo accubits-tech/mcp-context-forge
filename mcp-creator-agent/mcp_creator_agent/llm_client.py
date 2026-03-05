@@ -72,9 +72,7 @@ class LLMClient:
             LLMAPIError: If the API request fails.
         """
         if not self.is_configured():
-            raise LLMConfigurationError(
-                "LLM client is not configured. Set MCP_CREATOR_LLM_API_KEY environment variable."
-            )
+            raise LLMConfigurationError("LLM client is not configured. Set MCP_CREATOR_LLM_API_KEY environment variable.")
 
         url = f"{self.config.api_base_url.rstrip('/')}/v1/messages"
         headers = {
@@ -163,7 +161,7 @@ class LLMClient:
             # 4. Truncated JSON — try to close open brackets/braces
             candidate = stripped[first_brace:]
             candidate = re.sub(r',\s*"[^"]*$', "", candidate)
-            candidate = re.sub(r',\s*$', "", candidate)
+            candidate = re.sub(r",\s*$", "", candidate)
             open_braces = candidate.count("{") - candidate.count("}")
             open_brackets = candidate.count("[") - candidate.count("]")
             if open_braces > 0 or open_brackets > 0:

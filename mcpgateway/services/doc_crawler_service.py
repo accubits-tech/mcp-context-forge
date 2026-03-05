@@ -158,9 +158,7 @@ class DocumentationCrawlerService:
                 return fu, resp.text
 
             content_type = response.headers.get("content-type", "").lower()
-            spec_url, spec_dict = await detect_openapi_spec(
-                final_url, content_type, response.text, _fetch_spec_url, user_agent=self._user_agent
-            )
+            spec_url, spec_dict = await detect_openapi_spec(final_url, content_type, response.text, _fetch_spec_url, user_agent=self._user_agent)
             if spec_url:
                 result.discovered_openapi_spec_url = spec_url
             if spec_dict:

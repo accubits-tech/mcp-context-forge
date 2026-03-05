@@ -991,7 +991,10 @@ REMINDER: Output ONLY the raw JSON object. Do NOT wrap it in ```json``` or any m
                         {"role": "system", "content": OPENAPI_ANALYST_SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                         {"role": "assistant", "content": "{"},
-                        {"role": "user", "content": f"Your previous response failed to parse: {e}\n\nPlease try again. Respond with ONLY a raw JSON object — no markdown, no code fences. Start with {{ and end with }}. Keep the response concise to avoid truncation."},
+                        {
+                            "role": "user",
+                            "content": f"Your previous response failed to parse: {e}\n\nPlease try again. Respond with ONLY a raw JSON object — no markdown, no code fences. Start with {{ and end with }}. Keep the response concise to avoid truncation.",
+                        },
                         {"role": "assistant", "content": "{"},
                     ]
                 else:

@@ -9,7 +9,6 @@ for OpenAPI spec detection, auth page classification, and base URL inference.
 """
 
 # Standard
-import asyncio
 import time
 from typing import Any, Dict, List, Optional, Tuple
 

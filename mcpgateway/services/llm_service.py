@@ -239,7 +239,7 @@ class LLMService:
             candidate = stripped[first_brace:]
             # Remove any trailing incomplete string value (unmatched quote)
             candidate = re.sub(r',\s*"[^"]*$', "", candidate)
-            candidate = re.sub(r',\s*$', "", candidate)
+            candidate = re.sub(r",\s*$", "", candidate)
             # Count open/close brackets
             open_braces = candidate.count("{") - candidate.count("}")
             open_brackets = candidate.count("[") - candidate.count("]")
