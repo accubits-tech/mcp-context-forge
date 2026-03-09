@@ -705,6 +705,15 @@ class ToolService:
                 ).scalar_one_or_none()
                 if existing_tool:
                     raise ToolNameConflictError(existing_tool.name, enabled=existing_tool.enabled, tool_id=existing_tool.id, visibility=existing_tool.visibility)
+            elif visibility.lower() == "private":
+                # Check for existing private tool with the same name and owner
+                private_owner = owner_email or created_by
+                if private_owner:
+                    existing_tool = db.execute(
+                        select(DbTool).where(DbTool.name == tool.name, DbTool.visibility == "private", DbTool.owner_email == private_owner)
+                    ).scalar_one_or_none()
+                    if existing_tool:
+                        raise ToolNameConflictError(existing_tool.name, enabled=existing_tool.enabled, tool_id=existing_tool.id, visibility=existing_tool.visibility)
 
             db_tool = DbTool(
                 original_name=tool.name,
