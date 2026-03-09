@@ -122,6 +122,8 @@ async def initiate_oauth_flow(
                     oauth_config["client_id"] = registered_client.client_id
                     if decrypted_secret:
                         oauth_config["client_secret"] = decrypted_secret
+                    if registered_client.token_endpoint_auth_method:
+                        oauth_config["token_endpoint_auth_method"] = registered_client.token_endpoint_auth_method
 
                     # Discover AS metadata to get authorization/token endpoints if not already set
                     # Note: OAuthManager expects 'authorization_url' and 'token_url', not 'authorization_endpoint'/'token_endpoint'
@@ -187,6 +189,8 @@ async def initiate_oauth_flow(
                     oauth_config["client_id"] = registered_client.client_id
                     if decrypted_secret:
                         oauth_config["client_secret"] = decrypted_secret
+                    if registered_client.token_endpoint_auth_method:
+                        oauth_config["token_endpoint_auth_method"] = registered_client.token_endpoint_auth_method
 
                     # Update gateway's oauth_config and auth_type in database for future use
                     gateway.oauth_config = oauth_config
@@ -771,15 +775,17 @@ async def initiate_oauth_json(gateway_id: str, current_user: EmailUserResponse =
                     decrypted_secret = None
                     if registered_client.client_secret_encrypted:
                         # First-Party
-                        from mcpgateway.utils.oauth_encryption import get_oauth_encryption
+                        from mcpgateway.services.encryption_service import get_encryption_service
 
-                        encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                        encryption = get_encryption_service(settings.auth_encryption_secret)
                         decrypted_secret = encryption.decrypt_secret(registered_client.client_secret_encrypted)
 
                     # Update oauth_config with registered credentials
                     oauth_config["client_id"] = registered_client.client_id
                     if decrypted_secret:
                         oauth_config["client_secret"] = decrypted_secret
+                    if registered_client.token_endpoint_auth_method:
+                        oauth_config["token_endpoint_auth_method"] = registered_client.token_endpoint_auth_method
 
                     # Discover AS metadata to get authorization/token endpoints
                     if not oauth_config.get("authorization_url") or not oauth_config.get("token_url"):
@@ -834,15 +840,17 @@ async def initiate_oauth_json(gateway_id: str, current_user: EmailUserResponse =
                     decrypted_secret = None
                     if registered_client.client_secret_encrypted:
                         # First-Party
-                        from mcpgateway.utils.oauth_encryption import get_oauth_encryption
+                        from mcpgateway.services.encryption_service import get_encryption_service
 
-                        encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                        encryption = get_encryption_service(settings.auth_encryption_secret)
                         decrypted_secret = encryption.decrypt_secret(registered_client.client_secret_encrypted)
 
                     # Update oauth_config with registered credentials
                     oauth_config["client_id"] = registered_client.client_id
                     if decrypted_secret:
                         oauth_config["client_secret"] = decrypted_secret
+                    if registered_client.token_endpoint_auth_method:
+                        oauth_config["token_endpoint_auth_method"] = registered_client.token_endpoint_auth_method
 
                     # Update gateway's oauth_config and auth_type in database
                     gateway.oauth_config = oauth_config

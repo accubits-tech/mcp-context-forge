@@ -1174,18 +1174,26 @@ class OAuthManager:
         token_data = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": client_id,
         }
 
-        # Add client_secret if available (some providers require it)
-        if client_secret:
-            token_data["client_secret"] = client_secret
+        # Determine token endpoint auth method (same logic as _exchange_code_for_tokens)
+        token_endpoint_auth_method = credentials.get("token_endpoint_auth_method", "client_secret_post")
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        if token_endpoint_auth_method == "client_secret_basic" and client_secret:
+            auth_string = f"{client_id}:{client_secret}"
+            auth_bytes = base64.b64encode(auth_string.encode()).decode()
+            headers["Authorization"] = f"Basic {auth_bytes}"
+        else:
+            token_data["client_id"] = client_id
+            if client_secret:
+                token_data["client_secret"] = client_secret
 
         # Attempt token refresh with retries
         for attempt in range(self.max_retries):
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(token_url, data=token_data, timeout=aiohttp.ClientTimeout(total=self.request_timeout)) as response:
+                    async with session.post(token_url, data=token_data, headers=headers, timeout=aiohttp.ClientTimeout(total=self.request_timeout)) as response:
                         if response.status == 200:
                             token_response = await response.json()
 

@@ -720,6 +720,29 @@ catalog_servers:
     documentation_url: "https://fireflies.ai/blog/model-context-protocol"
     tools: ["fireflies_search", "fireflies_get_transcripts", "fireflies_get_transcript", "fireflies_fetch", "fireflies_get_summary", "fireflies_get_user", "fireflies_get_usergroups", "fireflies_get_user_contacts"]
 
+  - id: read-ai
+    name: "Read AI"
+    category: "Productivity"
+    url: "https://api.read.ai/mcp"
+    auth_type: "OAuth2.1"
+    provider: "Read AI"
+    description: "Read AI's MCP server gives AI assistants access to meeting data including transcripts, summaries, and action items. Agents can list sessions, retrieve full transcripts, and query meeting insights without manual context-switching."
+    requires_api_key: false
+    tags: ["meetings", "transcription", "ai", "productivity"]
+    logo_url: "https://img.logo.dev/read.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://support.read.ai/hc/en-us/articles/49381158409491-MCP-Server"
+    tools: ["list_meetings", "get_meeting_by_id"]
+    oauth_config:
+      authorize_url: "https://authn.read.ai/oauth2/auth"
+      token_url: "https://authn.read.ai/oauth2/token"
+      scopes: ["openid", "profile", "email", "offline_access", "mcp:execute", "meeting:read"]
+      supports_dcr: true
+      registration_url: "https://api.read.ai/oauth/register"
+      setup_guide: |
+        No external OAuth app setup required. This server supports Dynamic Client
+        Registration (RFC 7591). MCP clients register automatically. Users are
+        redirected to Read AI to authorize via their Read AI account.
+
   - id: listenetic
     name: "Listenetic"
     category: "Productivity"

@@ -865,6 +865,7 @@ class TestOAuthManager:
 
             mock_response = MagicMock()
             mock_response.status = 400
+            mock_response.text = AsyncMock(return_value="Bad Request")
             mock_response.raise_for_status = MagicMock(side_effect=aiohttp.ClientResponseError(request_info=MagicMock(), history=(), status=400, message="Bad Request"))
             mock_response.__aenter__ = AsyncMock(return_value=mock_response)
             mock_response.__aexit__ = AsyncMock(return_value=None)
