@@ -62,7 +62,7 @@ from fastapi.templating import Jinja2Templates
 from jsonpath_ng.ext import parse
 from jsonpath_ng.jsonpath import JSONPath
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -2409,6 +2409,43 @@ async def invoke_a2a_agent(
 #############
 # Tool APIs #
 #############
+@tool_router.get("/count", response_model=Dict)
+@require_permission("tools.read")
+async def count_tools(
+    include_inactive: bool = False,
+    tags: Optional[str] = None,
+    team_id: Optional[str] = Query(None, description="Filter by team ID"),
+    visibility: Optional[str] = Query(None, description="Filter by visibility: private, team, public"),
+    gateway_id: Optional[str] = Query(None, description="Filter by gateway ID"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Dict:
+    """Return the total number of tools matching the given filters.
+
+    Args:
+        include_inactive: Whether to include inactive tools
+        tags: Comma-separated list of tags to filter by
+        team_id: Optional team ID filter
+        visibility: Optional visibility filter
+        gateway_id: Optional gateway ID filter
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Dict with a ``total`` key.
+    """
+    query = select(func.count()).select_from(DbTool)
+
+    if not include_inactive:
+        query = query.where(DbTool.enabled)
+
+    if gateway_id:
+        query = query.where(DbTool.gateway_id == gateway_id)
+
+    total = db.execute(query).scalar() or 0
+    return {"total": total}
+
+
 @tool_router.get("", response_model=Union[List[ToolRead], List[Dict], Dict, List])
 @tool_router.get("/", response_model=Union[List[ToolRead], List[Dict], Dict, List])
 @require_permission("tools.read")
