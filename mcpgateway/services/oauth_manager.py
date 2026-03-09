@@ -980,8 +980,11 @@ class OAuthManager:
         # Create OAuth2 session
         oauth = OAuth2Session(client_id, redirect_uri=redirect_uri, scope=scopes)
 
+        # Add extra provider-specific authorization parameters (e.g. access_type=offline for Google)
+        extra_params = credentials.get("extra_authorization_params", {})
+
         # Generate authorization URL with state for CSRF protection
-        auth_url, state = oauth.authorization_url(authorization_url, state=state)
+        auth_url, state = oauth.authorization_url(authorization_url, state=state, **(extra_params if isinstance(extra_params, dict) else {}))
 
         return auth_url, state
 
@@ -1011,6 +1014,11 @@ class OAuthManager:
         # Add scopes if present
         if scopes:
             params["scope"] = " ".join(scopes) if isinstance(scopes, list) else scopes
+
+        # Add extra provider-specific authorization parameters (e.g. access_type=offline for Google)
+        extra_params = credentials.get("extra_authorization_params", {})
+        if extra_params and isinstance(extra_params, dict):
+            params.update(extra_params)
 
         # Build full URL
         query_string = urlencode(params)

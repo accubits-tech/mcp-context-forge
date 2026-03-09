@@ -401,6 +401,29 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             self._file_lock = FileLock(self._lock_path)
 
     @staticmethod
+    def _ensure_client_secret_encrypted(oauth_config: Dict[str, Any]) -> None:
+        """Encrypt client_secret in an oauth_config dict if it is not already encrypted."""
+        if oauth_config and "client_secret" in oauth_config and oauth_config["client_secret"]:
+            from mcpgateway.services.encryption_service import get_encryption_service  # pylint: disable=import-outside-toplevel
+
+            encryption = get_encryption_service(settings.auth_encryption_secret)
+            if not encryption.is_encrypted(oauth_config["client_secret"]):
+                oauth_config["client_secret"] = encryption.encrypt_secret(oauth_config["client_secret"])
+
+    @staticmethod
+    def _add_oauth_credential_headers(headers: Dict[str, str], token_record: Any, oauth_config: Optional[Dict[str, Any]]) -> None:
+        """Add X-Refresh-Token and X-Token-URI headers for downstream MCP servers that need full OAuth credentials."""
+        if token_record and getattr(token_record, "refresh_token", None):
+            from mcpgateway.services.encryption_service import get_encryption_service  # pylint: disable=import-outside-toplevel
+
+            encryption = get_encryption_service(settings.auth_encryption_secret)
+            decrypted_refresh = encryption.decrypt_secret(token_record.refresh_token)
+            if decrypted_refresh:
+                headers["X-Refresh-Token"] = decrypted_refresh
+        if oauth_config and oauth_config.get("token_url"):
+            headers["X-Token-URI"] = oauth_config["token_url"]
+
+    @staticmethod
     def normalize_url(url: str) -> str:
         """
         Normalize a URL by ensuring it's properly formatted.
@@ -865,6 +888,10 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 authentication_headers = None
 
             oauth_config = getattr(gateway, "oauth_config", None)
+
+            # Encrypt client_secret in oauth_config before storing (Admin UI does this, API path must too)
+            self._ensure_client_secret_encrypted(oauth_config)
+
             ca_certificate = getattr(gateway, "ca_certificate", None)
             capabilities, tools, resources, prompts = await self._initialize_gateway(normalized_url, authentication_headers, gateway.transport, auth_type, oauth_config, ca_certificate)
 
@@ -1117,6 +1144,10 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
             # Now connect to MCP server with the access token
             authentication = {"Authorization": f"Bearer {access_token}"}
+
+            # Pass refresh_token and token_uri as headers so downstream MCP servers
+            # can build full OAuth credentials (required by Google Workspace MCP etc.)
+            self._add_oauth_credential_headers(authentication, token_record, gateway.oauth_config)
 
             # Add any extra connection headers from oauth_config (e.g., Notion-Version for Notion MCP)
             if gateway.oauth_config and gateway.oauth_config.get("connection_headers"):
@@ -1583,6 +1614,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     # Same for password field in Resource Owner Password flow
                     if "password" not in new_oauth and "password" in existing_oauth:
                         new_oauth["password"] = existing_oauth["password"]
+
+                    # Encrypt client_secret before storing (Admin UI does this, API path must too)
+                    self._ensure_client_secret_encrypted(new_oauth)
 
                     gateway.oauth_config = new_oauth
                     # Auto-set auth_type to "oauth" when oauth_config is provided
@@ -2501,22 +2535,31 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                                                 span.set_attribute("health.status", "unhealthy")
                                                 span.set_attribute("error.message", "User email required for OAuth token")
                                             await self._handle_gateway_failure(gateway)
+                                            continue
 
                                         access_token: str = await token_storage.get_user_token(gateway.id, user_email)
 
                                         if access_token:
                                             headers["Authorization"] = f"Bearer {access_token}"
+
+                                            # Pass refresh_token and token_uri so downstream servers can build full credentials
+                                            from mcpgateway.db import OAuthToken as OAuthTokenModel  # pylint: disable=import-outside-toplevel
+
+                                            token_record = db.execute(select(OAuthTokenModel).where(OAuthTokenModel.gateway_id == gateway.id, OAuthTokenModel.app_user_email == user_email)).scalar_one_or_none()
+                                            self._add_oauth_credential_headers(headers, token_record, gateway.oauth_config)
                                         else:
                                             if span:
                                                 span.set_attribute("health.status", "unhealthy")
                                                 span.set_attribute("error.message", "No valid OAuth token for user")
                                             await self._handle_gateway_failure(gateway)
+                                            continue
                                     except Exception as e:
                                         logger.error(f"Failed to obtain stored OAuth token for gateway {gateway.name}: {e}")
                                         if span:
                                             span.set_attribute("health.status", "unhealthy")
                                             span.set_attribute("error.message", "Failed to obtain stored OAuth token")
                                         await self._handle_gateway_failure(gateway)
+                                        continue
                                 else:
                                     # For Client Credentials flow, get token directly
                                     try:
@@ -2527,6 +2570,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                                             span.set_attribute("health.status", "unhealthy")
                                             span.set_attribute("error.message", str(e))
                                         await self._handle_gateway_failure(gateway)
+                                        continue
                             else:
                                 # Handle non-OAuth authentication (existing logic)
                                 auth_data = gateway.auth_value or {}

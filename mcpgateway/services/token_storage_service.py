@@ -223,8 +223,11 @@ class TokenStorageService:
             oauth_config = gateway.oauth_config.copy()
             if "client_secret" in oauth_config and oauth_config["client_secret"]:
                 if self.encryption:
+                    original_secret = oauth_config["client_secret"]
                     try:
-                        oauth_config["client_secret"] = self.encryption.decrypt_secret(oauth_config["client_secret"])
+                        decrypted = self.encryption.decrypt_secret(original_secret)
+                        # decrypt_secret returns None on failure (e.g. plain text input)
+                        oauth_config["client_secret"] = decrypted if decrypted else original_secret
                     except Exception:  # nosec B110
                         # If decryption fails, assume it's already plain text - intentional fallback
                         pass
