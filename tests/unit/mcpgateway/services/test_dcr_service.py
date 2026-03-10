@@ -295,7 +295,7 @@ class TestRegisterClient:
 
             assert request_json["client_name"] == "MCP Gateway (Test Gateway)"
             assert request_json["redirect_uris"] == ["http://localhost:4444/callback"]
-            assert request_json["grant_types"] == ["authorization_code"]
+            assert request_json["grant_types"] == ["authorization_code", "refresh_token"]
             assert request_json["response_types"] == ["code"]
             assert request_json["scope"] == "mcp:read"
 

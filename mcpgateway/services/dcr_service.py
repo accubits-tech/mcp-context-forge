@@ -147,7 +147,7 @@ class DcrService:
         registration_request = {
             "client_name": client_name,
             "redirect_uris": [redirect_uri],
-            "grant_types": ["authorization_code"],
+            "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": self.settings.dcr_token_endpoint_auth_method,
             "scope": " ".join(scopes),
@@ -277,7 +277,7 @@ class DcrService:
         registration_request = {
             "client_name": client_name,
             "redirect_uris": [redirect_uri],
-            "grant_types": ["authorization_code"],
+            "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": self.settings.dcr_token_endpoint_auth_method,
             "scope": " ".join(scopes),
