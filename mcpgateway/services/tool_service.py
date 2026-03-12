@@ -774,7 +774,7 @@ class ToolService:
             raise ToolError(f"Failed to register tool: {str(e)}")
 
     async def list_tools(
-        self, db: Session, include_inactive: bool = False, cursor: Optional[str] = None, tags: Optional[List[str]] = None, _request_headers: Optional[Dict[str, str]] = None
+        self, db: Session, include_inactive: bool = False, cursor: Optional[str] = None, tags: Optional[List[str]] = None, search: Optional[str] = None, gateway_id: Optional[str] = None, _request_headers: Optional[Dict[str, str]] = None
     ) -> tuple[List[ToolRead], Optional[str]]:
         """
         Retrieve a list of registered tools from the database with pagination support.
@@ -832,6 +832,15 @@ class ToolService:
         # Add tag filtering if tags are provided
         if tags:
             query = query.where(json_contains_expr(db, DbTool.tags, tags, match_any=True))
+
+        # Add search filtering if search term is provided
+        if search:
+            pattern = f"%{search}%"
+            query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern)))
+
+        # Add gateway filtering if gateway_id is provided
+        if gateway_id:
+            query = query.where(DbTool.gateway_id == gateway_id)
 
         # Fetch page_size + 1 to determine if there are more results
         query = query.limit(page_size + 1)
@@ -902,7 +911,7 @@ class ToolService:
         return result
 
     async def list_tools_for_user(
-        self, db: Session, user_email: str, team_id: Optional[str] = None, visibility: Optional[str] = None, include_inactive: bool = False, _skip: int = 0, _limit: int = 100
+        self, db: Session, user_email: str, team_id: Optional[str] = None, visibility: Optional[str] = None, include_inactive: bool = False, search: Optional[str] = None, gateway_id: Optional[str] = None, _skip: int = 0, _limit: int = 100
     ) -> List[ToolRead]:
         """
         List tools user has access to with team filtering.
@@ -969,6 +978,15 @@ class ToolService:
         # Apply visibility filter if specified
         if visibility:
             query = query.where(DbTool.visibility == visibility)
+
+        # Add search filtering if search term is provided
+        if search:
+            pattern = f"%{search}%"
+            query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern)))
+
+        # Add gateway filtering if gateway_id is provided
+        if gateway_id:
+            query = query.where(DbTool.gateway_id == gateway_id)
 
         # Note: Pagination is currently not implemented so this limit is not supporeted as of now
         # # Apply pagination following existing patterns

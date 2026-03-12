@@ -62,7 +62,7 @@ from fastapi.templating import Jinja2Templates
 from jsonpath_ng.ext import parse
 from jsonpath_ng.jsonpath import JSONPath
 from pydantic import ValidationError
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -148,6 +148,7 @@ from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, T
 from mcpgateway.transports.sse_transport import SSETransport
 from mcpgateway.transports.streamablehttp_transport import SessionManagerWrapper, streamable_http_auth
 from mcpgateway.utils.db_isready import wait_for_db_ready
+from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
 from mcpgateway.utils.services_auth import encode_auth
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.metadata_capture import MetadataCapture
@@ -2417,6 +2418,7 @@ async def count_tools(
     team_id: Optional[str] = Query(None, description="Filter by team ID"),
     visibility: Optional[str] = Query(None, description="Filter by visibility: private, team, public"),
     gateway_id: Optional[str] = Query(None, description="Filter by gateway ID"),
+    search: Optional[str] = Query(None, description="Search by name or description"),
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
 ) -> Dict:
@@ -2428,6 +2430,7 @@ async def count_tools(
         team_id: Optional team ID filter
         visibility: Optional visibility filter
         gateway_id: Optional gateway ID filter
+        search: Optional search term for name/description
         db: Database session
         user: Authenticated user
 
@@ -2441,6 +2444,21 @@ async def count_tools(
 
     if gateway_id:
         query = query.where(DbTool.gateway_id == gateway_id)
+
+    if tags:
+        tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+        if tags_list:
+            query = query.where(json_contains_expr(db, DbTool.tags, tags_list, match_any=True))
+
+    if team_id:
+        query = query.where(DbTool.team_id == team_id)
+
+    if visibility:
+        query = query.where(DbTool.visibility == visibility)
+
+    if search:
+        pattern = f"%{search}%"
+        query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern)))
 
     total = db.execute(query).scalar() or 0
     return {"total": total}
@@ -2456,6 +2474,7 @@ async def list_tools(
     team_id: Optional[str] = Query(None, description="Filter by team ID"),
     visibility: Optional[str] = Query(None, description="Filter by visibility: private, team, public"),
     gateway_id: Optional[str] = Query(None, description="Filter by gateway ID"),
+    search: Optional[str] = Query(None, description="Search by name or description"),
     db: Session = Depends(get_db),
     apijsonpath: JsonPathModifier = Body(None),
     user=Depends(get_current_user_with_permissions),
@@ -2487,18 +2506,14 @@ async def list_tools(
 
     # Use team-filtered tool listing
     if team_id or visibility:
-        data = await tool_service.list_tools_for_user(db=db, user_email=user_email, team_id=team_id, visibility=visibility, include_inactive=include_inactive)
+        data = await tool_service.list_tools_for_user(db=db, user_email=user_email, team_id=team_id, visibility=visibility, include_inactive=include_inactive, search=search, gateway_id=gateway_id)
 
         # Apply tag filtering to team-filtered results if needed
         if tags_list:
-            data = [tool for tool in data if any(tag in tool.tags for tag in tags_list)]
+            data = [tool for tool in data if tool.tags and any(tag in tool.tags for tag in tags_list)]
     else:
         # Use existing method for backward compatibility when no team filtering
-        data, _ = await tool_service.list_tools(db, cursor=cursor, include_inactive=include_inactive, tags=tags_list)
-
-    # Apply gateway_id filtering if provided
-    if gateway_id:
-        data = [tool for tool in data if str(tool.gateway_id) == gateway_id]
+        data, _ = await tool_service.list_tools(db, cursor=cursor, include_inactive=include_inactive, tags=tags_list, search=search, gateway_id=gateway_id)
 
     if apijsonpath is None:
         return data
