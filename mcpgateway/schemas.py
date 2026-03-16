@@ -3893,6 +3893,9 @@ class ServerRead(BaseModelWithConfigDict):
     federation_source: Optional[str] = Field(None, description="Source gateway for federated entities")
     version: Optional[int] = Field(1, description="Entity version for change tracking")
 
+    # Registry link
+    registry_entry_id: Optional[str] = Field(None, description="ID of the registry entry if this server is published")
+
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="ID of the team that owns this resource")
     team: Optional[str] = Field(None, description="Name of the team that owns this resource")
@@ -6529,6 +6532,42 @@ class PluginStatsResponse(BaseModel):
     plugins_by_mode: Dict[str, int] = Field(default_factory=dict, description="Plugin count by mode")
 
 
+# Registry Entry Schemas
+
+
+class RegistryEntryPublish(BaseModel):
+    """Request to publish a server to the registry."""
+
+    server_id: str = Field(..., description="ID of the server to publish")
+    category: Optional[str] = Field("Virtual Server", description="Category for the registry entry")
+
+
+class RegistryEntryRead(BaseModel):
+    """Registry entry response."""
+
+    id: str
+    name: str
+    description: Optional[str] = None
+    category: str
+    tags: List[str] = Field(default_factory=list)
+    tool_count: int = 0
+    published_by: str
+    published_at: datetime
+    source_server_id: Optional[str] = None
+    source_type: Optional[str] = None
+    is_active: bool = True
+    visibility: str = "public"
+
+
+class RegistryEntryDeploy(BaseModel):
+    """Request to deploy a server from a registry entry."""
+
+    name: Optional[str] = Field(None, description="Custom name (defaults to registry entry name)")
+    description: Optional[str] = Field(None, description="Custom description")
+    visibility: Optional[str] = Field("private", description="Visibility: private, team, or public")
+    team_id: Optional[str] = Field(None, description="Team ID for team visibility")
+
+
 # MCP Server Catalog Schemas
 
 
@@ -6563,6 +6602,11 @@ class CatalogServer(BaseModel):
     oauth_config: Optional[CatalogOAuthConfig] = Field(None, description="OAuth configuration details")
     is_registered: bool = Field(default=False, description="Whether server is already registered")
     is_available: bool = Field(default=True, description="Whether server is currently available")
+    # User-published entry fields
+    source: str = Field(default="catalog", description="Entry source: catalog or user_published")
+    registry_entry_id: Optional[str] = Field(None, description="Registry entry ID for user-published entries")
+    published_by: Optional[str] = Field(None, description="Publisher email for user-published entries")
+    capabilities: Optional[Dict[str, Any]] = Field(None, description="Server capabilities summary")
 
 
 class CatalogServerRegisterRequest(BaseModel):
@@ -6612,6 +6656,7 @@ class CatalogListRequest(BaseModel):
     tags: Optional[List[str]] = Field(None, description="Filter by tags")
     show_registered_only: bool = Field(default=False, description="Show only registered servers")
     show_available_only: bool = Field(default=True, description="Show only available servers")
+    source: Optional[str] = Field(None, description="Filter by source: catalog, user_published, or None for all")
     limit: int = Field(default=100, description="Maximum number of results")
     offset: int = Field(default=0, description="Offset for pagination")
 

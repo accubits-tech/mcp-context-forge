@@ -112,6 +112,9 @@ from mcpgateway.schemas import (
     PromptExecuteArgs,
     PromptRead,
     PromptUpdate,
+    RegistryEntryDeploy,
+    RegistryEntryPublish,
+    RegistryEntryRead,
     ResourceCreate,
     ResourceRead,
     ResourceSubscription,
@@ -1154,6 +1157,7 @@ metrics_router = APIRouter(prefix="/metrics", tags=["Metrics"])
 tag_router = APIRouter(prefix="/tags", tags=["Tags"])
 export_import_router = APIRouter(tags=["Export/Import"])
 a2a_router = APIRouter(prefix="/a2a", tags=["A2A Agents"])
+registry_router = APIRouter(prefix="/registry", tags=["Registry"])
 
 # Basic Auth setup
 
@@ -6295,6 +6299,73 @@ async def cleanup_import_statuses(max_age_hours: int = 24, user=Depends(get_curr
     return {"status": "success", "message": f"Cleaned up {removed_count} completed import statuses", "removed_count": removed_count}
 
 
+# ========================================
+# Registry Endpoints
+# ========================================
+
+
+@registry_router.post("/publish", response_model=RegistryEntryRead)
+async def publish_to_registry(
+    request_body: RegistryEntryPublish,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Publish a server to the registry."""
+    # First-Party
+    from mcpgateway.services.registry_service import RegistryService  # pylint: disable=import-outside-toplevel
+
+    service = RegistryService()
+    user_email = getattr(user, "email", None) or getattr(user, "username", None) or str(user)
+    try:
+        return await service.publish_server(request_body, user_email, db)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@registry_router.post("/{entry_id}/deploy", response_model=ServerRead)
+async def deploy_from_registry(
+    entry_id: str,
+    request_body: RegistryEntryDeploy,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Deploy a server from a registry entry."""
+    # First-Party
+    from mcpgateway.services.registry_service import RegistryService  # pylint: disable=import-outside-toplevel
+
+    service = RegistryService()
+    user_email = getattr(user, "email", None) or getattr(user, "username", None) or str(user)
+    try:
+        return await service.deploy_entry(entry_id, request_body, user_email, db)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@registry_router.delete("/{entry_id}")
+async def unpublish_from_registry(
+    entry_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Unpublish a registry entry."""
+    # First-Party
+    from mcpgateway.services.registry_service import RegistryService  # pylint: disable=import-outside-toplevel
+
+    service = RegistryService()
+    user_email = getattr(user, "email", None) or getattr(user, "username", None) or str(user)
+    try:
+        return await service.unpublish_entry(entry_id, user_email, db)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
 # Mount static files
 # app.mount("/static", StaticFiles(directory=str(settings.static_dir)), name="static")
 
@@ -6308,6 +6379,7 @@ app.include_router(gateway_router)
 app.include_router(root_router)
 app.include_router(utility_router)
 app.include_router(server_router)
+app.include_router(registry_router)
 app.include_router(metrics_router)
 app.include_router(tag_router)
 app.include_router(export_import_router)

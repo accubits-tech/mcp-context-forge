@@ -2740,12 +2740,56 @@ class Server(Base):
             return None
         return max(m.timestamp for m in self.metrics)
 
+    # Registry link (set when this server is published to the registry)
+    registry_entry_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+
     # Team scoping fields for resource organization
     team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="public")
     creator_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     __table_args__ = (UniqueConstraint("team_id", "owner_email", "name", name="uq_team_owner_name_server"),)
+
+
+class RegistryEntry(Base):
+    """ORM model for a user-published registry entry.
+
+    Stores a snapshot of a server and its tool definitions so that anyone
+    can deploy (re-create) the server without re-running generation.
+    """
+
+    __tablename__ = "registry_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(String(100), nullable=False, default="Virtual Server")
+    tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+    icon: Mapped[Optional[str]] = mapped_column(String(767), nullable=True)
+
+    # Tool snapshot - full tool definitions for re-creation
+    tool_definitions: Mapped[List[Dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    tool_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Server config snapshot
+    server_transport: Mapped[str] = mapped_column(String(20), default="sse")
+
+    # Provenance
+    published_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    source_server_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    source_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(default=True)
+
+    # Team scoping
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="public")
+
+    # Metadata
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Gateway(Base):

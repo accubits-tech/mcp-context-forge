@@ -9252,7 +9252,7 @@ async def admin_import_tools(
             name = (item or {}).get("name")
             try:
                 tool = ToolCreate(**item)  # pydantic validation
-                await tool_service.register_tool(
+                db_tool = await tool_service.register_tool(
                     db,
                     tool,
                     created_by=base_metadata["created_by"],
@@ -9262,7 +9262,7 @@ async def admin_import_tools(
                     import_batch_id=import_batch_id,
                     federation_source=base_metadata["federation_source"],
                 )
-                created.append({"index": i, "name": name})
+                created.append({"index": i, "name": name, "id": db_tool.id})
             except IntegrityError as ex:
                 # The formatter can itself throw; guard it.
                 try:
@@ -9491,7 +9491,7 @@ async def admin_import_tools_from_url(
         for i, tool in enumerate(tools):
             name = tool.name
             try:
-                await tool_service.register_tool(
+                db_tool = await tool_service.register_tool(
                     db,
                     tool,
                     created_by=base_metadata["created_by"],
@@ -9501,7 +9501,7 @@ async def admin_import_tools_from_url(
                     import_batch_id=import_batch_id,
                     federation_source=base_metadata["federation_source"],
                 )
-                created.append({"index": i, "name": name})
+                created.append({"index": i, "name": name, "id": db_tool.id})
             except IntegrityError as ex:
                 try:
                     formatted = ErrorFormatter.format_database_error(ex)
@@ -11873,6 +11873,7 @@ async def list_catalog_servers(
     tags: Optional[List[str]] = Query(None),
     show_registered_only: bool = False,
     show_available_only: bool = True,
+    source: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -11891,6 +11892,7 @@ async def list_catalog_servers(
         tags: Filter by tags
         show_registered_only: Show only already registered servers
         show_available_only: Show only available servers
+        source: Filter by source (catalog, user_published)
         limit: Maximum results
         offset: Pagination offset
         db: Database session
@@ -11915,6 +11917,7 @@ async def list_catalog_servers(
         tags=tags or [],
         show_registered_only=show_registered_only,
         show_available_only=show_available_only,
+        source=source,
         limit=limit,
         offset=offset,
     )

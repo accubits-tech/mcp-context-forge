@@ -121,13 +121,47 @@ class CatalogService:
         for server_data in servers:
             server = CatalogServer(**server_data)
             server.is_registered = server.url in registered_urls
+            server.source = "catalog"
             # Set availability based on registration status (registered servers are assumed available)
             # Individual health checks can be done via the /status endpoint
             server.is_available = server.is_registered or server_data.get("is_available", True)
             catalog_servers.append(server)
 
+        # Load user-published entries from DB
+        try:
+            # First-Party
+            from mcpgateway.db import RegistryEntry as DbRegistryEntry  # pylint: disable=import-outside-toplevel
+
+            db_stmt = select(DbRegistryEntry).where(DbRegistryEntry.is_active.is_(True))
+            db_entries = db.execute(db_stmt).scalars().all()
+
+            for entry in db_entries:
+                catalog_server = CatalogServer(
+                    id=entry.id,
+                    name=entry.name,
+                    category=entry.category or "Virtual Server",
+                    url="",
+                    auth_type="Open",
+                    provider=entry.published_by or "User",
+                    description=entry.description or "",
+                    tags=entry.tags or [],
+                    source="user_published",
+                    registry_entry_id=entry.id,
+                    published_by=entry.published_by,
+                    capabilities={"tools": entry.tool_count},
+                    is_registered=False,
+                    is_available=True,
+                )
+                catalog_servers.append(catalog_server)
+        except Exception as e:
+            logger.warning(f"Failed to load user-published registry entries: {e}")
+
         # Apply filters
         filtered = catalog_servers
+
+        # Source filter
+        if request.source:
+            filtered = [s for s in filtered if s.source == request.source]
 
         if request.id:
             filtered = [s for s in filtered if s.id == request.id]
