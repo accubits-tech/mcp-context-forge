@@ -42,7 +42,7 @@ def upgrade() -> None:
             sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("source_server_id", sa.String(36), nullable=True),
             sa.Column("source_type", sa.String(50), nullable=True),
-            sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.text("1")),
+            sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.text("true")),
             sa.Column("team_id", sa.String(36), nullable=True),
             sa.Column("visibility", sa.String(20), nullable=False, server_default="public"),
             sa.Column("version", sa.Integer, nullable=False, server_default="1"),
