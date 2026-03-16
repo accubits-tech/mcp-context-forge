@@ -157,16 +157,30 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             status_code = response.status_code
 
-            # End span successfully
+            # End span successfully — never let observability failures kill the response
             if span_id:
-                self.service.end_span(
-                    db, span_id, status="ok" if status_code < 400 else "error", attributes={"http.status_code": status_code, "http.response_size": response.headers.get("content-length")}
-                )
+                try:
+                    self.service.end_span(
+                        db, span_id, status="ok" if status_code < 400 else "error", attributes={"http.status_code": status_code, "http.response_size": response.headers.get("content-length")}
+                    )
+                except Exception as span_error:
+                    logger.warning(f"Failed to end span: {span_error}")
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
 
             # End trace
             if trace_id:
-                duration_ms = (time.time() - start_time) * 1000
-                self.service.end_trace(db, trace_id, status="ok" if status_code < 400 else "error", http_status_code=status_code, attributes={"response_time_ms": duration_ms})
+                try:
+                    duration_ms = (time.time() - start_time) * 1000
+                    self.service.end_trace(db, trace_id, status="ok" if status_code < 400 else "error", http_status_code=status_code, attributes={"response_time_ms": duration_ms})
+                except Exception as trace_error:
+                    logger.warning(f"Failed to end trace: {trace_error}")
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
 
             return response
 
