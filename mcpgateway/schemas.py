@@ -2474,10 +2474,17 @@ class GatewayCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(..., description="Unique name for the gateway")
-    url: Union[str, AnyHttpUrl] = Field(..., description="Gateway endpoint URL")
+    url: Optional[Union[str, AnyHttpUrl]] = Field(None, description="Gateway endpoint URL (required for SSE/STREAMABLEHTTP, auto-generated for STDIO)")
     description: Optional[str] = Field(None, description="Gateway description")
-    transport: str = Field(default="SSE", description="Transport used by MCP server: SSE or STREAMABLEHTTP")
+    transport: str = Field(default="SSE", description="Transport used by MCP server: SSE, STREAMABLEHTTP, or STDIO")
     passthrough_headers: Optional[List[str]] = Field(default=None, description="List of headers allowed to be passed through from client to target")
+
+    # Stdio configuration
+    stdio_command: Optional[str] = Field(None, description="Executable command for stdio transport (e.g., uv, npx, docker)")
+    stdio_args: Optional[List[str]] = Field(None, description="Arguments for the stdio command")
+    stdio_env: Optional[Dict[str, str]] = Field(None, description="Environment variables for the stdio process")
+    stdio_cwd: Optional[str] = Field(None, description="Working directory for the stdio process")
+    stdio_timeout: Optional[int] = Field(default=60, ge=5, le=600, description="Startup timeout in seconds for the stdio bridge")
 
     # Authorizations
     auth_type: Optional[str] = Field(None, description="Type of authentication: basic, bearer, headers, oauth, or none")
@@ -2538,16 +2545,63 @@ class GatewayCreate(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def validate_url(cls, v: str) -> str:
-        """Validate gateway URL
+    def validate_url(cls, v: Optional[str]) -> Optional[str]:
+        """Validate gateway URL (optional for STDIO transport).
 
         Args:
-            v (str): Value to validate
+            v: Value to validate
 
         Returns:
-            str: Value if validated as safe
+            Validated URL or None
         """
+        if v is None:
+            return v
         return SecurityValidator.validate_url(v, "Gateway URL")
+
+    @field_validator("stdio_command")
+    @classmethod
+    def validate_stdio_command(cls, v: Optional[str]) -> Optional[str]:
+        """Validate stdio command against allowlist and reject shell metacharacters.
+
+        Args:
+            v: Command string to validate
+
+        Returns:
+            Validated command or None
+        """
+        if v is None:
+            return v
+
+        # Import here to avoid circular imports
+        from mcpgateway.config import settings  # pylint: disable=import-outside-toplevel
+
+        # Reject shell metacharacters
+        dangerous_chars = set(";|&$`\\!><()")
+        if any(c in dangerous_chars for c in v):
+            raise ValueError(f"Command contains disallowed shell metacharacters: {v}")
+
+        # Validate against allowlist
+        # Extract the executable: split on whitespace first (to ignore args), then on "/" (to handle absolute paths)
+        base_command = v.strip().split()[0].split("/")[-1]
+        if base_command not in settings.mcpgateway_stdio_command_allowlist:
+            raise ValueError(f"Command '{base_command}' is not in the allowed command list: {settings.mcpgateway_stdio_command_allowlist}")
+
+        return v.strip()
+
+    @model_validator(mode="after")
+    def validate_stdio_or_url(self) -> "GatewayCreate":
+        """Enforce mutual exclusivity between STDIO and URL-based transports."""
+        if self.transport == "STDIO":
+            if not self.stdio_command:
+                raise ValueError("stdio_command is required when transport is STDIO")
+            if self.url:
+                raise ValueError("url must not be provided when transport is STDIO")
+        else:
+            if not self.url:
+                raise ValueError("url is required when transport is SSE or STREAMABLEHTTP")
+            if self.stdio_command:
+                raise ValueError("stdio_command must not be provided when transport is SSE or STREAMABLEHTTP")
+        return self
 
     @field_validator("description")
     @classmethod
@@ -2746,9 +2800,16 @@ class GatewayUpdate(BaseModelWithConfigDict):
     name: Optional[str] = Field(None, description="Unique name for the gateway")
     url: Optional[Union[str, AnyHttpUrl]] = Field(None, description="Gateway endpoint URL")
     description: Optional[str] = Field(None, description="Gateway description")
-    transport: str = Field(default="SSE", description="Transport used by MCP server: SSE or STREAMABLEHTTP")
+    transport: str = Field(default="SSE", description="Transport used by MCP server: SSE, STREAMABLEHTTP, or STDIO")
 
     passthrough_headers: Optional[List[str]] = Field(default=None, description="List of headers allowed to be passed through from client to target")
+
+    # Stdio configuration
+    stdio_command: Optional[str] = Field(None, description="Executable command for stdio transport")
+    stdio_args: Optional[List[str]] = Field(None, description="Arguments for the stdio command")
+    stdio_env: Optional[Dict[str, str]] = Field(None, description="Environment variables for the stdio process")
+    stdio_cwd: Optional[str] = Field(None, description="Working directory for the stdio process")
+    stdio_timeout: Optional[int] = Field(None, ge=5, le=600, description="Startup timeout in seconds for the stdio bridge")
 
     # Authorizations
     auth_type: Optional[str] = Field(None, description="auth_type: basic, bearer, headers or None")
@@ -3000,9 +3061,18 @@ class GatewayRead(BaseModelWithConfigDict):
 
     id: Optional[str] = Field(None, description="Unique ID of the gateway")
     name: str = Field(..., description="Unique name for the gateway")
-    url: str = Field(..., description="Gateway endpoint URL")
+    url: Optional[str] = Field(None, description="Gateway endpoint URL")
     description: Optional[str] = Field(None, description="Gateway description")
-    transport: str = Field(default="SSE", description="Transport used by MCP server: SSE or STREAMABLEHTTP")
+    transport: str = Field(default="SSE", description="Transport used by MCP server: SSE, STREAMABLEHTTP, or STDIO")
+
+    # Stdio fields (read-only display)
+    stdio_command: Optional[str] = Field(None, description="Stdio executable command")
+    stdio_args: Optional[List[str]] = Field(None, description="Stdio command arguments")
+    stdio_env_keys: Optional[List[str]] = Field(None, description="Stdio environment variable key names (values hidden)")
+    stdio_cwd: Optional[str] = Field(None, description="Stdio working directory")
+    stdio_timeout: Optional[int] = Field(None, description="Stdio bridge startup timeout")
+    stdio_bridge_port: Optional[int] = Field(None, description="Port of the stdio bridge process")
+    stdio_status: Optional[str] = Field(None, description="Stdio bridge status: running, stopped, or crashed")
     capabilities: Dict[str, Any] = Field(default_factory=dict, description="Gateway capabilities")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp")
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Last update timestamp")
@@ -3966,6 +4036,29 @@ class GatewayTestResponse(BaseModelWithConfigDict):
     status_code: int = Field(..., description="HTTP status code returned by the gateway")
     latency_ms: int = Field(..., description="Latency of the request in milliseconds")
     body: Optional[Union[str, Dict[str, Any]]] = Field(None, description="Response body, can be a string or JSON object")
+
+
+class StdioServerImport(BaseModel):
+    """Schema for a single stdio MCP server entry in Claude Desktop mcpServers JSON format."""
+
+    command: str = Field(..., description="Executable command (e.g., uv, npx, docker)")
+    args: Optional[List[str]] = Field(None, description="Command arguments")
+    env: Optional[Dict[str, str]] = Field(None, description="Environment variables")
+    timeout: Optional[int] = Field(default=60, ge=5, le=600, description="Startup timeout in seconds")
+    disabled: Optional[bool] = Field(default=False, description="Whether this server is disabled")
+
+
+class McpServersImportRequest(BaseModel):
+    """Schema for importing multiple stdio MCP servers from Claude Desktop mcpServers JSON format."""
+
+    mcpServers: Dict[str, StdioServerImport] = Field(..., description="Map of server name to stdio configuration")
+
+
+class McpServersImportResult(BaseModel):
+    """Result of a batch stdio MCP server import."""
+
+    imported: List[Dict[str, str]] = Field(default_factory=list, description="Successfully imported servers")
+    failed: List[Dict[str, str]] = Field(default_factory=list, description="Failed server imports")
 
 
 class TaggedEntity(BaseModelWithConfigDict):

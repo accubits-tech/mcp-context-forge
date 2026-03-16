@@ -2800,7 +2800,7 @@ class Gateway(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
-    url: Mapped[str] = mapped_column(String(767), nullable=False)
+    url: Mapped[Optional[str]] = mapped_column(String(767), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     transport: Mapped[str] = mapped_column(String(20), default="SSE")
     capabilities: Mapped[Dict[str, Any]] = mapped_column(JSON)
@@ -2825,6 +2825,14 @@ class Gateway(Base):
     import_batch_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     federation_source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    # Stdio bridge configuration
+    stdio_command: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    stdio_args: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    stdio_env: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # AES-encrypted JSON dict
+    stdio_cwd: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    stdio_timeout: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=60)
+    stdio_bridge_port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Header passthrough configuration
     passthrough_headers: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)  # Store list of strings as JSON array

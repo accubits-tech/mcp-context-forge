@@ -1431,6 +1431,18 @@ Disallow: /
     # Base URL for pagination links (defaults to request URL)
     pagination_base_url: Optional[str] = Field(default=None, description="Base URL for pagination links")
 
+    # Stdio MCP Gateway bridge settings
+    mcpgateway_stdio_enabled: bool = Field(default=True, description="Enable stdio MCP gateway support")
+    mcpgateway_stdio_command_allowlist: list[str] = Field(
+        default=["uv", "uvx", "npx", "node", "python", "python3", "docker", "podman", "deno", "bun"],
+        description="Allowed commands for stdio MCP gateways",
+    )
+    mcpgateway_stdio_max_processes: int = Field(default=50, ge=1, le=500, description="Maximum concurrent stdio bridge processes")
+    mcpgateway_stdio_port_range_start: int = Field(default=9100, ge=1024, le=65535, description="Start of port range for stdio bridges")
+    mcpgateway_stdio_port_range_end: int = Field(default=9200, ge=1024, le=65535, description="End of port range for stdio bridges")
+    mcpgateway_stdio_health_check_interval: int = Field(default=30, ge=5, le=300, description="Health check interval in seconds for stdio bridges")
+    mcpgateway_stdio_restart_max_retries: int = Field(default=3, ge=0, le=10, description="Maximum restart attempts for crashed stdio bridges")
+
     # Ed25519 keys for signing
     enable_ed25519_signing: bool = Field(default=False, description="Enable Ed25519 signing for certificates")
     prev_ed25519_private_key: SecretStr = Field(default=SecretStr(""), description="Previous Ed25519 private key for signing")

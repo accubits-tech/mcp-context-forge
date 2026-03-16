@@ -6842,26 +6842,59 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
                     LOGGER.warning("⚠️  Ed25519 signing is disabled; CA certificate will be stored without signature")
                     sig = None
 
+        transport = str(form.get("transport", "SSE"))
+
+        # Parse stdio fields if STDIO transport
+        stdio_command = None
+        stdio_args = None
+        stdio_env = None
+        stdio_cwd = None
+        stdio_timeout = 60
+        gateway_url = None
+
+        if transport == "STDIO":
+            stdio_command = str(form.get("stdio_command", "")).strip() or None
+            stdio_args_str = str(form.get("stdio_args", "")).strip()
+            stdio_args = [a.strip() for a in stdio_args_str.split("\n") if a.strip()] if stdio_args_str else None
+            stdio_env_json = str(form.get("stdio_env", ""))
+            if stdio_env_json and stdio_env_json != "None":
+                try:
+                    stdio_env = json.loads(stdio_env_json)
+                except (json.JSONDecodeError, ValueError):
+                    stdio_env = None
+            stdio_cwd = str(form.get("stdio_cwd", "")).strip() or None
+            try:
+                stdio_timeout = int(form.get("stdio_timeout", 60))
+            except (ValueError, TypeError):
+                stdio_timeout = 60
+        else:
+            gateway_url = str(form["url"])
+
         gateway = GatewayCreate(
             name=str(form["name"]),
-            url=str(form["url"]),
+            url=gateway_url,
             description=str(form.get("description")),
             tags=tags,
-            transport=str(form.get("transport", "SSE")),
-            auth_type=auth_type_from_form,
-            auth_username=str(form.get("auth_username", "")),
-            auth_password=str(form.get("auth_password", "")),
-            auth_token=str(form.get("auth_token", "")),
-            auth_header_key=str(form.get("auth_header_key", "")),
-            auth_header_value=str(form.get("auth_header_value", "")),
-            auth_headers=auth_headers if auth_headers else None,
-            oauth_config=oauth_config,
-            one_time_auth=form.get("one_time_auth", False),
+            transport=transport,
+            auth_type=auth_type_from_form if transport != "STDIO" else None,
+            auth_username=str(form.get("auth_username", "")) if transport != "STDIO" else None,
+            auth_password=str(form.get("auth_password", "")) if transport != "STDIO" else None,
+            auth_token=str(form.get("auth_token", "")) if transport != "STDIO" else None,
+            auth_header_key=str(form.get("auth_header_key", "")) if transport != "STDIO" else None,
+            auth_header_value=str(form.get("auth_header_value", "")) if transport != "STDIO" else None,
+            auth_headers=auth_headers if auth_headers and transport != "STDIO" else None,
+            oauth_config=oauth_config if transport != "STDIO" else None,
+            one_time_auth=form.get("one_time_auth", False) if transport != "STDIO" else False,
             passthrough_headers=passthrough_headers,
             visibility=visibility,
             ca_certificate=ca_certificate,
             ca_certificate_sig=sig if sig else None,
             signing_algorithm="ed25519" if sig else None,
+            stdio_command=stdio_command,
+            stdio_args=stdio_args,
+            stdio_env=stdio_env,
+            stdio_cwd=stdio_cwd,
+            stdio_timeout=stdio_timeout,
         )
     except KeyError as e:
         # Convert KeyError to ValidationError-like response
@@ -6934,6 +6967,136 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
         return JSONResponse(content=ErrorFormatter.format_database_error(ex), status_code=409)
     except Exception as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
+
+
+@admin_router.post("/gateways/import-stdio")
+async def admin_import_stdio_gateways(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Import multiple stdio MCP gateways from Claude Desktop mcpServers JSON format.
+
+    Accepts a JSON body with mcpServers dict mapping names to stdio configs.
+
+    Args:
+        request: FastAPI request.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        JSONResponse with import results.
+    """
+    from mcpgateway.schemas import McpServersImportRequest, GatewayCreate  # pylint: disable=import-outside-toplevel
+
+    try:
+        body = await request.json()
+        import_request = McpServersImportRequest(**body)
+    except Exception as e:
+        return JSONResponse(content={"message": f"Invalid JSON: {e}", "success": False}, status_code=422)
+
+    user_email = get_user_email(user)
+    team_service = TeamManagementService(db)
+    team_id = await team_service.verify_team_for_user(user_email, None)
+
+    imported = []
+    failed = []
+    metadata = MetadataCapture.extract_creation_metadata(request, user)
+
+    for name, server_config in import_request.mcpServers.items():
+        if server_config.disabled:
+            failed.append({"name": name, "error": "Server is disabled"})
+            continue
+        try:
+            gateway_data = GatewayCreate(
+                name=name,
+                transport="STDIO",
+                stdio_command=server_config.command,
+                stdio_args=server_config.args,
+                stdio_env=server_config.env,
+                stdio_timeout=server_config.timeout or 60,
+            )
+            await gateway_service.register_gateway(
+                db,
+                gateway_data,
+                created_by=metadata["created_by"],
+                created_from_ip=metadata["created_from_ip"],
+                created_via="import",
+                created_user_agent=metadata["created_user_agent"],
+                visibility="private",
+                team_id=typing_cast(Optional[str], team_id),
+                owner_email=user_email,
+            )
+            imported.append({"name": name, "status": "success"})
+        except Exception as e:
+            failed.append({"name": name, "error": str(e)})
+
+    return JSONResponse(
+        content={"imported": imported, "failed": failed, "success": True},
+        status_code=200,
+    )
+
+
+@admin_router.get("/gateways/{gateway_id}/stdio-status")
+async def admin_get_stdio_status(
+    gateway_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Get stdio bridge process status for a gateway.
+
+    Args:
+        gateway_id: Gateway ID.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        JSONResponse with bridge status.
+    """
+    from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+
+    status = stdio_bridge_manager.get_status(gateway_id)
+    if status is None:
+        return JSONResponse(content={"message": "No stdio bridge found for this gateway", "success": False}, status_code=404)
+    return JSONResponse(content={"status": status, "success": True}, status_code=200)
+
+
+@admin_router.post("/gateways/{gateway_id}/stdio-restart")
+async def admin_restart_stdio_bridge(
+    gateway_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Restart the stdio bridge process for a gateway.
+
+    Args:
+        gateway_id: Gateway ID.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        JSONResponse with restart result.
+    """
+    from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+
+    try:
+        new_url = await stdio_bridge_manager.restart_bridge(gateway_id, db=db)
+        if new_url is None:
+            return JSONResponse(content={"message": "No stdio bridge found for this gateway", "success": False}, status_code=404)
+
+        # Update the gateway URL in the database
+        from mcpgateway.db import Gateway as DbGw  # pylint: disable=import-outside-toplevel
+
+        gw = db.get(DbGw, gateway_id)
+        if gw:
+            gw.url = new_url
+            bridge_status = stdio_bridge_manager.get_status(gateway_id)
+            gw.stdio_bridge_port = bridge_status["port"] if bridge_status else None
+            db.commit()
+
+        return JSONResponse(content={"message": "Stdio bridge restarted successfully", "bridge_url": new_url, "success": True}, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"message": f"Failed to restart stdio bridge: {e}", "success": False}, status_code=500)
 
 
 # OAuth callback is now handled by the dedicated OAuth router at /oauth/callback

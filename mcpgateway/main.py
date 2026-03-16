@@ -432,6 +432,23 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await resource_service.initialize()
         await prompt_service.initialize()
         await gateway_service.initialize()
+
+        # Initialize stdio bridge manager after gateway service
+        if settings.mcpgateway_stdio_enabled:
+            from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+            from mcpgateway.db import get_db as _get_db_stdio  # pylint: disable=import-outside-toplevel
+
+            try:
+                _db_gen = _get_db_stdio()
+                _db = next(_db_gen)
+                try:
+                    await stdio_bridge_manager.initialize(db=_db)
+                    logger.info("Stdio Bridge Manager initialized")
+                finally:
+                    _db.close()
+            except Exception as e:
+                logger.warning(f"Failed to initialize stdio bridge manager: {e}")
+
         await root_service.initialize()
         await completion_service.initialize()
         await sampling_handler.initialize()
@@ -489,6 +506,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 logger.info("Plugin manager shutdown complete")
             except Exception as e:
                 logger.error(f"Error shutting down plugin manager: {str(e)}")
+        # Shutdown stdio bridge manager before other services
+        if settings.mcpgateway_stdio_enabled:
+            try:
+                from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+
+                await stdio_bridge_manager.shutdown()
+            except Exception as e:
+                logger.error(f"Error shutting down stdio bridge manager: {str(e)}")
+
         logger.info("Shutting down MCP Gateway services")
         # await stop_streamablehttp()
         # Build service list conditionally

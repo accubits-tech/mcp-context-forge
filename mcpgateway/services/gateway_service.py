@@ -829,21 +829,53 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 if existing_gateway:
                     raise GatewayNameConflictError(existing_gateway.slug, enabled=existing_gateway.enabled, gateway_id=existing_gateway.id, visibility=existing_gateway.visibility)
 
-            # Normalize the gateway URL
-            normalized_url = self.normalize_url(str(gateway.url))
+            # --- STDIO transport: spawn bridge subprocess ---
+            stdio_bridge_port = None
+            stdio_env_encrypted = None
+            is_stdio = gateway.transport == "STDIO"
+            # Pre-generate gateway ID so we can use it as bridge key
+            import uuid as _uuid  # pylint: disable=import-outside-toplevel
 
-            # SSRF protection: validate gateway URL does not point to internal addresses
-            # First-Party
-            from mcpgateway.config import settings as _settings  # pylint: disable=import-outside-toplevel
+            pre_generated_id = _uuid.uuid4().hex
 
-            if getattr(_settings, "ssrf_protection_enabled", True):
+            if is_stdio:
+                from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+
+                # Encrypt env vars for storage
+                if gateway.stdio_env:
+                    stdio_env_encrypted = encode_auth(gateway.stdio_env)
+
+                # Start the translate bridge
+                bridge_url = await stdio_bridge_manager.start_bridge(
+                    gateway_id=pre_generated_id,
+                    command=gateway.stdio_command,
+                    args=gateway.stdio_args,
+                    env=gateway.stdio_env,
+                    cwd=gateway.stdio_cwd,
+                    timeout=gateway.stdio_timeout or 60,
+                )
+                # The bridge exposes streamable HTTP at /mcp
+                normalized_url = bridge_url.rstrip("/") + "/mcp"
+                bridge_status = stdio_bridge_manager.get_status(pre_generated_id)
+                stdio_bridge_port = bridge_status["port"] if bridge_status else None
+                effective_transport = "STREAMABLEHTTP"
+            else:
+                effective_transport = gateway.transport
+                # Normalize the gateway URL
+                normalized_url = self.normalize_url(str(gateway.url))
+
+                # SSRF protection: validate gateway URL does not point to internal addresses
                 # First-Party
-                from mcpgateway.utils.url_validation import validate_url_not_internal  # pylint: disable=import-outside-toplevel
+                from mcpgateway.config import settings as _settings  # pylint: disable=import-outside-toplevel
 
-                try:
-                    validate_url_not_internal(normalized_url)
-                except ValueError as e:
-                    raise GatewayConnectionError(str(e))
+                if getattr(_settings, "ssrf_protection_enabled", True):
+                    # First-Party
+                    from mcpgateway.utils.url_validation import validate_url_not_internal  # pylint: disable=import-outside-toplevel
+
+                    try:
+                        validate_url_not_internal(normalized_url)
+                    except ValueError as e:
+                        raise GatewayConnectionError(str(e))
 
             if gateway.auth_value:
                 if isinstance(gateway.auth_value, str):
@@ -893,7 +925,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             self._ensure_client_secret_encrypted(oauth_config)
 
             ca_certificate = getattr(gateway, "ca_certificate", None)
-            capabilities, tools, resources, prompts = await self._initialize_gateway(normalized_url, authentication_headers, gateway.transport, auth_type, oauth_config, ca_certificate)
+            capabilities, tools, resources, prompts = await self._initialize_gateway(normalized_url, authentication_headers, effective_transport, auth_type, oauth_config, ca_certificate)
 
             if gateway.one_time_auth:
                 # For one-time auth, clear auth_type and auth_value after initialization
@@ -985,6 +1017,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
 
             # Create DB model
             db_gateway = DbGateway(
+                id=pre_generated_id,
                 name=gateway.name,
                 slug=slug_name,
                 url=normalized_url,
@@ -1013,6 +1046,13 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 ca_certificate=gateway.ca_certificate,
                 ca_certificate_sig=gateway.ca_certificate_sig,
                 signing_algorithm=gateway.signing_algorithm,
+                # Stdio fields
+                stdio_command=getattr(gateway, "stdio_command", None),
+                stdio_args=getattr(gateway, "stdio_args", None),
+                stdio_env=stdio_env_encrypted if is_stdio else None,
+                stdio_cwd=getattr(gateway, "stdio_cwd", None),
+                stdio_timeout=getattr(gateway, "stdio_timeout", None),
+                stdio_bridge_port=stdio_bridge_port,
             )
 
             # Add to DB
@@ -1021,7 +1061,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             db.refresh(db_gateway)
 
             # Update tracking
-            self._active_gateways.add(db_gateway.url)
+            if db_gateway.url:
+                self._active_gateways.add(db_gateway.url)
 
             # Notify subscribers
             await self._notify_gateway_added(db_gateway)
@@ -1900,13 +1941,41 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 if not await permission_service.check_resource_ownership(user_email, gateway):
                     raise PermissionError("Only the owner can activate the gateway" if activate else "Only the owner can deactivate the gateway")
 
+            # Handle stdio bridge start/stop on toggle
+            if gateway.stdio_command:
+                from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+                from mcpgateway.utils.services_auth import decode_auth as _decode_auth  # pylint: disable=import-outside-toplevel
+
+                if activate:
+                    env = {}
+                    if gateway.stdio_env:
+                        decoded_env = _decode_auth(gateway.stdio_env)
+                        if decoded_env:
+                            env = decoded_env
+                    try:
+                        bridge_url = await stdio_bridge_manager.start_bridge(
+                            gateway_id=gateway.id,
+                            command=gateway.stdio_command,
+                            args=gateway.stdio_args or [],
+                            env=env,
+                            cwd=gateway.stdio_cwd,
+                            timeout=gateway.stdio_timeout or 60,
+                        )
+                        gateway.url = bridge_url
+                        bridge_status = stdio_bridge_manager.get_status(gateway.id)
+                        gateway.stdio_bridge_port = bridge_status["port"] if bridge_status else None
+                    except Exception as e:
+                        logger.error(f"Failed to start stdio bridge for gateway {gateway.name}: {e}")
+                else:
+                    await stdio_bridge_manager.stop_bridge(gateway.id)
+
             # Update status if it's different
             if (gateway.enabled != activate) or (gateway.reachable != reachable):
                 gateway.enabled = activate
                 gateway.reachable = reachable
                 gateway.updated_at = datetime.now(timezone.utc)
                 # Update tracking
-                if activate and reachable:
+                if activate and reachable and gateway.url:
                     self._active_gateways.add(gateway.url)
 
                     # Initialize empty lists in case initialization fails
@@ -2079,6 +2148,12 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 if not await permission_service.check_resource_ownership(user_email, gateway):
                     raise PermissionError("Only the owner can delete this gateway")
 
+            # Stop stdio bridge if applicable
+            if gateway.stdio_command:
+                from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+
+                await stdio_bridge_manager.stop_bridge(gateway.id)
+
             # Store gateway info for notification before deletion
             gateway_info = {"id": gateway.id, "name": gateway.name, "url": gateway.url}
 
@@ -2087,7 +2162,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             db.commit()
 
             # Update tracking
-            self._active_gateways.discard(gateway.url)
+            if gateway.url:
+                self._active_gateways.discard(gateway.url)
 
             # Notify subscribers
             await self._notify_gateway_deleted(gateway_info)
@@ -3107,6 +3183,28 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         # If auth_value is a dict, encode it to string for GatewayRead schema
         if isinstance(gateway.auth_value, dict):
             gateway.auth_value = encode_auth(gateway.auth_value)
+
+        # Populate stdio read-only fields
+        if gateway.stdio_command:
+            # Decrypt env to get key names only
+            if gateway.stdio_env:
+                try:
+                    decoded = decode_auth(gateway.stdio_env)
+                    gateway.stdio_env_keys = list(decoded.keys()) if decoded else None
+                except Exception:
+                    gateway.stdio_env_keys = None
+            else:
+                gateway.stdio_env_keys = None
+
+            # Get bridge process status
+            try:
+                from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+
+                status = stdio_bridge_manager.get_status(gateway.id)
+                gateway.stdio_status = status["status"] if status else "stopped"
+            except Exception:
+                gateway.stdio_status = "unknown"
+
         return gateway
 
     def _create_db_tool(
