@@ -122,8 +122,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      azure-mcp:
-        condition: service_healthy
+      # azure-mcp dependency removed — gateway starts independently;
+      # register the Azure MCP server later via the admin UI if needed
+      # azure-mcp:
+      #   condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; import json; resp = urllib.request.urlopen('http://localhost:4444/health', timeout=5); data = json.loads(resp.read()); exit(0 if data.get('status') == 'healthy' else 1)"]
       interval: 30s
