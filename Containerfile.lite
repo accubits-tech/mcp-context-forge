@@ -144,10 +144,10 @@ RUN set -euo pipefail \
         echo "⏭️  Rust plugins not available - using Python implementations"; \
     fi \
     && rm -rf /tmp/rust-wheels \
-    && /app/.venv/bin/pip uninstall --yes uv pip setuptools wheel pdm \
+    && /app/.venv/bin/pip uninstall --yes pip setuptools wheel pdm \
     && rm -rf /root/.cache /var/cache/dnf \
     && find /app/.venv -name "*.dist-info" -type d \
-        \( -name "pip-*" -o -name "setuptools-*" -o -name "wheel-*" -o -name "pdm-*" -o -name "uv-*" \) \
+        \( -name "pip-*" -o -name "setuptools-*" -o -name "wheel-*" -o -name "pdm-*" \) \
         -exec rm -rf {} + 2>/dev/null || true \
     && rm -rf /app/.venv/share/python-wheels \
     && rm -rf /app/*.egg-info /app/build /app/dist /app/.eggs

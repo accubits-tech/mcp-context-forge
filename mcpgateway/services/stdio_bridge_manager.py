@@ -186,6 +186,8 @@ class StdioBridgeManager:
         try:
             await self._wait_for_health(bridge_url, timeout)
         except Exception:
+            # Log stderr/stdout from the failed bridge process for diagnostics
+            await self._log_process_output(process, gateway_id)
             # If health check fails, clean up
             await self._kill_process(process)
             self._used_ports.discard(port)
@@ -328,6 +330,7 @@ class StdioBridgeManager:
                 if bridge.process.returncode is not None:
                     bridge.status = "crashed"
                     logger.warning(f"Stdio bridge for gateway {gateway_id} has crashed (exit code {bridge.process.returncode})")
+                    await self._log_process_output(bridge.process, gateway_id)
 
                     if bridge.restart_count < settings.mcpgateway_stdio_restart_max_retries:
                         bridge.restart_count += 1
@@ -348,6 +351,25 @@ class StdioBridgeManager:
                             bridge.status = "crashed"
                 except Exception:
                     bridge.status = "crashed"
+
+    @staticmethod
+    async def _log_process_output(process: asyncio.subprocess.Process, gateway_id: str) -> None:
+        """Read and log any available stdout/stderr from a bridge process for diagnostics."""
+        try:
+            if process.stderr:
+                stderr_data = await asyncio.wait_for(process.stderr.read(8192), timeout=2.0)
+                if stderr_data:
+                    stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
+                    for line in stderr_text.splitlines()[:20]:
+                        logger.error(f"[STDIO_BRIDGE:{gateway_id}] stderr: {line}")
+            if process.stdout:
+                stdout_data = await asyncio.wait_for(process.stdout.read(8192), timeout=2.0)
+                if stdout_data:
+                    stdout_text = stdout_data.decode("utf-8", errors="replace").strip()
+                    for line in stdout_text.splitlines()[:20]:
+                        logger.warning(f"[STDIO_BRIDGE:{gateway_id}] stdout: {line}")
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.debug(f"Could not read bridge process output for gateway {gateway_id}: {e}")
 
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
