@@ -19,6 +19,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Validation settings for the security validator."""
 
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "case_sensitive": False, "extra": "ignore"}
+
     # Validation patterns for safe display (configurable)
     validation_dangerous_html_pattern: str = (
         r"<(script|iframe|object|embed|link|meta|base|form|img|svg|video|audio|source|track|area|map|canvas|applet|frame|frameset|html|head|body|style)\b|</*(script|iframe|object|embed|link|meta|base|form|img|svg|video|audio|source|track|area|map|canvas|applet|frame|frameset|html|head|body|style)>"

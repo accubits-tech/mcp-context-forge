@@ -478,7 +478,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             timeout = settings.gateway_validation_timeout
         validation_client = ResilientHttpClient(
             client_args={
-                "timeout": settings.gateway_validation_timeout,
+                "timeout": timeout,
                 "verify": not settings.skip_ssl_verify,
                 # Let httpx follow only proper HTTP redirects (3xx) and
                 # enforce a sensible redirect limit.
@@ -925,7 +925,10 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             self._ensure_client_secret_encrypted(oauth_config)
 
             ca_certificate = getattr(gateway, "ca_certificate", None)
-            capabilities, tools, resources, prompts = await self._initialize_gateway(normalized_url, authentication_headers, effective_transport, auth_type, oauth_config, ca_certificate)
+            # Stdio bridges need longer validation timeout since the underlying MCP server
+            # may still be initializing after the bridge's /healthz is already responding
+            stdio_validation_timeout = (gateway.stdio_timeout or 60) if is_stdio else None
+            capabilities, tools, resources, prompts = await self._initialize_gateway(normalized_url, authentication_headers, effective_transport, auth_type, oauth_config, ca_certificate, validation_timeout=stdio_validation_timeout)
 
             if gateway.one_time_auth:
                 # For one-time auth, clear auth_type and auth_value after initialization
@@ -2826,6 +2829,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         auth_type: Optional[str] = None,
         oauth_config: Optional[Dict[str, Any]] = None,
         ca_certificate: Optional[bytes] = None,
+        validation_timeout: Optional[int] = None,
     ) -> tuple[Dict[str, Any], List[ToolCreate], List[ResourceCreate], List[PromptCreate]]:
         """Initialize connection to a gateway and retrieve its capabilities.
 
@@ -2908,7 +2912,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             if transport.lower() == "sse":
                 capabilities, tools, resources, prompts = await self.connect_to_sse_server(url, authentication, ca_certificate)
             elif transport.lower() == "streamablehttp":
-                capabilities, tools, resources, prompts = await self.connect_to_streamablehttp_server(url, authentication, ca_certificate)
+                capabilities, tools, resources, prompts = await self.connect_to_streamablehttp_server(url, authentication, ca_certificate, validation_timeout=validation_timeout)
 
             return capabilities, tools, resources, prompts
         except Exception as e:
@@ -3701,7 +3705,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     return capabilities, tools, resources, prompts
         raise GatewayConnectionError(f"Failed to initialize gateway at {server_url}")
 
-    async def connect_to_streamablehttp_server(self, server_url: str, authentication: Optional[Dict[str, str]] = None, ca_certificate: Optional[bytes] = None):
+    async def connect_to_streamablehttp_server(self, server_url: str, authentication: Optional[Dict[str, str]] = None, ca_certificate: Optional[bytes] = None, validation_timeout: Optional[int] = None):
         """Connect to an MCP server running with Streamable HTTP transport.
 
         Args:
@@ -3746,7 +3750,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         logger.debug(f"[STREAMABLEHTTP] Starting connection to {server_url}")
         logger.debug(f"[STREAMABLEHTTP] Authentication headers present: {list(authentication.keys()) if authentication else 'None'}")
 
-        validation_result = await self._validate_gateway_url(url=server_url, headers=authentication, transport_type="STREAMABLEHTTP")
+        validation_result = await self._validate_gateway_url(url=server_url, headers=authentication, transport_type="STREAMABLEHTTP", timeout=validation_timeout)
         if not validation_result:
             logger.error(f"[STREAMABLEHTTP] Gateway validation failed for {server_url} - see [GATEWAY_VALIDATION] logs above for details")
             raise GatewayConnectionError(f"Failed to initialize gateway at {server_url}: validation failed")
