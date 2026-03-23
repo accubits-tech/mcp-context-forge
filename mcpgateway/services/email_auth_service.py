@@ -784,7 +784,7 @@ class EmailAuthService:
 
             # Check if user owns any teams
             # First-Party
-            from mcpgateway.db import EmailTeam, EmailTeamMember  # pylint: disable=import-outside-toplevel
+            from mcpgateway.db import EmailTeam, EmailTeamMember, EmailTeamMemberHistory  # pylint: disable=import-outside-toplevel
 
             teams_owned_stmt = select(EmailTeam).where(EmailTeam.created_by == email)
             teams_owned = self.db.execute(teams_owned_stmt).scalars().all()
@@ -812,7 +812,10 @@ class EmailAuthService:
                         if len(all_members) == 1 and all_members[0].user_email == email:
                             # This is a single-user personal team - cascade delete it
                             logger.info(f"Deleting personal team '{team.name}' (single member: {email})")
-                            # Delete team members first (should be just the owner)
+                            # Delete team member history first (FK constraint)
+                            delete_team_history_stmt = delete(EmailTeamMemberHistory).where(EmailTeamMemberHistory.team_id == team.id)
+                            self.db.execute(delete_team_history_stmt)
+                            # Delete team members (should be just the owner)
                             delete_team_members_stmt = delete(EmailTeamMember).where(EmailTeamMember.team_id == team.id)
                             self.db.execute(delete_team_members_stmt)
                             # Delete the team
@@ -824,6 +827,10 @@ class EmailAuthService:
             # Delete related auth events first
             auth_events_stmt = delete(EmailAuthEvent).where(EmailAuthEvent.user_email == email)
             self.db.execute(auth_events_stmt)
+
+            # Remove user's team member history (FK constraint on email_team_members)
+            team_member_history_stmt = delete(EmailTeamMemberHistory).where(EmailTeamMemberHistory.user_email == email)
+            self.db.execute(team_member_history_stmt)
 
             # Remove user from all team memberships
             team_members_stmt = delete(EmailTeamMember).where(EmailTeamMember.user_email == email)
