@@ -13,6 +13,10 @@ This module handles OAuth 2.0 Authorization Code flow endpoints including:
 """
 
 # Standard
+import base64
+import hashlib
+import hmac
+import json
 import logging
 from typing import Any, Dict
 
@@ -273,20 +277,23 @@ async def oauth_callback(
 
         # Extract gateway_id from state parameter
         # Try new base64-encoded JSON format first
-        # Standard
-        import base64
-        import json
-
         try:
             # Expect state as base64url(payload || signature) where the last 32 bytes
-            # are the signature. Decode to bytes first so we can split payload vs sig.
+            # are the HMAC-SHA256 signature. Decode to bytes first so we can split.
             state_raw = base64.urlsafe_b64decode(state.encode())
             if len(state_raw) <= 32:
                 raise ValueError("State too short to contain payload and signature")
 
             # Split payload and signature. Signature is the last 32 bytes.
             payload_bytes = state_raw[:-32]
-            # signature_bytes = state_raw[-32:]
+            signature_bytes = state_raw[-32:]
+
+            # Verify HMAC signature before trusting any payload data
+            secret_key = settings.auth_encryption_secret.get_secret_value().encode() if settings.auth_encryption_secret else b"default-secret-key"
+            expected_sig = hmac.new(secret_key, payload_bytes, hashlib.sha256).digest()
+            if not hmac.compare_digest(signature_bytes, expected_sig):
+                logger.warning("OAuth callback received state with invalid HMAC signature")
+                return HTMLResponse(content="<h1>Invalid OAuth state signature</h1>", status_code=400)
 
             # Parse the JSON payload only (not including signature bytes)
             try:
@@ -301,7 +308,7 @@ async def oauth_callback(
             # Fallback to legacy format (gateway_id_random)
             logger.warning(f"Failed to decode state as JSON, trying legacy format: {e}")
             if "_" not in state:
-                return HTMLResponse(content="<h1>❌ Invalid state parameter</h1>", status_code=400)
+                return HTMLResponse(content="<h1>Invalid state parameter</h1>", status_code=400)
             gateway_id = state.split("_")[0]
 
         # Get gateway configuration
