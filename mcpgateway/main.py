@@ -5780,9 +5780,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # Check for proxy auth if MCP client auth is disabled
             if not settings.mcp_client_auth_enabled and settings.trust_proxy_auth:
-                proxy_user = websocket.headers.get(settings.proxy_user_header)
-                if not proxy_user and not token:
-                    await websocket.close(code=1008, reason="Authentication required")
+                proxy_user = (
+                    websocket.headers.get(settings.proxy_user_header)
+                    or websocket.headers.get("X-Forwarded-User")
+                    or websocket.headers.get("X-Auth-Request-User")
+                )
+                if not proxy_user or not proxy_user.strip():
+                    await websocket.close(code=4001, reason="Proxy authentication required")
                     return
             elif settings.auth_required and not token:
                 await websocket.close(code=1008, reason="Authentication required")
