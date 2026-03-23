@@ -261,3 +261,11 @@ plugins_rust/Cargo.lock
 # crawler artifacts
 crawler_artifacts/
 crawled-data/
+
+# Agent runtime env files with secrets
+agent_runtimes/**/.env
+
+# Database files
+*.db-wal
+*.db-shm
+test_rootpath.db
