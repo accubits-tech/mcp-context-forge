@@ -273,10 +273,10 @@ services:
     networks: [mcpnet]
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 5s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   firecrawl-postgres:
     image: postgres:16-alpine
