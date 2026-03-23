@@ -233,6 +233,64 @@ class LocalDiscoveryService:
         return addresses or ["127.0.0.1"]
 
 
+def _is_safe_url(url: str) -> bool:
+    """Validate that a URL does not point to private/internal networks.
+
+    Checks the URL scheme, resolves the hostname to IP addresses, and blocks
+    any that resolve to private, loopback, link-local, or reserved ranges.
+    This prevents SSRF attacks via federation peer registration.
+
+    Args:
+        url (str): The URL to validate.
+
+    Returns:
+        bool: True if the URL is safe (points to a public address), False otherwise.
+
+    Examples:
+        >>> _is_safe_url("http://example.com")  # doctest: +SKIP
+        True
+        >>> _is_safe_url("http://169.254.169.254/latest/meta-data")
+        False
+        >>> _is_safe_url("http://127.0.0.1:6379")
+        False
+        >>> _is_safe_url("http://[::1]:8080")
+        False
+        >>> _is_safe_url("ftp://example.com")
+        False
+        >>> _is_safe_url("not-a-url")
+        False
+        >>> _is_safe_url("http://10.0.0.1:8080")
+        False
+        >>> _is_safe_url("http://192.168.1.1")
+        False
+        >>> _is_safe_url("http://172.16.0.1")
+        False
+    """
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return False
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # Resolve hostname to IP and check all resolved addresses
+        try:
+            addr_info = socket.getaddrinfo(hostname, None)
+            for family, _, _, _, sockaddr in addr_info:
+                ip = ipaddress.ip_address(sockaddr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    logger.warning(f"Blocked federation peer URL pointing to private/internal address: {url} -> {ip}")
+                    return False
+        except socket.gaierror:
+            logger.warning(f"Failed to resolve federation peer hostname: {hostname}")
+            return False
+        return True
+    except Exception:
+        return False
+
+
 class DiscoveryService(LocalDiscoveryService):
     """Service for automatic gateway discovery.
 
@@ -413,6 +471,11 @@ class DiscoveryService(LocalDiscoveryService):
                 return False
         except Exception:
             logger.warning(f"Failed to parse peer URL: {url}")
+            return False
+
+        # Block URLs pointing to private/internal IP ranges to prevent SSRF
+        if not _is_safe_url(url):
+            logger.warning(f"Rejected peer URL targeting private/internal network: {url}")
             return False
 
         # Skip if already known
