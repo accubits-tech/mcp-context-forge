@@ -35,7 +35,7 @@ class TokenStorageService:
         >>> service = TokenStorageService(None)  # Mock DB for doctest
         >>> service.db is None
         True
-        >>> service.encryption is not None or service.encryption is None  # Encryption may or may not be available
+        >>> service.encryption is not None  # Encryption is always required
         True
         >>> # Test token expiration calculation
         >>> from datetime import datetime, timedelta
@@ -64,14 +64,22 @@ class TokenStorageService:
 
         Args:
             db: Database session
+
+        Raises:
+            RuntimeError: If encryption service cannot be initialized.
+                OAuth tokens must always be encrypted at rest.
         """
         self.db = db
         try:
             settings = get_settings()
             self.encryption = get_encryption_service(settings.auth_encryption_secret)
-        except (ImportError, AttributeError):
-            logger.warning("OAuth encryption not available, using plain text storage")
-            self.encryption = None
+        except Exception as e:
+            logger.error(f"Failed to initialize encryption service for OAuth token storage: {e}")
+            raise RuntimeError(
+                "Encryption service is required for OAuth token storage. "
+                "Ensure AUTH_ENCRYPTION_SECRET is configured. "
+                f"Initialization error: {e}"
+            ) from e
 
     async def store_tokens(self, gateway_id: str, user_id: str, app_user_email: str, access_token: str, refresh_token: Optional[str], expires_in: int, scopes: List[str]) -> OAuthToken:
         """Store OAuth tokens for a gateway-user combination.
@@ -92,14 +100,9 @@ class TokenStorageService:
             OAuthError: If token storage fails
         """
         try:
-            # Encrypt sensitive tokens if encryption is available
-            encrypted_access = access_token
-            encrypted_refresh = refresh_token
-
-            if self.encryption:
-                encrypted_access = self.encryption.encrypt_secret(access_token)
-                if refresh_token:
-                    encrypted_refresh = self.encryption.encrypt_secret(refresh_token)
+            # Always encrypt sensitive tokens before storing in the database
+            encrypted_access = self.encryption.encrypt_secret(access_token)
+            encrypted_refresh = self.encryption.encrypt_secret(refresh_token) if refresh_token else refresh_token
 
             # Calculate expiration
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
@@ -171,13 +174,22 @@ class TokenStorageService:
                 return None
 
             # Decrypt and return valid token
-            if self.encryption:
-                logger.info(f"[TOKEN_STORAGE] Decrypting token for gateway {gateway_id}, stored_len={len(token_record.access_token)}")
-                decrypted = self.encryption.decrypt_secret(token_record.access_token)
+            stored_token = token_record.access_token
+            if self.encryption.is_encrypted(stored_token):
+                logger.info(f"[TOKEN_STORAGE] Decrypting token for gateway {gateway_id}, stored_len={len(stored_token)}")
+                decrypted = self.encryption.decrypt_secret(stored_token)
+                if decrypted is None:
+                    logger.error(f"[TOKEN_STORAGE] Failed to decrypt access token for gateway {gateway_id}")
+                    return None
                 logger.info(f"[TOKEN_STORAGE] Decrypted token: len={len(decrypted)}, prefix={decrypted[:15]}...")
                 return decrypted
-            logger.info(f"[TOKEN_STORAGE] No encryption, returning raw token: len={len(token_record.access_token)}, prefix={token_record.access_token[:15]}...")
-            return token_record.access_token
+            else:
+                # Legacy plaintext token -- return it but warn that it needs migration
+                logger.warning(
+                    f"[TOKEN_STORAGE] Access token for gateway {gateway_id} is stored in plaintext. "
+                    "Run the token encryption migration to encrypt existing tokens."
+                )
+                return stored_token
 
         except Exception as e:
             logger.error(f"Failed to retrieve OAuth token: {str(e)}")
@@ -210,20 +222,25 @@ class TokenStorageService:
                 logger.error(f"No OAuth configuration found for gateway {token_record.gateway_id}")
                 return None
 
-            # Decrypt the refresh token if encryption is available
+            # Decrypt the refresh token before sending to OAuth provider
             refresh_token = token_record.refresh_token
-            if self.encryption:
+            if self.encryption.is_encrypted(refresh_token):
                 try:
                     refresh_token = self.encryption.decrypt_secret(refresh_token)
+                    if refresh_token is None:
+                        logger.error(f"Failed to decrypt refresh token for gateway {token_record.gateway_id}")
+                        return None
                 except Exception as e:
                     logger.error(f"Failed to decrypt refresh token: {str(e)}")
                     return None
+            else:
+                logger.warning(f"Refresh token for gateway {token_record.gateway_id} is stored in plaintext. Run the token encryption migration.")
 
             # Decrypt client_secret if it's encrypted
             oauth_config = gateway.oauth_config.copy()
             if "client_secret" in oauth_config and oauth_config["client_secret"]:
-                if self.encryption:
-                    original_secret = oauth_config["client_secret"]
+                original_secret = oauth_config["client_secret"]
+                if self.encryption.is_encrypted(original_secret):
                     try:
                         decrypted = self.encryption.decrypt_secret(original_secret)
                         # decrypt_secret returns None on failure (e.g. plain text input)
@@ -246,12 +263,9 @@ class TokenStorageService:
             new_refresh_token = token_response.get("refresh_token", refresh_token)  # Some providers return new refresh token
             expires_in = token_response.get("expires_in", 3600)
 
-            # Encrypt new tokens if encryption is available
-            encrypted_access = new_access_token
-            encrypted_refresh = new_refresh_token
-            if self.encryption:
-                encrypted_access = self.encryption.encrypt_secret(new_access_token)
-                encrypted_refresh = self.encryption.encrypt_secret(new_refresh_token)
+            # Always encrypt new tokens before storing in the database
+            encrypted_access = self.encryption.encrypt_secret(new_access_token)
+            encrypted_refresh = self.encryption.encrypt_secret(new_refresh_token)
 
             # Update the token record
             token_record.access_token = encrypted_access
