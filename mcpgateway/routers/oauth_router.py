@@ -933,10 +933,6 @@ async def oauth_callback_json(code: str, state: str, db: Session = Depends(get_d
 
     try:
         # Extract gateway_id from state parameter
-        # Standard
-        import base64
-        import json
-
         try:
             # Decode state (base64url encoded JSON with HMAC signature)
             state_raw = base64.urlsafe_b64decode(state.encode())
@@ -945,6 +941,14 @@ async def oauth_callback_json(code: str, state: str, db: Session = Depends(get_d
 
             # Split payload and signature (last 32 bytes)
             payload_bytes = state_raw[:-32]
+            signature_bytes = state_raw[-32:]
+
+            # Verify HMAC signature before trusting any payload data
+            secret_key = settings.auth_encryption_secret.get_secret_value().encode() if settings.auth_encryption_secret else b"default-secret-key"
+            expected_sig = hmac.new(secret_key, payload_bytes, hashlib.sha256).digest()
+            if not hmac.compare_digest(signature_bytes, expected_sig):
+                logger.warning("OAuth JSON callback received state with invalid HMAC signature")
+                raise HTTPException(status_code=400, detail="Invalid OAuth state signature")
 
             try:
                 state_data = json.loads(payload_bytes.decode())
