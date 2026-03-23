@@ -55,6 +55,65 @@ from mcpgateway.plugins.framework.models import (
 
 logger = logging.getLogger(__name__)
 
+# Only pass safe, non-sensitive environment variables to plugin subprocesses
+_SENSITIVE_ENV_PREFIXES = (
+    "JWT_",
+    "DATABASE_",
+    "REDIS_",
+    "BASIC_AUTH_",
+    "OPENAI_",
+    "ANTHROPIC_",
+    "SSO_",
+    "OAUTH_",
+    "PLATFORM_ADMIN_",
+    "AUTH_ENCRYPTION_",
+    "POSTGRES_",
+    "MYSQL_",
+    "SECRET_",
+    "PRIVATE_KEY_",
+    "API_KEY",
+    "AWS_SECRET",
+    "AZURE_",
+    "GCP_",
+    "KEYCLOAK_",
+)
+
+_SAFE_ENV_KEYS = (
+    "PATH",
+    "HOME",
+    "USER",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PYTHONPATH",
+    "PYTHONHASHSEED",
+    "VIRTUAL_ENV",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SHELL",
+    "TERM",
+    "LOGNAME",
+    "HOSTNAME",
+)
+
+
+def _get_safe_env() -> dict:
+    """Return a filtered copy of environment variables safe for plugin subprocesses.
+
+    Variables are included if they are in the explicit safe-list, or if they do
+    not match any known sensitive prefix.  This prevents secrets such as
+    JWT_SECRET_KEY, DATABASE_URL, or BASIC_AUTH_PASSWORD from leaking into
+    external plugin processes.
+    """
+    env: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if key in _SAFE_ENV_KEYS:
+            env[key] = value
+        elif not any(key.upper().startswith(prefix) for prefix in _SENSITIVE_ENV_PREFIXES):
+            env[key] = value
+    return env
+
 
 class ExternalPlugin(Plugin):
     """External plugin object for pre/post processing of inputs and outputs at various locations throughout the mcp gateway. The External Plugin connects to a remote MCP server that contains plugins."""
@@ -124,7 +183,7 @@ class ExternalPlugin(Plugin):
         if not is_python:
             raise PluginError(error=PluginErrorModel(message="Server script must be a .py file", plugin_name=self.name))
 
-        current_env = os.environ.copy()
+        current_env = _get_safe_env()
 
         try:
             server_params = StdioServerParameters(command=PYTHON, args=[server_script_path], env=current_env)
