@@ -7241,3 +7241,45 @@ class ObservabilityQueryParams(BaseModel):
     trace_id: Optional[str] = Field(None, description="Filter by trace ID")
     limit: int = Field(default=100, ge=1, le=1000, description="Maximum number of results")
     offset: int = Field(default=0, ge=0, description="Result offset for pagination")
+
+
+# ---------------------------------------------------------------------------
+# Tool Generation Background Jobs
+# ---------------------------------------------------------------------------
+
+
+class ToolGenJobSubmitResponse(BaseModel):
+    """Response for async tool generation job submission."""
+
+    job_id: str = Field(..., description="Unique job identifier")
+    status: str = Field(default="pending", description="Job status")
+    message: str = Field(default="", description="Human-readable status message")
+
+
+class ToolGenJobStatusResponse(BaseModel):
+    """Response for polling a tool generation job."""
+
+    job_id: str = Field(..., description="Unique job identifier")
+    job_type: str = Field(..., description="Job type: openapi_upload, openapi_url, apidoc_upload, apidoc_url")
+    status: str = Field(..., description="Job status: pending, running, completed, failed, cancelled")
+    progress: int = Field(default=0, description="Progress percentage 0-100")
+    progress_message: Optional[str] = Field(None, description="Current progress stage description")
+    created_at: datetime = Field(..., description="Job creation timestamp")
+    started_at: Optional[datetime] = Field(None, description="When processing started")
+    completed_at: Optional[datetime] = Field(None, description="When processing finished")
+    result: Optional[Dict[str, Any]] = Field(None, description="Raw result on completion")
+    error: Optional[str] = Field(None, description="Error message on failure")
+
+
+class ToolGenJobListResponse(BaseModel):
+    """Response for listing tool generation jobs."""
+
+    jobs: List[ToolGenJobStatusResponse] = Field(default_factory=list, description="List of jobs")
+    total: int = Field(default=0, description="Total number of jobs")
+
+
+class ToolGenJobCancelResponse(BaseModel):
+    """Response for cancelling a tool generation job."""
+
+    cancelled: bool = Field(..., description="Whether cancellation was accepted")
+    job_id: str = Field(..., description="Job identifier")

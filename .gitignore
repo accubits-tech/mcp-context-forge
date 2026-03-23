@@ -257,3 +257,7 @@ tmp/
 plugins_rust/target/
 plugins_rust/**/*.rs.bk
 plugins_rust/Cargo.lock
+
+# crawler artifacts
+crawler_artifacts/
+crawled-data/

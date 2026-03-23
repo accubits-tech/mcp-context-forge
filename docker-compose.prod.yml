@@ -17,6 +17,7 @@ volumes:
   pgdata:
   redisdata:
   nginx_cache:
+  firecrawl_pgdata:
 
 services:
 
@@ -112,6 +113,12 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-ERROR}
       - DISABLE_ACCESS_LOG=true
       - LOG_FORMAT=${LOG_FORMAT:-json}
+      # ── Firecrawl (uncomment to enable) ──
+      - FIRECRAWL_ENABLED=${FIRECRAWL_ENABLED:-false}
+      - FIRECRAWL_API_URL=${FIRECRAWL_API_URL:-http://firecrawl-api:3002}
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-}
+      - DOC_CRAWLER_MAX_PAGES=${DOC_CRAWLER_MAX_PAGES:-50}
+      - DOC_CRAWLER_MAX_DEPTH=${DOC_CRAWLER_MAX_DEPTH:-5}
       # ── Runtime paths ──
       - HOME=/app
       - XDG_DATA_HOME=/app/.local/share
@@ -210,3 +217,87 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+###############################################################################
+#  FIRECRAWL OSS - Web crawler for API documentation
+#  Provides Markdown extraction, JS rendering, and sitemap-based discovery.
+#  To enable: set FIRECRAWL_ENABLED=true in .env
+###############################################################################
+
+  firecrawl-api:
+    image: ghcr.io/firecrawl/firecrawl:latest
+    restart: unless-stopped
+    networks: [mcpnet]
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3002
+      - USE_DB_AUTHENTICATION=false
+      - REDIS_URL=redis://firecrawl-redis:6379
+      - REDIS_RATE_LIMIT_URL=redis://firecrawl-redis:6379
+      - PLAYWRIGHT_MICROSERVICE_URL=http://firecrawl-playwright:3000/scrape
+      - NUM_WORKERS_PER_QUEUE=${FIRECRAWL_WORKERS:-2}
+      - NUQ_RABBITMQ_URL=amqp://firecrawl-rabbitmq:5672
+      - NUQ_DATABASE_URL=postgresql://postgres:${FIRECRAWL_DB_PASSWORD:-postgres}@firecrawl-postgres:5432/firecrawl
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${FIRECRAWL_DB_PASSWORD:-postgres}
+      - POSTGRES_DB=firecrawl
+      - POSTGRES_HOST=firecrawl-postgres
+      - POSTGRES_PORT=5432
+    depends_on:
+      firecrawl-redis:
+        condition: service_started
+      firecrawl-playwright:
+        condition: service_started
+      firecrawl-rabbitmq:
+        condition: service_healthy
+      firecrawl-postgres:
+        condition: service_healthy
+    command: node dist/src/harness.js --start-docker
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  firecrawl-redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: redis-server --bind 0.0.0.0
+    networks: [mcpnet]
+
+  firecrawl-rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    command: rabbitmq-server
+    networks: [mcpnet]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  firecrawl-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${FIRECRAWL_DB_PASSWORD:-postgres}
+      - POSTGRES_DB=firecrawl
+    volumes:
+      - firecrawl_pgdata:/var/lib/postgresql/data
+    networks: [mcpnet]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  firecrawl-playwright:
+    image: ghcr.io/firecrawl/playwright-service:latest
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+    networks: [mcpnet]

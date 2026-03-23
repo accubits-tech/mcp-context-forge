@@ -9,8 +9,10 @@ for OpenAPI spec detection, auth page classification, and base URL inference.
 """
 
 # Standard
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 # Third-Party
 import httpx
@@ -153,21 +155,26 @@ class FirecrawlCrawlerService:
         """
         client = self._get_client()
 
-        crawl_params = {
-            "url": url,
-            "limit": self.max_pages,
-            "maxDiscoveryDepth": self.max_depth,
-            "excludePaths": self._build_exclude_paths(),
-            "scrapeOptions": {
-                "formats": ["markdown", "rawHtml", "links"],
-                "onlyMainContent": True,
-            },
-        }
+        # Derive include_paths from the starting URL to stay within the docs section
+        parsed = urlparse(url)
+        base_path = parsed.path.rstrip("/")
+        include_paths = [f"{base_path}/.*"]
 
         logger.info(f"Starting Firecrawl crawl of {url} (limit={self.max_pages}, depth={self.max_depth})")
 
         # Use async crawl with polling
-        crawl_result = await client.crawl_url(url, params=crawl_params, poll_interval=2)
+        crawl_result = await client.crawl(
+            url=url,
+            limit=self.max_pages,
+            max_discovery_depth=self.max_depth,
+            exclude_paths=self._build_exclude_paths(),
+            include_paths=include_paths,
+            scrape_options={
+                "formats": ["markdown", "rawHtml", "links"],
+                "onlyMainContent": True,
+            },
+            poll_interval=2,
+        )
 
         pages: List[CrawledPage] = []
 
@@ -178,7 +185,56 @@ class FirecrawlCrawlerService:
             if page:
                 pages.append(page)
 
+        # Fallback: if crawl returned very few pages but the page has many API links,
+        # extract and scrape detail pages individually
+        if len(pages) <= 2 and pages:
+            detail_urls = self._extract_api_links_from_pages(pages)
+            if len(detail_urls) > 5:
+                remaining_budget = self.max_pages - len(pages)
+                urls_to_scrape = detail_urls[:remaining_budget]
+                logger.info(f"Crawl returned only {len(pages)} page(s) but found {len(detail_urls)} API links, scraping up to {len(urls_to_scrape)} detail pages")
+                detail_pages = await self._scrape_detail_pages(client, urls_to_scrape)
+                pages.extend(detail_pages)
+
         logger.info(f"Firecrawl crawled {len(pages)} pages from {url}")
+        return pages
+
+    def _extract_api_links_from_pages(self, pages: List[CrawledPage]) -> List[str]:
+        """Extract API detail page URLs from crawled page content.
+
+        Looks for markdown links pointing to API operation pages.
+        """
+        urls: List[str] = []
+        seen: set = set()
+        for page in pages:
+            # Match markdown links like [GET ...](https://.../.../api/.../get/)
+            for match in re.finditer(r'\[(?:GET|POST|PUT|PATCH|DELETE)[^\]]*\]\((https?://[^)]+)\)', page.content):
+                link = match.group(1)
+                if link not in seen:
+                    seen.add(link)
+                    urls.append(link)
+            # Also check the links field
+            for link in page.links:
+                if isinstance(link, str) and "/api/" in link and link not in seen:
+                    seen.add(link)
+                    urls.append(link)
+        return urls
+
+    async def _scrape_detail_pages(self, client: Any, urls: List[str]) -> List[CrawledPage]:
+        """Scrape a list of URLs individually via Firecrawl scrape endpoint."""
+        pages: List[CrawledPage] = []
+        for url in urls:
+            try:
+                result = await client.scrape(
+                    url,
+                    formats=["markdown", "rawHtml", "links"],
+                    only_main_content=True,
+                )
+                page = self._firecrawl_item_to_page(result)
+                if page:
+                    pages.append(page)
+            except Exception as e:
+                logger.debug(f"Failed to scrape detail page {url}: {e}")
         return pages
 
     # ------------------------------------------------------------------
@@ -196,13 +252,12 @@ class FirecrawlCrawlerService:
         """
         client = self._get_client()
 
-        scrape_params = {
-            "formats": ["markdown", "rawHtml", "links"],
-            "onlyMainContent": True,
-        }
-
         logger.info(f"Firecrawl scraping single page: {url}")
-        scrape_result = await client.scrape_url(url, params=scrape_params)
+        scrape_result = await client.scrape(
+            url,
+            formats=["markdown", "rawHtml", "links"],
+            only_main_content=True,
+        )
 
         page = self._firecrawl_item_to_page(scrape_result)
         return [page] if page else []
@@ -240,7 +295,7 @@ class FirecrawlCrawlerService:
             title = metadata.get("title", "") or ""
             content_type = metadata.get("content-type", "text/html") or "text/html"
         else:
-            source_url = getattr(metadata, "sourceURL", "") or getattr(metadata, "url", "") or ""
+            source_url = getattr(metadata, "source_url", "") or getattr(metadata, "sourceURL", "") or getattr(metadata, "url", "") or ""
             title = getattr(metadata, "title", "") or ""
             content_type = getattr(metadata, "content_type", "text/html") or "text/html"
 

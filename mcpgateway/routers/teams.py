@@ -63,7 +63,7 @@ teams_router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-@teams_router.post("/", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
+@teams_router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 @require_permission("teams.create")
 async def create_team(request: TeamCreateRequest, current_user_ctx: dict = Depends(get_current_user_with_permissions)) -> TeamResponse:
     """Create a new team.
@@ -110,7 +110,7 @@ async def create_team(request: TeamCreateRequest, current_user_ctx: dict = Depen
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create team")
 
 
-@teams_router.get("/", response_model=TeamListResponse)
+@teams_router.get("", response_model=TeamListResponse)
 @require_permission("teams.read")
 async def list_teams(
     skip: int = Query(0, ge=0, description="Number of teams to skip"),

@@ -211,6 +211,13 @@ server_service = ServerService()
 tag_service = TagService()
 export_service = ExportService()
 import_service = ImportService()
+
+# Initialize tool generation background job service
+# First-Party
+from mcpgateway.services.tool_generation_job_service import ToolGenerationJobService  # pylint: disable=ungrouped-imports
+
+tool_gen_job_service = ToolGenerationJobService()
+
 # Initialize A2A service only if A2A features are enabled
 a2a_service = A2AAgentService() if settings.mcpgateway_a2a_enabled else None
 
@@ -482,6 +489,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 logger.warning(f"Failed to bootstrap SSO providers: {e}")
 
         logger.info("All services initialized successfully")
+
+        # Initialize tool generation background job service
+        await tool_gen_job_service.initialize()
 
         # Reconfigure uvicorn loggers after startup to capture access logs in dual output
         logging_service.configure_uvicorn_after_startup()
@@ -1173,6 +1183,7 @@ if plugin_manager:
 # Create API routers
 protocol_router = APIRouter(prefix="/protocol", tags=["Protocol"])
 tool_router = APIRouter(prefix="/tools", tags=["Tools"])
+tool_job_router = APIRouter(prefix="/tools/jobs", tags=["Tool Generation Jobs"])
 resource_router = APIRouter(prefix="/resources", tags=["Resources"])
 prompt_router = APIRouter(prefix="/prompts", tags=["Prompts"])
 gateway_router = APIRouter(prefix="/gateways", tags=["Gateways"])
@@ -4211,6 +4222,143 @@ async def process_api_documentation_url(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+##########################################
+# Tool Generation Background Job APIs   #
+##########################################
+
+
+async def _submit_job_common(source_type, params, user, auth_type, auth_username, auth_password, auth_token, auth_header_key, auth_header_value, file_content=None, filename=None):
+    """Shared logic for async job submission endpoints."""
+    auth_override = _build_auth_override_from_params(auth_type, auth_username, auth_password, auth_token, auth_header_key, auth_header_value)
+    params["auth_type"] = auth_type if auth_type and auth_type.lower() != "none" else None
+
+    job_id = await tool_gen_job_service.submit_job(
+        job_type=source_type,
+        params=params,
+        user=user,
+        auth_override=auth_override,
+        file_content=file_content,
+        filename=filename,
+    )
+    return {"job_id": job_id, "status": "pending", "message": f"Job submitted for {source_type}"}
+
+
+@tool_router.post("/generate-async/upload", response_model=Dict[str, Any])
+async def submit_tool_generation_job_upload(
+    file: UploadFile = File(...),
+    source_type: str = "openapi_upload",
+    base_url: Optional[str] = None,
+    gateway_id: Optional[str] = None,
+    tags: Optional[str] = None,
+    enhance_with_ai: bool = True,
+    format_hint: str = "auto",
+    auth_type: Optional[str] = None,
+    auth_username: Optional[str] = None,
+    auth_password: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    auth_header_key: Optional[str] = None,
+    auth_header_value: Optional[str] = None,
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Submit a file-based tool generation job (multipart form)."""
+    valid_types = ("openapi_upload", "apidoc_upload")
+    if source_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"source_type must be one of {valid_types}")
+
+    file_content = await file.read()
+    params = {
+        "base_url": base_url,
+        "gateway_id": gateway_id,
+        "tags": tags,
+        "enhance_with_ai": enhance_with_ai,
+        "filename": file.filename,
+    }
+    if source_type == "apidoc_upload":
+        params["format_hint"] = format_hint
+
+    return await _submit_job_common(
+        source_type, params, user, auth_type, auth_username, auth_password,
+        auth_token, auth_header_key, auth_header_value,
+        file_content=file_content, filename=file.filename,
+    )
+
+
+@tool_router.post("/generate-async/url", response_model=Dict[str, Any])
+async def submit_tool_generation_job_url(
+    url: str = Body(..., embed=True),
+    source_type: str = Body("openapi_url"),
+    base_url: Optional[str] = Body(None),
+    gateway_id: Optional[str] = Body(None),
+    tags: Optional[str] = Body(None),
+    enhance_with_ai: bool = Body(True),
+    enable_crawling: bool = Body(True),
+    format_hint: str = Body("auto"),
+    auth_type: Optional[str] = Body(None),
+    auth_username: Optional[str] = Body(None),
+    auth_password: Optional[str] = Body(None),
+    auth_token: Optional[str] = Body(None),
+    auth_header_key: Optional[str] = Body(None),
+    auth_header_value: Optional[str] = Body(None),
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Submit a URL-based tool generation job (JSON body)."""
+    valid_types = ("openapi_url", "apidoc_url")
+    if source_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"source_type must be one of {valid_types}")
+
+    params = {
+        "url": url,
+        "base_url": base_url,
+        "gateway_id": gateway_id,
+        "tags": tags,
+        "enhance_with_ai": enhance_with_ai,
+    }
+    if source_type.startswith("apidoc"):
+        params["format_hint"] = format_hint
+        if source_type == "apidoc_url":
+            params["enable_crawling"] = enable_crawling
+
+    return await _submit_job_common(
+        source_type, params, user, auth_type, auth_username, auth_password,
+        auth_token, auth_header_key, auth_header_value,
+    )
+
+
+@tool_job_router.get("", response_model=Dict[str, Any])
+async def list_tool_generation_jobs(
+    limit: int = 20,
+    offset: int = 0,
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """List tool generation jobs for the current user."""
+    jobs, total = await tool_gen_job_service.list_jobs(user, limit=limit, offset=offset)
+    return {"jobs": jobs, "total": total}
+
+
+@tool_job_router.get("/{job_id}", response_model=Dict[str, Any])
+async def get_tool_generation_job(
+    job_id: str,
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Get status of a tool generation job."""
+    job = await tool_gen_job_service.get_job(job_id, user)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@tool_job_router.post("/{job_id}/cancel", response_model=Dict[str, Any])
+async def cancel_tool_generation_job(
+    job_id: str,
+    user: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Cancel a running or pending tool generation job."""
+    cancelled = await tool_gen_job_service.cancel_job(job_id, user)
+    if not cancelled:
+        raise HTTPException(status_code=404, detail="Job not found or already finished")
+    return {"cancelled": True, "job_id": job_id}
+
+
 #################
 # Resource APIs #
 #################
@@ -6398,6 +6546,7 @@ async def unpublish_from_registry(
 # Include routers
 app.include_router(version_router)
 app.include_router(protocol_router)
+app.include_router(tool_job_router)  # Must be before tool_router to avoid /{tool_id} catch-all
 app.include_router(tool_router)
 app.include_router(resource_router)
 app.include_router(prompt_router)

@@ -36,10 +36,10 @@ class LLMAPIError(LLMServiceError):
 
 
 class LLMService:
-    """Direct HTTP client for Anthropic's Messages API.
+    """HTTP client for LLM APIs (Anthropic and OpenAI compatible).
 
-    This service provides a simple interface for making chat completion requests
-    to Anthropic's Messages API.
+    Auto-detects the provider from the base URL or model name and uses
+    the appropriate API format (Anthropic Messages API or OpenAI Chat Completions API).
 
     Examples:
         >>> service = LLMService()
@@ -75,6 +75,21 @@ class LLMService:
         self.timeout = timeout or settings.llm_timeout
         self.max_tokens = max_tokens or settings.llm_max_tokens
         self.temperature = temperature if temperature is not None else settings.llm_temperature
+        self.provider = self._detect_provider()
+        logger.info(f"LLM service initialized: provider={self.provider}, model={self.model}, base_url={self.base_url}")
+
+    def _detect_provider(self) -> str:
+        """Auto-detect the LLM provider from base URL and model name.
+
+        Returns:
+            'anthropic' or 'openai'.
+        """
+        base_lower = self.base_url.lower()
+        model_lower = self.model.lower()
+
+        if "anthropic" in base_lower or model_lower.startswith("claude"):
+            return "anthropic"
+        return "openai"
 
     def is_configured(self) -> bool:
         """Check if the LLM service is properly configured.
@@ -91,11 +106,14 @@ class LLMService:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> str:
-        """Make a chat completion request to the Anthropic Messages API.
+        """Make a chat completion request to the LLM API.
+
+        Automatically uses the correct API format based on the detected provider
+        (Anthropic Messages API or OpenAI Chat Completions API).
 
         Args:
             messages: List of message dictionaries with 'role' and 'content' keys.
-                      System messages are extracted and sent as the top-level 'system' field.
+                      System messages are handled per provider convention.
             model: Model to use (overrides default).
             temperature: Temperature for this request (overrides default).
             max_tokens: Max tokens for this request (overrides default).
@@ -110,6 +128,18 @@ class LLMService:
         if not self.is_configured():
             raise LLMConfigurationError("LLM service is not configured. Set LLM_API_KEY and LLM_API_BASE_URL environment variables.")
 
+        if self.provider == "anthropic":
+            return await self._chat_completion_anthropic(messages, model, temperature, max_tokens)
+        return await self._chat_completion_openai(messages, model, temperature, max_tokens)
+
+    async def _chat_completion_anthropic(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """Anthropic Messages API format."""
         url = f"{self.base_url}/v1/messages"
         headers = {
             "x-api-key": self.api_key,
@@ -146,12 +176,7 @@ class LLMService:
         if system_parts:
             payload["system"] = "\n\n".join(system_parts)
 
-        # Log the request payload (excluding full message content for brevity)
-        log_payload = {k: v for k, v in payload.items() if k not in ("messages", "system")}
-        log_payload["message_count"] = len(payload["messages"])
-        log_payload["has_system"] = "system" in payload
-        log_payload["total_prompt_chars"] = sum(len(m.get("content", "")) for m in messages)
-        logger.info(f"LLM request: {json.dumps(log_payload)}")
+        self._log_request(payload, messages)
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -164,7 +189,7 @@ class LLMService:
                 stop_reason = data.get("stop_reason", "unknown")
 
                 logger.info(
-                    f"LLM response: stop_reason={stop_reason}, "
+                    f"LLM response: provider=anthropic, stop_reason={stop_reason}, "
                     f"input_tokens={usage.get('input_tokens', '?')}, "
                     f"output_tokens={usage.get('output_tokens', '?')}, "
                     f"content_length={len(content) if content else 0}"
@@ -189,6 +214,89 @@ class LLMService:
         except (KeyError, IndexError, json.JSONDecodeError) as e:
             logger.error(f"Failed to parse LLM API response: {e}")
             raise LLMAPIError(f"Failed to parse LLM API response: {e}") from e
+
+    async def _chat_completion_openai(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """OpenAI Chat Completions API format."""
+        # Build URL — handle base_url with or without /v1 suffix
+        base = self.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            url = f"{base}/chat/completions"
+        else:
+            url = f"{base}/v1/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        resolved_model = model or self.model
+        resolved_max_tokens = max_tokens or self.max_tokens
+        resolved_temperature = temperature if temperature is not None else self.temperature
+
+        # OpenAI accepts system messages inline — keep all messages as-is
+        # but strip assistant prefill messages (OpenAI doesn't support Anthropic-style prefill)
+        api_messages = [msg for msg in messages if msg.get("role") != "assistant" or len(msg.get("content", "")) > 10]
+
+        payload: Dict[str, Any] = {
+            "model": resolved_model,
+            "messages": api_messages,
+            "max_tokens": resolved_max_tokens,
+            "temperature": resolved_temperature,
+        }
+
+        self._log_request(payload, messages)
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                usage = data.get("usage", {})
+                finish_reason = data["choices"][0].get("finish_reason", "unknown")
+
+                logger.info(
+                    f"LLM response: provider=openai, finish_reason={finish_reason}, "
+                    f"prompt_tokens={usage.get('prompt_tokens', '?')}, "
+                    f"completion_tokens={usage.get('completion_tokens', '?')}, "
+                    f"content_length={len(content) if content else 0}"
+                )
+
+                if not content:
+                    logger.error(f"LLM returned empty content. Full response: {json.dumps(data)[:2000]}")
+                    raise LLMAPIError(f"LLM returned empty content (finish_reason={finish_reason})")
+
+                logger.debug(f"LLM response (first 500 chars): {content[:500]}")
+                return content
+
+        except httpx.TimeoutException as e:
+            logger.error(f"LLM API request timed out after {self.timeout}s: {e}")
+            raise LLMAPIError(f"LLM API request timed out: {e}") from e
+        except httpx.HTTPStatusError as e:
+            logger.error(f"LLM API returned error status {e.response.status_code}: {e.response.text}")
+            raise LLMAPIError(f"LLM API error ({e.response.status_code}): {e.response.text}") from e
+        except httpx.RequestError as e:
+            logger.error(f"LLM API request failed: {e}")
+            raise LLMAPIError(f"LLM API request failed: {e}") from e
+        except (KeyError, IndexError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to parse LLM API response: {e}")
+            raise LLMAPIError(f"Failed to parse LLM API response: {e}") from e
+
+    def _log_request(self, payload: Dict[str, Any], messages: List[Dict[str, str]]) -> None:
+        """Log request metadata without full message content."""
+        log_payload = {k: v for k, v in payload.items() if k not in ("messages", "system")}
+        log_payload["provider"] = self.provider
+        log_payload["message_count"] = len(payload.get("messages", []))
+        log_payload["has_system"] = "system" in payload or any(m.get("role") == "system" for m in messages)
+        log_payload["total_prompt_chars"] = sum(len(m.get("content", "")) for m in messages)
+        logger.info(f"LLM request: {json.dumps(log_payload)}")
 
     @staticmethod
     def _extract_json(text: str) -> Dict[str, Any]:

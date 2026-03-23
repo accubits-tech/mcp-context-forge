@@ -446,8 +446,8 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.7, description="Temperature for LLM responses")
 
     # Documentation Crawler Configuration
-    doc_crawler_max_pages: int = Field(default=30, description="Maximum pages to crawl per documentation site")
-    doc_crawler_max_depth: int = Field(default=3, description="Maximum BFS depth for documentation crawling")
+    doc_crawler_max_pages: int = Field(default=50, description="Maximum pages to crawl per documentation site")
+    doc_crawler_max_depth: int = Field(default=5, description="Maximum BFS depth for documentation crawling")
     doc_crawler_delay: float = Field(default=0.5, description="Delay in seconds between crawl requests (politeness)")
     doc_crawler_max_concurrent: int = Field(default=5, description="Maximum concurrent crawl requests")
     doc_crawler_enable_js_rendering: bool = Field(default=False, description="Enable optional Playwright JS rendering for SPA doc sites")
@@ -951,6 +951,10 @@ class Settings(BaseSettings):
     max_tool_retries: int = 3
     tool_rate_limit: int = 100  # requests per minute
     tool_concurrent_limit: int = 10
+
+    # Tool generation background jobs
+    tool_gen_max_concurrent_jobs: int = 5  # max concurrent background generation jobs
+    tool_gen_job_ttl_hours: int = 168  # cleanup completed/failed jobs after 7 days
 
     # Prompts
     prompt_cache_size: int = 100

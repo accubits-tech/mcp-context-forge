@@ -3847,3 +3847,33 @@ def set_custom_name_and_slug(mapper, connection, target):  # pylint: disable=unu
         target.name = f"{gateway_slug}{sep}{target.custom_name_slug}"
     else:
         target.name = target.custom_name_slug
+
+
+# ---------------------------------------------------------------------------
+# Tool Generation Background Jobs
+# ---------------------------------------------------------------------------
+
+
+class ToolGenerationJob(Base):
+    """Background job for tool generation from OpenAPI/API-doc specs."""
+
+    __tablename__ = "tool_generation_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    job_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    progress_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    params: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_tool_gen_jobs_status", "status"),
+        Index("ix_tool_gen_jobs_created_by", "created_by"),
+        Index("ix_tool_gen_jobs_created_at", "created_at"),
+    )

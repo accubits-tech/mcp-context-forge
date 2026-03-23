@@ -799,6 +799,158 @@ Focus on making tools more discoverable, understandable, and safe to use."""
         logger.info(f"Total unique tools extracted: {len(unique_tools)}")
         return unique_tools
 
+    async def extract_tools_from_pages(
+        self,
+        pages: list,
+        base_url: str,
+        source_info: Optional[Dict[str, Any]] = None,
+        auth_context: Optional[Dict[str, Any]] = None,
+        max_parallel: int = 5,
+        max_page_size: int = 50000,
+    ) -> List[Dict[str, Any]]:
+        """Extract tool definitions by processing each crawled page individually.
+
+        Instead of concatenating all pages and chunking arbitrarily, this method
+        preserves page boundaries and sends each page to the LLM with its title
+        and URL as context — producing higher quality extractions.
+
+        Args:
+            pages: List of CrawledPage objects from the crawler.
+            base_url: Base URL for the API endpoints.
+            source_info: Optional metadata about the source.
+            auth_context: Optional deep auth extraction results.
+            max_parallel: Maximum number of parallel LLM calls.
+            max_page_size: Max chars per page before chunking within a page.
+
+        Returns:
+            List of tool definition dictionaries ready for ToolCreate.
+        """
+        if not self._is_ai_available():
+            logger.warning("LLM not available for tool extraction")
+            return []
+
+        source_info = source_info or {}
+
+        # Filter pages
+        processable_pages = []
+        skipped_count = 0
+        for page in pages:
+            if self._should_skip_page(page):
+                skipped_count += 1
+            else:
+                processable_pages.append(page)
+
+        logger.info(
+            f"Per-page extraction: {len(processable_pages)} pages to process, "
+            f"{skipped_count} skipped, max_parallel={max_parallel}"
+        )
+
+        if not processable_pages:
+            logger.warning("No processable pages after filtering")
+            return []
+
+        # Build work items: (content_with_header, page_idx, page_url, page_title)
+        work_items = []
+        for page in processable_pages:
+            context_header = f"PAGE TITLE: {page.title}\nPAGE URL: {page.url}\n\n"
+            if len(page.content) <= max_page_size:
+                work_items.append((context_header + page.content, page.url, page.title))
+            else:
+                # Chunk oversized pages, keeping page context on each chunk
+                chunks = self._chunk_content(page.content, max_page_size)
+                for i, chunk in enumerate(chunks):
+                    chunk_header = f"{context_header}(Section {i + 1} of {len(chunks)})\n\n"
+                    work_items.append((chunk_header + chunk, page.url, page.title))
+
+        total_items = len(work_items)
+        logger.info(f"Processing {total_items} work items from {len(processable_pages)} pages")
+
+        # Process in parallel batches
+        all_tools = []
+        for batch_start in range(0, total_items, max_parallel):
+            batch = work_items[batch_start : batch_start + max_parallel]
+            tasks = [
+                self._extract_tools_from_chunk(
+                    chunk=content,
+                    base_url=base_url,
+                    source_info=source_info,
+                    chunk_idx=batch_start + i,
+                    total_chunks=total_items,
+                    auth_context=auth_context,
+                )
+                for i, (content, page_url, page_title) in enumerate(batch)
+            ]
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for i, result in enumerate(results):
+                _, page_url, page_title = batch[i]
+                if isinstance(result, Exception):
+                    logger.error(f"Failed to extract tools from page {page_url}: {result}")
+                else:
+                    # Annotate each tool with source page
+                    for tool in result:
+                        if "annotations" not in tool:
+                            tool["annotations"] = {}
+                        tool["annotations"]["source_page_url"] = page_url
+                        tool["annotations"]["source_page_title"] = page_title
+                    all_tools.extend(result)
+                    logger.info(f"Extracted {len(result)} tools from {page_url}")
+
+        # Deduplicate by (method, path) — keep tool with longest description
+        seen: Dict[tuple, Dict[str, Any]] = {}
+        for tool in all_tools:
+            method = (tool.get("method") or "").upper()
+            path = tool.get("path") or ""
+            key = (method, path)
+            existing = seen.get(key)
+            if existing is None or len(tool.get("description") or "") > len(existing.get("description") or ""):
+                seen[key] = tool
+        unique_tools = list(seen.values())
+
+        if len(unique_tools) < len(all_tools):
+            logger.info(f"Deduplicated {len(all_tools)} tools to {len(unique_tools)} by (method, path)")
+
+        logger.info(f"Per-page extraction complete: {len(unique_tools)} unique tools from {len(processable_pages)} pages")
+        return unique_tools
+
+    def _should_skip_page(self, page: Any) -> bool:
+        """Determine if a page should be skipped for tool extraction.
+
+        Skips index/listing pages, auth pages, and pages with too little content.
+        """
+        content = getattr(page, "content", "") or ""
+        title = (getattr(page, "title", "") or "").lower()
+        is_auth = getattr(page, "is_auth_page", False)
+
+        # Too little content to extract from
+        if len(content) < 200:
+            logger.debug(f"Skipping page (too short: {len(content)} chars): {getattr(page, 'url', '?')}")
+            return True
+
+        # Auth pages describe auth methods, not API endpoints
+        if is_auth:
+            logger.debug(f"Skipping auth page: {getattr(page, 'url', '?')}")
+            return True
+
+        # Operation index / listing pages — massive link lists with no endpoint details
+        skip_titles = ["operation index", "operations index", "api reference index", "all operations"]
+        if any(skip in title for skip in skip_titles):
+            logger.debug(f"Skipping index page: {getattr(page, 'url', '?')}")
+            return True
+
+        # Predominantly navigation/links page — if >60% of content is markdown links
+        link_count = content.count("](")
+        content_len = len(content)
+        if content_len > 0 and link_count > 20:
+            # Rough estimate: each link is ~80 chars of `[text](url)` pattern
+            estimated_link_chars = link_count * 80
+            if estimated_link_chars > content_len * 0.6:
+                logger.debug(f"Skipping link-heavy page ({link_count} links): {getattr(page, 'url', '?')}")
+                return True
+
+        return False
+
     def _chunk_content(self, content: str, chunk_size: int, overlap: int = 500) -> List[str]:
         """Split content into chunks, trying to break at natural boundaries with overlap.
 

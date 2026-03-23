@@ -17,7 +17,7 @@ It handles:
 # Standard
 import re
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 # Third-Party
 from bs4 import BeautifulSoup
@@ -742,6 +742,168 @@ class APIDocumentationParserService:
                     parameters.append({"name": param_name, "type": "query", "description": f"Query parameter: {param_name}"})
 
         return parameters
+
+    async def generate_tools_from_pages(
+        self,
+        pages: list,
+        base_url: str,
+        source_url: Optional[str] = None,
+        gateway_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> List["ToolCreate"]:
+        """Generate tools by processing each crawled page individually with regex.
+
+        Instead of running regex on the aggregated blob, this processes each page
+        separately — using page titles for better descriptions, detecting BasePath
+        per page, and filtering doc-site URLs that create false positives.
+
+        Args:
+            pages: List of CrawledPage objects from the crawler.
+            base_url: Base URL for the API endpoints.
+            source_url: URL of the documentation site (for false positive filtering).
+            gateway_id: Gateway ID to associate tools with.
+            tags: Additional tags for generated tools.
+
+        Returns:
+            List of ToolCreate objects.
+        """
+        all_tools: List["ToolCreate"] = []
+        doc_domain = urlparse(source_url).netloc if source_url else ""
+        additional_tags = tags or []
+        skipped = 0
+
+        for page in pages:
+            content = getattr(page, "content", "") or ""
+            title = getattr(page, "title", "") or ""
+            page_url = getattr(page, "url", "") or ""
+            is_auth = getattr(page, "is_auth_page", False)
+
+            # Skip pages that won't yield useful tools
+            if len(content) < 200 or is_auth:
+                skipped += 1
+                continue
+            title_lower = title.lower()
+            if any(kw in title_lower for kw in ["operation index", "operations index", "all operations"]):
+                skipped += 1
+                continue
+            # Skip link-heavy listing pages
+            link_count = content.count("](")
+            if link_count > 20 and (link_count * 80) > len(content) * 0.6:
+                skipped += 1
+                continue
+
+            # Detect BasePath from page content (e.g., "BasePath: /api")
+            page_base_path = ""
+            base_path_match = re.search(r"BasePath:\s*(/\S+)", content)
+            if base_path_match:
+                page_base_path = base_path_match.group(1).rstrip("/")
+
+            # Derive resource name from page title (e.g., "Alert Config APIs" → "Alert Config")
+            resource_name = re.sub(r"\s*APIs?\s*$", "", title, flags=re.IGNORECASE).strip()
+            resource_name = re.sub(r"\s*\|.*$", "", resource_name).strip()  # Remove "| Site Name" suffix
+
+            # Extract API description from page (text between title and "Operations" heading)
+            api_desc = ""
+            desc_match = re.search(r"(?:^|\n)([A-Z][\w\s]+object api)\b", content, re.IGNORECASE)
+            if desc_match:
+                api_desc = desc_match.group(1).strip()
+
+            # Run regex extraction on this page only
+            endpoints = self._extract_endpoints_from_text(content)
+
+            # Filter false positives: remove endpoints from Pattern 2 whose URL domain matches the doc site
+            if doc_domain:
+                filtered = []
+                for ep in endpoints:
+                    full_url = ep.get("full_url", "")
+                    if full_url:
+                        ep_domain = urlparse(full_url).netloc
+                        if ep_domain == doc_domain:
+                            continue  # Skip doc site URLs
+                    filtered.append(ep)
+                endpoints = filtered
+
+            # Build per-page doc_structure for _create_tool_from_endpoint
+            page_doc_structure = {
+                "title": title,
+                "description": api_desc or resource_name,
+                "source_format": "html",
+                "source_url": source_url or page_url,
+                "authentication_info": {"methods": [], "details": {}},
+                "parameters": [],
+                "raw_content": content,
+            }
+
+            # Detect auth patterns from this page
+            auth_info = self._extract_auth_patterns(content)
+            page_doc_structure["authentication_info"] = auth_info
+
+            for ep in endpoints:
+                path = ep.get("path", "")
+                method = ep.get("method", "GET")
+
+                # Prepend BasePath if detected and path doesn't already include it
+                if page_base_path and not path.startswith(page_base_path):
+                    ep["path"] = page_base_path + "/" + path.lstrip("/")
+                    path = ep["path"]
+
+                # Generate page-aware description
+                has_path_param = "{" in path
+                action_map = {
+                    "GET": "Get" if has_path_param else "List",
+                    "POST": "Create",
+                    "PUT": "Update",
+                    "PATCH": "Partially update",
+                    "DELETE": "Delete",
+                }
+                action = action_map.get(method, method)
+                if resource_name:
+                    desc = f"{action} {resource_name}"
+                    if has_path_param:
+                        # Extract param name from path like {uuid}
+                        param_match = re.search(r"\{(\w+)\}", path)
+                        if param_match:
+                            desc += f" by {param_match.group(1)}"
+                    desc += "."
+                    if api_desc:
+                        desc += f" {api_desc}."
+                    ep["_page_description"] = desc
+
+                try:
+                    tool = await self._create_tool_from_endpoint(
+                        endpoint=ep,
+                        doc_structure=page_doc_structure,
+                        base_url=base_url,
+                        gateway_id=gateway_id,
+                        additional_tags=additional_tags,
+                    )
+                    if tool:
+                        # Override description with page-aware version
+                        if ep.get("_page_description"):
+                            tool.description = ep["_page_description"]
+                        # Add source page annotation
+                        if tool.annotations is None:
+                            tool.annotations = {}
+                        tool.annotations["source_page_url"] = page_url
+                        tool.annotations["source_page_title"] = title
+                        all_tools.append(tool)
+                except Exception as e:
+                    logger.warning(f"Failed to create tool from endpoint {path} on page {page_url}: {e}")
+
+        # Deduplicate by (method, url) — keep tool with longest description
+        seen: Dict[tuple, "ToolCreate"] = {}
+        for tool in all_tools:
+            key = ((tool.request_type or "").upper(), str(tool.url or ""))
+            existing = seen.get(key)
+            if existing is None or len(tool.description or "") > len(existing.description or ""):
+                seen[key] = tool
+        deduped = list(seen.values())
+
+        if len(deduped) < len(all_tools):
+            logger.info(f"Deduplicated {len(all_tools)} tools to {len(deduped)} by (method, url)")
+
+        logger.info(f"Per-page regex extraction: {len(deduped)} tools from {len(pages) - skipped} pages ({skipped} skipped)")
+        return deduped
 
     async def generate_tools_from_documentation(self, doc_structure: Dict[str, Any], base_url: str, gateway_id: Optional[str] = None, tags: Optional[List[str]] = None) -> List[ToolCreate]:
         """Generate MCP Gateway tools from parsed documentation.
