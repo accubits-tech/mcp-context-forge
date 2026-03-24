@@ -2558,6 +2558,38 @@ class GatewayCreate(BaseModel):
             return v
         return SecurityValidator.validate_url(v, "Gateway URL")
 
+    @field_validator("stdio_args", mode="before")
+    @classmethod
+    def coerce_stdio_args(cls, v: Any) -> Optional[List[str]]:
+        """Coerce stdio_args from a string to a list if needed."""
+        if v is None:
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return None
+            return [a.strip() for a in v.split("\n") if a.strip()] if "\n" in v else [v]
+        return v
+
+    @field_validator("stdio_env", mode="before")
+    @classmethod
+    def coerce_stdio_env(cls, v: Any) -> Optional[Dict[str, str]]:
+        """Coerce stdio_env from a JSON string to a dict if needed."""
+        if v is None:
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return None
+            try:
+                parsed = json.loads(v)
+                if not isinstance(parsed, dict):
+                    raise ValueError("stdio_env must be a JSON object")
+                return parsed
+            except json.JSONDecodeError as e:
+                raise ValueError(f"stdio_env is not valid JSON: {e}") from e
+        return v
+
     @field_validator("stdio_command")
     @classmethod
     def validate_stdio_command(cls, v: Optional[str]) -> Optional[str]:

@@ -237,10 +237,10 @@ services:
       - PLAYWRIGHT_MICROSERVICE_URL=http://firecrawl-playwright:3000/scrape
       - NUM_WORKERS_PER_QUEUE=${FIRECRAWL_WORKERS:-2}
       - NUQ_RABBITMQ_URL=amqp://firecrawl-rabbitmq:5672
-      - NUQ_DATABASE_URL=postgresql://postgres:${FIRECRAWL_DB_PASSWORD:-postgres}@firecrawl-postgres:5432/firecrawl
+      - NUQ_DATABASE_URL=postgresql://postgres:${FIRECRAWL_DB_PASSWORD:-postgres}@firecrawl-postgres:5432/postgres
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${FIRECRAWL_DB_PASSWORD:-postgres}
-      - POSTGRES_DB=firecrawl
+      - POSTGRES_DB=postgres
       - POSTGRES_HOST=firecrawl-postgres
       - POSTGRES_PORT=5432
     depends_on:
@@ -254,7 +254,7 @@ services:
         condition: service_healthy
     command: node dist/src/harness.js --start-docker
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3002/"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3002/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -279,12 +279,12 @@ services:
       start_period: 30s
 
   firecrawl-postgres:
-    image: postgres:16-alpine
+    build: ./firecrawl-nuq-postgres
     restart: unless-stopped
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${FIRECRAWL_DB_PASSWORD:-postgres}
-      - POSTGRES_DB=firecrawl
+      - POSTGRES_DB=postgres
     volumes:
       - firecrawl_pgdata:/var/lib/postgresql/data
     networks: [mcpnet]

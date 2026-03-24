@@ -3261,6 +3261,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             visibility="public",  # Federated tools should be public for discovery
             # Explicit gateway association
             gateway_id=gateway.id,
+            # Tag tools with gateway name for searchability
+            tags=list({*(tool.tags or []), gateway.name}),
         )
 
     def _update_or_create_tools(self, db: Session, tools: List[Any], gateway: DbGateway, created_via: str) -> List[DbTool]:
@@ -3315,6 +3317,10 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                         existing_tool.auth_type = gateway.auth_type
                         existing_tool.auth_value = gateway.auth_value
                         existing_tool.visibility = gateway.visibility
+                        # Ensure gateway name tag is present
+                        current_tags = set(existing_tool.tags or [])
+                        current_tags.add(gateway.name)
+                        existing_tool.tags = list(current_tags)
                         logger.debug(f"Updated existing tool: {tool.name}")
                 else:
                     # Create new tool if it doesn't exist
