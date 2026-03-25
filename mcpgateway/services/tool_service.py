@@ -34,7 +34,7 @@ import jsonschema
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
-from sqlalchemy import and_, case, delete, desc, Float, func, not_, or_, select
+from sqlalchemy import and_, case, delete, desc, Float, func, not_, or_, select, String
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -836,7 +836,7 @@ class ToolService:
         # Add search filtering if search term is provided
         if search:
             pattern = f"%{search}%"
-            query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern)))
+            query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern), DbTool.tags.cast(String).ilike(pattern)))
 
         # Add gateway filtering if gateway_id is provided
         if gateway_id:
@@ -982,7 +982,7 @@ class ToolService:
         # Add search filtering if search term is provided
         if search:
             pattern = f"%{search}%"
-            query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern)))
+            query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern), DbTool.tags.cast(String).ilike(pattern)))
 
         # Add gateway filtering if gateway_id is provided
         if gateway_id:

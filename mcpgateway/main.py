@@ -62,7 +62,7 @@ from fastapi.templating import Jinja2Templates
 from jsonpath_ng.ext import parse
 from jsonpath_ng.jsonpath import JSONPath
 from pydantic import ValidationError
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select, String, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -2499,7 +2499,7 @@ async def count_tools(
 
     if search:
         pattern = f"%{search}%"
-        query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern)))
+        query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern), DbTool.tags.cast(String).ilike(pattern)))
 
     total = db.execute(query).scalar() or 0
     return {"total": total}

@@ -964,6 +964,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     team_id=team_id,
                     owner_email=owner_email,
                     visibility=visibility,
+                    # Tag tools with gateway name for searchability
+                    tags=list({*(tool.tags or []), gateway.name}),
                 )
                 for tool in tools
             ]
