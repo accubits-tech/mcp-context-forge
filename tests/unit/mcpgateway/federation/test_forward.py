@@ -740,9 +740,9 @@ async def test_get_auth_headers():
         with patch("mcpgateway.config.settings.basic_auth_password", "testpass"):
             headers = service._get_auth_headers()
 
-    assert headers["Authorization"] == "Basic testuser:testpass"
-    assert headers["X-API-Key"] == "testuser:testpass"
-    assert len(headers) == 2
+    assert headers["Authorization"] == "Basic dGVzdHVzZXI6dGVzdHBhc3M="
+    assert "X-API-Key" not in headers
+    assert len(headers) == 1
     await service.stop()
 
 
@@ -755,8 +755,8 @@ async def test_get_auth_headers_different_creds():
         with patch("mcpgateway.config.settings.basic_auth_password", "secret123"):
             headers = service._get_auth_headers()
 
-    assert headers["Authorization"] == "Basic admin:secret123"
-    assert headers["X-API-Key"] == "admin:secret123"
+    assert headers["Authorization"] == "Basic YWRtaW46c2VjcmV0MTIz"
+    assert "X-API-Key" not in headers
     await service.stop()
 
 
