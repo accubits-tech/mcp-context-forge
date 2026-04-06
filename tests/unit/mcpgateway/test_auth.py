@@ -218,23 +218,12 @@ class TestGetCurrentUser:
                 assert "revoked" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_token_revocation_check_failure_logs_warning(self, caplog):
-        """Test that token revocation check failure logs warning but doesn't fail auth."""
+    async def test_token_revocation_check_failure_raises_503(self, caplog):
+        """Test that token revocation check failure raises 503 (fail-closed)."""
         mock_db = MagicMock(spec=Session)
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="jwt_with_jti")
 
         jwt_payload = {"sub": "test@example.com", "jti": "token_id_456", "exp": (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()}
-
-        mock_user = EmailUser(
-            email="test@example.com",
-            password_hash="hash",
-            full_name="Test User",
-            is_admin=False,
-            is_active=True,
-            is_email_verified=True,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-        )
 
         with patch("mcpgateway.auth.verify_jwt_token", AsyncMock(return_value=jwt_payload)):
             with patch("mcpgateway.services.token_catalog_service.TokenCatalogService") as mock_token_service_class:
@@ -242,15 +231,11 @@ class TestGetCurrentUser:
                 mock_token_service.is_token_revoked = AsyncMock(side_effect=Exception("Database error"))
                 mock_token_service_class.return_value = mock_token_service
 
-                with patch("mcpgateway.services.email_auth_service.EmailAuthService") as mock_auth_service_class:
-                    mock_auth_service = MagicMock()
-                    mock_auth_service.get_user_by_email = AsyncMock(return_value=mock_user)
-                    mock_auth_service_class.return_value = mock_auth_service
-
-                    user = await get_current_user(credentials=credentials, db=mock_db)
-
-                    assert user == mock_user
-                    assert "Token revocation check failed for JTI token_id_456" in caplog.text
+                with pytest.raises(HTTPException) as exc_info:
+                    await get_current_user(credentials=credentials, db=mock_db)
+                assert exc_info.value.status_code == 503
+                assert "temporarily unavailable" in exc_info.value.detail.lower()
+                assert "Token revocation check failed for JTI token_id_456" in caplog.text
 
     @pytest.mark.asyncio
     async def test_expired_jwt_token_raises_401(self):
