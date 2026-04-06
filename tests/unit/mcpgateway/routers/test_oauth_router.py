@@ -9,6 +9,10 @@ This module tests OAuth endpoints including authorization flow, callbacks, and s
 """
 
 # Standard
+import base64
+import hashlib
+import hmac as hmac_mod
+import json
 from unittest.mock import AsyncMock, Mock, patch
 
 # Third-Party
@@ -21,6 +25,16 @@ from sqlalchemy.orm import Session
 from mcpgateway.db import Gateway
 from mcpgateway.schemas import EmailUserResponse
 from mcpgateway.services.oauth_manager import OAuthError
+
+# Test secret matching the config default "my-test-salt"
+_TEST_SECRET = b"my-test-salt"
+
+
+def _make_signed_state(state_data: dict) -> str:
+    """Build a base64url-encoded state with a valid HMAC-SHA256 signature."""
+    payload = json.dumps(state_data).encode()
+    signature = hmac_mod.new(_TEST_SECRET, payload, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(payload + signature).decode()
 
 
 class TestOAuthRouter:
@@ -181,15 +195,9 @@ class TestOAuthRouter:
     @pytest.mark.asyncio
     async def test_oauth_callback_success(self, mock_db, mock_request, mock_gateway):
         """Test successful OAuth callback handling."""
-        # Standard
-        import base64
-        import json
-
-        # Setup state with new format (payload + 32-byte signature)
+        # Setup state with new format (payload + HMAC signature)
         state_data = {"gateway_id": "gateway123", "app_user_email": "test@example.com", "nonce": "abc123"}
-        payload = json.dumps(state_data).encode()
-        signature = b"x" * 32  # Mock 32-byte signature
-        state = base64.urlsafe_b64encode(payload + signature).decode()
+        state = _make_signed_state(state_data)
 
         mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
 
@@ -275,15 +283,9 @@ class TestOAuthRouter:
     @pytest.mark.asyncio
     async def test_oauth_callback_gateway_not_found(self, mock_db, mock_request):
         """Test OAuth callback when gateway is not found."""
-        # Standard
-        import base64
-        import json
-
         # Setup
         state_data = {"gateway_id": "nonexistent", "app_user_email": "test@example.com"}
-        payload = json.dumps(state_data).encode()
-        signature = b"x" * 32  # Mock 32-byte signature
-        state = base64.urlsafe_b64encode(payload + signature).decode()
+        state = _make_signed_state(state_data)
 
         mock_db.execute.return_value.scalar_one_or_none.return_value = None
 
@@ -301,15 +303,9 @@ class TestOAuthRouter:
     @pytest.mark.asyncio
     async def test_oauth_callback_no_oauth_config(self, mock_db, mock_request):
         """Test OAuth callback when gateway has no OAuth config."""
-        # Standard
-        import base64
-        import json
-
         # Setup
         state_data = {"gateway_id": "gateway123", "app_user_email": "test@example.com"}
-        payload = json.dumps(state_data).encode()
-        signature = b"x" * 32  # Mock 32-byte signature
-        state = base64.urlsafe_b64encode(payload + signature).decode()
+        state = _make_signed_state(state_data)
 
         mock_gateway = Mock(spec=Gateway)
         mock_gateway.id = "gateway123"
@@ -330,15 +326,9 @@ class TestOAuthRouter:
     @pytest.mark.asyncio
     async def test_oauth_callback_oauth_error(self, mock_db, mock_request, mock_gateway):
         """Test OAuth callback when OAuth manager throws OAuthError."""
-        # Standard
-        import base64
-        import json
-
         # Setup
         state_data = {"gateway_id": "gateway123", "app_user_email": "test@example.com"}
-        payload = json.dumps(state_data).encode()
-        signature = b"x" * 32  # Mock 32-byte signature
-        state = base64.urlsafe_b64encode(payload + signature).decode()
+        state = _make_signed_state(state_data)
 
         mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
 
@@ -551,15 +541,9 @@ class TestOAuthRouter:
     @pytest.mark.asyncio
     async def test_oauth_callback_json_success(self, mock_db, mock_gateway):
         """Test successful OAuth callback with JSON response."""
-        # Standard
-        import base64
-        import json
-
         # Setup
         state_data = {"gateway_id": "gateway123", "user_id": "test@example.com"}
-        payload = json.dumps(state_data).encode()
-        signature = b"0" * 32  # Mock signature
-        state_encoded = base64.urlsafe_b64encode(payload + signature).decode()
+        state_encoded = _make_signed_state(state_data)
 
         mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
 
@@ -603,15 +587,9 @@ class TestOAuthRouter:
     @pytest.mark.asyncio
     async def test_oauth_callback_json_gateway_not_found(self, mock_db):
         """Test JSON OAuth callback with non-existent gateway."""
-        # Standard
-        import base64
-        import json
-
         # Setup
         state_data = {"gateway_id": "nonexistent", "user_id": "test@example.com"}
-        payload = json.dumps(state_data).encode()
-        signature = b"0" * 32
-        state_encoded = base64.urlsafe_b64encode(payload + signature).decode()
+        state_encoded = _make_signed_state(state_data)
 
         mock_db.execute.return_value.scalar_one_or_none.return_value = None
 
@@ -628,15 +606,9 @@ class TestOAuthRouter:
     @pytest.mark.asyncio
     async def test_oauth_callback_json_oauth_error(self, mock_db, mock_gateway):
         """Test JSON OAuth callback when OAuth manager raises error."""
-        # Standard
-        import base64
-        import json
-
         # Setup
         state_data = {"gateway_id": "gateway123", "user_id": "test@example.com"}
-        payload = json.dumps(state_data).encode()
-        signature = b"0" * 32
-        state_encoded = base64.urlsafe_b64encode(payload + signature).decode()
+        state_encoded = _make_signed_state(state_data)
 
         mock_db.execute.return_value.scalar_one_or_none.return_value = mock_gateway
 
