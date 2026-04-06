@@ -63,6 +63,7 @@ Examples:
 
 # Standard
 import asyncio
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import ipaddress
@@ -711,23 +712,20 @@ class DiscoveryService(LocalDiscoveryService):
         for communicating with peer gateways.
 
         Returns:
-            Dict[str, str]: Dictionary containing Authorization and X-API-Key headers.
+            Dict[str, str]: Dictionary containing the Authorization header with base64-encoded credentials.
 
         Examples:
             >>> service = DiscoveryService()
             >>> headers = service._get_auth_headers()
             >>> "Authorization" in headers
             True
-            >>> "X-API-Key" in headers
-            True
             >>> headers["Authorization"].startswith("Basic ")
-            True
-            >>> headers["X-API-Key"] == f"{settings.basic_auth_user}:{settings.basic_auth_password}"
             True
             >>> isinstance(headers, dict)
             True
             >>> len(headers)
-            2
+            1
         """
-        api_key = f"{settings.basic_auth_user}:{settings.basic_auth_password}"
-        return {"Authorization": f"Basic {api_key}", "X-API-Key": api_key}
+        credentials = f"{settings.basic_auth_user}:{settings.basic_auth_password}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+        return {"Authorization": f"Basic {encoded}"}

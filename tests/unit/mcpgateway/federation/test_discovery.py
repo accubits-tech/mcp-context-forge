@@ -105,8 +105,9 @@ def test_get_auth_headers():
     service = discovery.DiscoveryService()
     headers = service._get_auth_headers()
     assert "Authorization" in headers
-    assert "X-API-Key" in headers
-    assert headers["Authorization"].startswith("Basic ")
+    assert "X-API-Key" not in headers
+    assert headers["Authorization"] == "Basic dXNlcjpwYXNz"
+    assert len(headers) == 1
 
 
 @patch("mcpgateway.federation.discovery.settings", new=DummySettings)

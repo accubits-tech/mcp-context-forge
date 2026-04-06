@@ -604,24 +604,56 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_security_combinations(self) -> Self:
-        """Validate security setting combinations.  Only logs warnings; no changes are made.
+        """Validate security setting combinations.
+
+        In production mode, the use of default/weak credentials is a fatal error
+        that blocks application startup. In non-production modes, warnings are
+        logged but startup is allowed to proceed.
 
         Returns:
             Itself.
+
+        Raises:
+            SystemExit: If production environment uses default credentials.
         """
+        # --- Production credential enforcement ---
+        # When ENVIRONMENT=production, default credentials MUST be changed.
+        # Continuing with defaults would be a critical security vulnerability.
+        if self.environment == "production":
+            default_creds: list[tuple[str, str]] = [
+                ("BASIC_AUTH_USER", self.basic_auth_user if self.basic_auth_user == "admin" else ""),
+                ("BASIC_AUTH_PASSWORD", self.basic_auth_password.get_secret_value() if self.basic_auth_password.get_secret_value() == "changeme" else ""),  # nosec B105
+                ("JWT_SECRET_KEY", self.jwt_secret_key.get_secret_value() if self.jwt_secret_key.get_secret_value() == "my-test-key" else ""),  # nosec B105
+                ("AUTH_ENCRYPTION_SECRET", self.auth_encryption_secret.get_secret_value() if self.auth_encryption_secret.get_secret_value() == "my-test-salt" else ""),  # nosec B105
+                ("PLATFORM_ADMIN_PASSWORD", self.platform_admin_password.get_secret_value() if self.platform_admin_password.get_secret_value() == "changeme" else ""),  # nosec B105
+            ]
+            violations = [name for name, val in default_creds if val]
+            if violations:
+                for name in violations:
+                    logger.error(
+                        "FATAL: Default credential detected for %s in production environment. "
+                        "You MUST set a strong, unique value before running in production.",
+                        name,
+                    )
+                logger.error(
+                    "FATAL: Refusing to start with default credentials in production. "
+                    "Set the above environment variables to secure values and restart."
+                )
+                raise SystemExit(1)
+
         # Check for dangerous combinations - only log warnings, don't raise errors
         if not self.auth_required and self.mcpgateway_ui_enabled:
-            logger.warning("🔓 SECURITY WARNING: Admin UI is enabled without authentication. Consider setting AUTH_REQUIRED=true for production.")
+            logger.warning("SECURITY WARNING: Admin UI is enabled without authentication. Consider setting AUTH_REQUIRED=true for production.")
 
         if self.skip_ssl_verify and not self.dev_mode:
-            logger.warning("🔓 SECURITY WARNING: SSL verification is disabled in non-dev mode. This is a security risk! Set SKIP_SSL_VERIFY=false for production.")
+            logger.warning("SECURITY WARNING: SSL verification is disabled in non-dev mode. This is a security risk! Set SKIP_SSL_VERIFY=false for production.")
 
         if self.debug and not self.dev_mode:
-            logger.warning("🐛 SECURITY WARNING: Debug mode is enabled in non-dev mode. This may leak sensitive information! Set DEBUG=false for production.")
+            logger.warning("SECURITY WARNING: Debug mode is enabled in non-dev mode. This may leak sensitive information! Set DEBUG=false for production.")
 
         # Warn about federation without auth
         if self.federation_enabled and not self.auth_required:
-            logger.warning("🌐 SECURITY WARNING: Federation is enabled without authentication. This may expose your gateway to unauthorized access.")
+            logger.warning("SECURITY WARNING: Federation is enabled without authentication. This may expose your gateway to unauthorized access.")
 
         return self
 

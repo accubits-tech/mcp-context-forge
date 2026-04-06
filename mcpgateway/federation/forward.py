@@ -26,6 +26,7 @@ Examples:
 
 # Standard
 import asyncio
+import base64
 from datetime import datetime, timezone
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -746,11 +747,10 @@ class ForwardingService:
         """Get headers for gateway authentication.
 
         Constructs authentication headers using configured credentials.
-        Includes both Basic auth and API key headers for compatibility
-        with different gateway authentication schemes.
+        Credentials are base64-encoded per RFC 7617 for HTTP Basic Auth.
 
         Returns:
-            Dictionary containing Authorization and X-API-Key headers
+            Dictionary containing the Authorization header with base64-encoded credentials.
 
         Examples:
             >>> from unittest.mock import patch
@@ -763,18 +763,17 @@ class ForwardingService:
             ...         headers = service._get_auth_headers()
             >>>
             >>> headers["Authorization"]
-            'Basic testuser:testpass'
-            >>> headers["X-API-Key"]
-            'testuser:testpass'
+            'Basic dGVzdHVzZXI6dGVzdHBhc3M='
             >>> len(headers)
-            2
+            1
 
             >>> # Test with different credentials
             >>> with patch('mcpgateway.config.settings.basic_auth_user', 'admin'):
             ...     with patch('mcpgateway.config.settings.basic_auth_password', 'secret123'):
             ...         headers = service._get_auth_headers()
-            >>> headers["X-API-Key"]
-            'admin:secret123'
+            >>> headers["Authorization"]
+            'Basic YWRtaW46c2VjcmV0MTIz'
         """
-        api_key = f"{settings.basic_auth_user}:{settings.basic_auth_password}"
-        return {"Authorization": f"Basic {api_key}", "X-API-Key": api_key}
+        credentials = f"{settings.basic_auth_user}:{settings.basic_auth_password}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+        return {"Authorization": f"Basic {encoded}"}

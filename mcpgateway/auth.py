@@ -235,8 +235,11 @@ async def get_current_user(
             except HTTPException:
                 raise
             except Exception as revoke_check_error:
-                # Log the error but don't fail authentication for admin tokens
-                logger.warning(f"Token revocation check failed for JTI {jti}: {revoke_check_error}")
+                logger.error(f"Token revocation check failed for JTI {jti}: {revoke_check_error}")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Authentication service temporarily unavailable"
+                )
 
     except HTTPException:
         # Re-raise HTTPException from verify_jwt_token (handles expired/invalid tokens)

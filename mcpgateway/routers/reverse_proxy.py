@@ -323,12 +323,14 @@ async def send_request_to_session(
 async def sse_endpoint(
     session_id: str,
     request: Request,
+    _: str | dict = Depends(require_auth),
 ):
     """SSE endpoint for receiving messages from a reverse proxy session.
 
     Args:
         session_id: Session ID to subscribe to.
         request: HTTP request.
+        _: Authenticated user info (used for auth check).
 
     Returns:
         SSE stream.
