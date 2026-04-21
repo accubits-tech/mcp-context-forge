@@ -1462,6 +1462,77 @@ catalog_servers:
     documentation_url: "https://contextforge.com/docs/fast-time-server"
     tools: ["get_current_time", "convert_timezone", "add_duration", "subtract_duration", "format_time", "parse_time", "difference_between_times", "timer", "stopwatch", "alarm"]
 
+  # Web Search & Scraping
+  - id: jina-search
+    name: "Jina Search"
+    category: "Web Search"
+    url: "https://mcp.jina.ai/v1"
+    transport: "STREAMABLEHTTP"
+    auth_type: "API Key"
+    provider: "Jina AI"
+    description: "Jina AI's MCP server provides web search, URL reading, and fact-checking capabilities. Agents can search the web, read and extract content from URLs, verify claims with grounded citations, and extract structured data from web pages."
+    requires_api_key: true
+    tags: ["web-search", "reader", "fact-check", "extraction"]
+    logo_url: "https://img.logo.dev/jina.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://github.com/jina-ai/MCP"
+    tools: ["read_url", "search", "fact_check", "extract"]
+
+  - id: you-search
+    name: "You.com Search"
+    category: "Web Search"
+    url: "https://api.you.com/mcp"
+    transport: "STREAMABLEHTTP"
+    auth_type: "API Key"
+    provider: "You.com"
+    description: "You.com's MCP server provides RAG-optimized web search for AI agents. It delivers structured search results with snippets, news search, and retrieval-augmented generation responses designed to minimize hallucinations."
+    requires_api_key: true
+    tags: ["web-search", "rag", "news"]
+    logo_url: "https://img.logo.dev/you.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://documentation.you.com/api-reference/mcp"
+    tools: ["web_search", "news_search", "rag_search"]
+
+  - id: serpapi
+    name: "SerpAPI"
+    category: "Web Search"
+    url: "https://mcp.serpapi.com/mcp"
+    transport: "STREAMABLEHTTP"
+    auth_type: "API Key"
+    provider: "SerpAPI"
+    description: "SerpAPI MCP server provides real-time search engine results from 16+ engines including Google, Bing, Yahoo, DuckDuckGo, YouTube, Baidu, Yandex, Brave, Naver, Amazon, eBay, and Walmart. Agents can perform multi-engine searches and access engine schemas."
+    requires_api_key: true
+    tags: ["web-search", "serp", "multi-engine", "google"]
+    logo_url: "https://img.logo.dev/serpapi.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://github.com/serpapi/serpapi-mcp"
+    tools: ["search"]
+
+  - id: tavily-search
+    name: "Tavily"
+    category: "Web Search"
+    url: "https://mcp.tavily.com/mcp"
+    transport: "STREAMABLEHTTP"
+    auth_type: "API Key"
+    provider: "Tavily"
+    description: "Tavily's MCP server provides AI-optimized web search with 93.3% SimpleQA accuracy. Agents can search the web with depth control, extract content from URLs, crawl websites, map site structures, and conduct multi-step research with citations."
+    requires_api_key: true
+    tags: ["web-search", "research", "extraction", "crawling"]
+    logo_url: "https://img.logo.dev/tavily.com?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://github.com/tavily-ai/tavily-mcp"
+    tools: ["tavily_search", "tavily_extract", "tavily_crawl", "tavily_map", "tavily_research"]
+
+  - id: exa-search
+    name: "Exa"
+    category: "Web Search"
+    url: "https://mcp.exa.ai/mcp"
+    transport: "STREAMABLEHTTP"
+    auth_type: "API Key"
+    provider: "Exa"
+    description: "Exa's MCP server provides neural search powered by embeddings, going beyond keyword matching. Agents can perform semantic web searches, find similar pages, retrieve full page contents, and get AI-powered answers with citations."
+    requires_api_key: true
+    tags: ["web-search", "neural-search", "semantic", "ai"]
+    logo_url: "https://img.logo.dev/exa.ai?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://github.com/exa-labs/exa-mcp-server"
+    tools: ["web_search_exa", "web_fetch_exa", "web_search_advanced_exa"]
+
 # Categories for filtering
 categories:
   - Project Management
@@ -1483,6 +1554,7 @@ categories:
   - RAG-as-a-Service
   - Memory
   - Documentation
+  - Web Search
   - Web Scraping
   - Web Data Extraction
   - Automation
