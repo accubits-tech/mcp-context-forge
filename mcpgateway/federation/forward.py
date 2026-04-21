@@ -42,6 +42,7 @@ from mcpgateway.config import settings
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import ServerMetric
 from mcpgateway.db import Tool as DbTool
+from mcpgateway.federation.discovery import _is_safe_url
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.utils.passthrough_headers import get_passthrough_headers
 
@@ -461,6 +462,10 @@ class ForwardingService:
         gateway = db.get(DbGateway, gateway_id)
         if not gateway or not gateway.enabled:
             raise ForwardingError(f"Gateway not found: {gateway_id}")
+
+        # Block requests to private/internal IP ranges to prevent SSRF
+        if not _is_safe_url(gateway.url):
+            raise ForwardingError(f"Gateway URL targets a private/internal network: {gateway.url}")
 
         try:
             # Check rate limits
