@@ -1147,8 +1147,9 @@ if plugin_manager:
 # Add custom DocsAuthMiddleware
 app.add_middleware(DocsAuthMiddleware)
 
-# Trust all proxies (or lock down with a list of host patterns)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# Trust only configured proxy hosts (default: localhost only)
+trusted = settings.trusted_proxy_hosts.split(",") if settings.trusted_proxy_hosts != "*" else "*"
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
 
 # Add request logging middleware if enabled
 if settings.log_requests:

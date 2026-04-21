@@ -353,6 +353,10 @@ class Settings(BaseSettings):
 
     # Security: Trusted Proxies for X-Forwarded-For / X-Real-IP
     trusted_proxies: List[str] = Field(default_factory=list, description="List of trusted proxy IP addresses/CIDRs for X-Forwarded-For (empty = don't trust forwarded headers)")
+    trusted_proxy_hosts: str = Field(
+        default="127.0.0.1,::1",
+        description="Comma-separated list of trusted proxy hosts/IPs. Use '*' only in development."
+    )
 
     # A2A (Agent-to-Agent) Feature Flags
     mcpgateway_a2a_enabled: bool = True
