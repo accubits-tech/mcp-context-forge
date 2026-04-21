@@ -45,6 +45,7 @@ from mcpgateway.schemas import (
 from mcpgateway.services.email_auth_service import AuthenticationError, EmailAuthService, EmailValidationError, PasswordValidationError, UserExistsError
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.utils.create_jwt_token import create_jwt_token
+from mcpgateway.utils.rate_limit import auth_rate_limiter
 
 # Initialize logging
 logging_service = LoggingService()
@@ -207,6 +208,7 @@ async def login(login_request: EmailLoginRequest, request: Request, db: Session 
               "password": "secure_password"
             }
     """
+    auth_rate_limiter.check(request)
     auth_service = EmailAuthService(db)
     ip_address = get_client_ip(request)
     user_agent = get_user_agent(request)
@@ -254,6 +256,7 @@ async def register(registration_request: EmailRegistrationRequest, request: Requ
               "full_name": "New User"
             }
     """
+    auth_rate_limiter.check(request)
     auth_service = EmailAuthService(db)
     get_client_ip(request)
     get_user_agent(request)

@@ -12,7 +12,7 @@ Provides comprehensive API token management with scoping, revocation, and analyt
 from typing import Optional
 
 # Third-Party
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 # First-Party
@@ -28,6 +28,7 @@ from mcpgateway.schemas import (
     TokenUsageStatsResponse,
 )
 from mcpgateway.services.token_catalog_service import TokenCatalogService, TokenScope
+from mcpgateway.utils.rate_limit import token_rate_limiter
 
 router = APIRouter(prefix="/tokens", tags=["tokens"])
 
@@ -36,6 +37,7 @@ router = APIRouter(prefix="/tokens", tags=["tokens"])
 @require_permission("tokens.create")
 async def create_token(
     request: TokenCreateRequest,
+    http_request: Request,
     current_user=Depends(get_current_user_with_permissions),
     db: Session = Depends(get_db),
 ) -> TokenCreateResponse:
@@ -57,6 +59,7 @@ async def create_token(
         >>> asyncio.iscoroutinefunction(create_token)
         True
     """
+    token_rate_limiter.check(http_request)
     service = TokenCatalogService(db)
 
     # if not request.team_id:
