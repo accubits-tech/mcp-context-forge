@@ -194,7 +194,7 @@ class Settings(BaseSettings):
     auth_required: bool = True
     token_expiry: int = 10080  # minutes
 
-    require_token_expiration: bool = Field(default=False, description="Require all JWT tokens to have expiration claims")  # Default to flexible mode for backward compatibility
+    require_token_expiration: bool = Field(default=True, description="Require all JWT tokens to have expiration claims")
 
     # SSO Configuration
     sso_enabled: bool = Field(default=False, description="Enable Single Sign-On authentication")
