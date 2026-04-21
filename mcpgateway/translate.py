@@ -121,6 +121,7 @@ from contextlib import suppress
 import json
 import logging
 import os
+import re
 import shlex
 import signal
 import sys
@@ -172,6 +173,78 @@ except ImportError:
 
 KEEP_ALIVE_INTERVAL = DEFAULT_KEEP_ALIVE_INTERVAL  # seconds - from config or fallback to 30
 __all__ = ["main"]  # for console-script entry-point
+
+# ---------------------------------------------------------------------------#
+# Security - stdio command validation                                        #
+# ---------------------------------------------------------------------------#
+
+# Allowlist of permitted executables for stdio transport
+_ALLOWED_EXECUTABLES = {
+    "python",
+    "python3",
+    "python3.11",
+    "python3.12",
+    "python3.13",
+    "node",
+    "npx",
+    "uvx",
+    "uv",
+    "docker",
+    "podman",
+}
+
+_DANGEROUS_PATTERNS = re.compile(
+    r'[;&|`$]|\.\./',  # shell metacharacters and path traversal
+    re.IGNORECASE,
+)
+
+
+def _validate_stdio_command(cmd: str) -> list[str]:
+    """Validate and parse a stdio command string, rejecting dangerous patterns.
+
+    Raises:
+        ValueError: If the command contains dangerous patterns or uses a disallowed executable.
+
+    Examples:
+        >>> _validate_stdio_command("python3 -m my_module")
+        ['python3', '-m', 'my_module']
+        >>> _validate_stdio_command("uvx mcp-server-git")
+        ['uvx', 'mcp-server-git']
+        >>> _validate_stdio_command("node server.js")
+        ['node', 'server.js']
+        >>> _validate_stdio_command("bash -c 'rm -rf /'")
+        Traceback (most recent call last):
+            ...
+        ValueError: Stdio executable 'bash' not in allowlist. Allowed: docker, node, npx, podman, python, python3, python3.11, python3.12, python3.13, uv, uvx
+        >>> _validate_stdio_command("python3 foo; rm -rf /")
+        Traceback (most recent call last):
+            ...
+        ValueError: Stdio command contains dangerous characters: "python3 foo; rm -rf /"
+        >>> _validate_stdio_command("python3 $(cat /etc/passwd)")
+        Traceback (most recent call last):
+            ...
+        ValueError: Stdio command contains dangerous characters: "python3 $(cat /etc/passwd)"
+        >>> _validate_stdio_command("python3 ../../etc/passwd")
+        Traceback (most recent call last):
+            ...
+        ValueError: Stdio command contains dangerous characters: "python3 ../../etc/passwd"
+    """
+    if _DANGEROUS_PATTERNS.search(cmd):
+        raise ValueError(f"Stdio command contains dangerous characters: {cmd!r}")
+
+    parts = shlex.split(cmd)
+    if not parts:
+        raise ValueError("Empty stdio command")
+
+    # Extract the executable name (basename only)
+    executable = os.path.basename(parts[0])
+    if executable not in _ALLOWED_EXECUTABLES:
+        raise ValueError(
+            f"Stdio executable {executable!r} not in allowlist. "
+            f"Allowed: {', '.join(sorted(_ALLOWED_EXECUTABLES))}"
+        )
+
+    return parts
 
 
 # ---------------------------------------------------------------------------#
@@ -407,7 +480,7 @@ class StdIOEndpoint:
 
         LOGGER.debug(f"Subprocess environment variables: {list(env.keys())}")
         self._proc = await asyncio.create_subprocess_exec(
-            *shlex.split(self._cmd),
+            *_validate_stdio_command(self._cmd),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=sys.stderr,  # passthrough for visibility
@@ -1177,7 +1250,7 @@ async def _run_sse_to_stdio(url: str, oauth2_bearer: Optional[str] = None, timeo
 
     # Start the stdio subprocess
     process = await asyncio.create_subprocess_exec(
-        *shlex.split(stdio_command),
+        *_validate_stdio_command(stdio_command),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=sys.stderr,
@@ -1389,7 +1462,7 @@ async def _run_stdio_to_streamable_http(
 
     # Create subprocess for stdio communication
     process = await asyncio.create_subprocess_exec(
-        *shlex.split(cmd),
+        *_validate_stdio_command(cmd),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=sys.stderr,
@@ -1585,7 +1658,7 @@ async def _run_streamable_http_to_stdio(
 
     # Start the stdio subprocess
     process = await asyncio.create_subprocess_exec(
-        *shlex.split(stdio_command),
+        *_validate_stdio_command(stdio_command),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=sys.stderr,
