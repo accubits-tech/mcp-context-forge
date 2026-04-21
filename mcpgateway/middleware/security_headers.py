@@ -119,7 +119,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             Test CSP directive construction:
             >>> csp_directives = [
             ...     "default-src 'self'",
-            ...     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com",
+            ...     "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com",
             ...     "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com",
             ...     "img-src 'self' data: https:",
             ...     "font-src 'self' data: https://cdnjs.cloudflare.com",
@@ -291,8 +291,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         csp_directives = [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com",
-            "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net",
+            # NOTE: 'unsafe-inline' is needed for HTMX admin UI inline scripts;
+            # it should be replaced with nonce-based CSP in a future iteration.
+            "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com",
+            "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net",  # unsafe-inline acceptable for CSS
             "img-src 'self' data: https:",
             "font-src 'self' data: https://cdnjs.cloudflare.com",
             "connect-src 'self' ws: wss: https:",
