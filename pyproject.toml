@@ -201,6 +201,13 @@ alembic = [
     "alembic>=1.17.1",
 ]
 
+# Deployed MCP servers (user-supplied Python/Node code built and run in isolated containers)
+# Install with: pip install mcp-contextforge-gateway[deploy]
+# Jinja2 is already a core dependency.
+deploy = [
+    "docker>=7.1.0",
+]
+
 # Observability dependencies (optional)
 observability = [
     "opentelemetry-api>=1.38.0",

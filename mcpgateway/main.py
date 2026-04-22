@@ -456,6 +456,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             except Exception as e:
                 logger.warning(f"Failed to initialize stdio bridge manager: {e}")
 
+        # Initialize deployment runtime service (gateway-hosted MCP server builds)
+        if settings.mcpgateway_deploy_enabled:
+            from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+            from mcpgateway.db import get_db as _get_db_deploy  # pylint: disable=import-outside-toplevel
+
+            try:
+                _db_gen = _get_db_deploy()
+                _db = next(_db_gen)
+                try:
+                    await deployment_runtime_service.initialize(db=_db)
+                    logger.info("Deployment Runtime Service initialized")
+                finally:
+                    _db.close()
+            except Exception as e:
+                logger.warning(f"Failed to initialize deployment runtime service: {e}")
+
         await root_service.initialize()
         await completion_service.initialize()
         await sampling_handler.initialize()
@@ -524,6 +540,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 await stdio_bridge_manager.shutdown()
             except Exception as e:
                 logger.error(f"Error shutting down stdio bridge manager: {str(e)}")
+
+        # Shutdown deployment runtime service
+        if settings.mcpgateway_deploy_enabled:
+            try:
+                from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+
+                await deployment_runtime_service.shutdown()
+            except Exception as e:
+                logger.error(f"Error shutting down deployment runtime service: {str(e)}")
 
         logger.info("Shutting down MCP Gateway services")
         # await stop_streamablehttp()

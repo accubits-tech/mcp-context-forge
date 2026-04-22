@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+# Rendered by mcpgateway.services.deployment.templates — do not edit by hand.
+# TODO(deploy): pin base image by @sha256 via mcpgateway_deploy_base_image_node in production.
+FROM {{ base_image }}
+
+ENV NODE_ENV=production \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+
+# Non-root user 10001:10001; node:20-slim already ships a 'node' user but we use a fixed UID.
+RUN groupadd --system --gid 10001 app && \
+    useradd  --system --uid 10001 --gid 10001 --home-dir /app --shell /usr/sbin/nologin app && \
+    mkdir -p /app && chown -R 10001:10001 /app
+
+WORKDIR /app
+COPY --chown=10001:10001 . /app/
+
+# Install deps without running lifecycle scripts (preinstall/postinstall/etc).
+RUN set -eu; \
+    if [ -f package-lock.json ]; then \
+        npm ci --ignore-scripts --omit=dev; \
+    elif [ -f yarn.lock ]; then \
+        corepack enable && yarn install --frozen-lockfile --ignore-scripts --production; \
+    elif [ -f package.json ]; then \
+        npm install --ignore-scripts --omit=dev; \
+    else \
+        echo "no package.json found" >&2; exit 1; \
+    fi
+
+{% if entry_mode == "stdio" %}
+# Stdio entry mode: install a minimal Python layer so we can run mcpgateway.translate.
+# TODO(deploy): consider a multi-stage image that avoids installing Python when possible.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip3 install --break-system-packages mcp-contextforge-gateway
+{% endif %}
+
+ENV PORT=8080 \
+    MCP_DEPLOY_TOKEN=__INJECTED_AT_RUN__ \
+    HOME=/tmp
+
+USER 10001:10001
+EXPOSE 8080
+
+{% if entry_mode == "stdio" %}
+CMD ["python3", "-m", "mcpgateway.translate", "--stdio", "{{ entry_command }}", "--port", "8080", "--host", "0.0.0.0", "--expose-streamable-http"]
+{% else %}
+# HTTP entry mode: user command must listen on $PORT (8080).
+CMD {{ entry_command_argv | tojson }}
+{% endif %}

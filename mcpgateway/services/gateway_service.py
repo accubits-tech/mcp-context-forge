@@ -841,12 +841,71 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             stdio_bridge_port = None
             stdio_env_encrypted = None
             is_stdio = gateway.transport == "STDIO"
-            # Pre-generate gateway ID so we can use it as bridge key
+            is_deploy = getattr(gateway, "deployment", None) is not None
+            # Pre-generate gateway ID so we can use it as bridge/deployment key
             import uuid as _uuid  # pylint: disable=import-outside-toplevel
 
             pre_generated_id = _uuid.uuid4().hex
 
-            if is_stdio:
+            # Deployed-server fields captured here for the DbGateway below.
+            deployment_fields: Dict[str, Any] = {}
+
+            if is_deploy:
+                # --- DEPLOY: build + run user-supplied MCP server in an isolated container ---
+                from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+
+                spec = gateway.deployment
+                # Per-team quota
+                from mcpgateway.config import settings as _deploy_settings  # pylint: disable=import-outside-toplevel
+
+                if team_id:
+                    existing = (
+                        db.query(DbGateway)
+                        .filter(DbGateway.team_id == team_id, DbGateway.deployment_source.isnot(None))
+                        .count()
+                    )
+                    if existing >= _deploy_settings.mcpgateway_deploy_max_per_team:
+                        raise RuntimeError(
+                            f"deployment quota reached for team (max {_deploy_settings.mcpgateway_deploy_max_per_team})"
+                        )
+                # Archive ingress happens out-of-band via upload endpoint; the spec carries a token
+                # resolved to a local archive path by the admin route before register_gateway is called.
+                image_tag, host_port, source_sha, source_ref, build_log_path = await deployment_runtime_service.deploy(
+                    gateway_id=pre_generated_id,
+                    source=spec.source,
+                    git_url=spec.git_url,
+                    git_ref=spec.git_ref,
+                    subpath=spec.subpath,
+                    archive_bytes=getattr(spec, "_archive_bytes", None),
+                    archive_filename=getattr(spec, "_archive_filename", None),
+                    runtime=spec.runtime,
+                    entry_mode=spec.entry_mode,
+                    entry_command=spec.entry_command,
+                    env=spec.env,
+                    resource_limits=spec.resource_limits,
+                    egress_allowlist=spec.egress_allowlist,
+                )
+                normalized_url = f"http://127.0.0.1:{host_port}/mcp"
+                effective_transport = "STREAMABLEHTTP"
+                deployment_fields = {
+                    "deployment_source": spec.source,
+                    "deployment_source_ref": source_ref,
+                    "deployment_source_sha256": source_sha,
+                    "deployment_runtime": spec.runtime,
+                    "deployment_entry_mode": spec.entry_mode,
+                    "deployment_entry_command": spec.entry_command,
+                    "deployment_image_tag": image_tag,
+                    "deployment_container_id": (deployment_runtime_service.status(pre_generated_id) or {}).get("container_id"),
+                    "deployment_host_port": host_port,
+                    "deployment_build_status": "ready",
+                    "deployment_build_log_ref": build_log_path,
+                    "deployment_resource_limits": spec.resource_limits,
+                    "deployment_egress_allowlist": spec.egress_allowlist,
+                    "deployment_env_encrypted": encode_auth(spec.env) if spec.env else None,
+                    "deployment_last_built_at": datetime.now(timezone.utc),
+                    "deployment_last_started_at": datetime.now(timezone.utc),
+                }
+            elif is_stdio:
                 from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
 
                 # Encrypt env vars for storage
@@ -1068,6 +1127,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 stdio_cwd=getattr(gateway, "stdio_cwd", None),
                 stdio_timeout=getattr(gateway, "stdio_timeout", None),
                 stdio_bridge_port=stdio_bridge_port,
+                # Deployment fields (only populated when is_deploy)
+                **deployment_fields,
             )
 
             # Add to DB
@@ -2168,6 +2229,15 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
 
                 await stdio_bridge_manager.stop_bridge(gateway.id)
+
+            # Tear down deployed container + image + artifact dir if applicable
+            if gateway.deployment_source:
+                from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+
+                try:
+                    await deployment_runtime_service.delete(gateway.id, image_tag=gateway.deployment_image_tag)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("delete_gateway: deployment cleanup failed for %s: %s", gateway.id, e)
 
             # Store gateway info for notification before deletion
             gateway_info = {"id": gateway.id, "name": gateway.name, "url": gateway.url}
