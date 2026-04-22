@@ -274,8 +274,14 @@ RUN chmod 1777 ${ROOTFS_PATH:?}/tmp ${ROOTFS_PATH:?}/var/tmp 2>/dev/null || true
 # Copy application directory into the rootfs and fix permissions for non-root
 # - Set ownership to 1001:1001 (matching passwd/group)
 # - Allow group write permissions for OpenShift compatibility
+# - Pre-create /app/var/deployments owned by 1001:1001 so the
+#   'deploy_artifacts' named volume inherits that ownership on first mount
+#   (Docker seeds an empty named volume from the image's contents at the
+#   mount path). Without this, the volume is created root:root 755 and
+#   the gateway (UID 1001) gets EACCES on first ingest.
 # ----------------------------------------------------------------------------
 RUN cp -r /app ${ROOTFS_PATH:?}/app \
+    && mkdir -p ${ROOTFS_PATH:?}/app/var/deployments/incoming \
     && chown -R 1001:1001 ${ROOTFS_PATH:?}/app \
     && chmod -R g=u ${ROOTFS_PATH:?}/app
 

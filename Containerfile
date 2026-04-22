@@ -105,7 +105,13 @@ RUN python3 -m venv /app/.venv && \
     rm -rf /tmp/rust-wheels
 
 # update the user permissions
-RUN chown -R 1001:0 /app && \
+# Pre-create /app/var/deployments owned by 1001 so the 'deploy_artifacts'
+# named volume inherits that ownership on first mount (Docker seeds an
+# empty named volume from the image's contents at the mount path).
+# Without this, the volume is created root:root 755 and the gateway
+# (UID 1001) gets EACCES on first deployment ingest.
+RUN mkdir -p /app/var/deployments/incoming && \
+    chown -R 1001:0 /app && \
     chmod -R g=u /app
 
 # Expose the application port
