@@ -122,7 +122,8 @@ class DockerDriver(RuntimeDriver):
         network = None if egress.is_deny_all else f"mcpdeploy-egress-{container_name}"
 
         def _do_start() -> ContainerHandle:
-            container = client.containers.run(
+            # Split create + start so a start failure doesn't leak a created-but-unreachable container.
+            create_kwargs = dict(
                 image=image_tag,
                 name=container_name,
                 detach=True,
@@ -131,7 +132,11 @@ class DockerDriver(RuntimeDriver):
                 read_only=True,
                 tmpfs={"/tmp": "size=64m,mode=1777,noexec,nosuid,nodev"},
                 cap_drop=["ALL"],
-                security_opt=["no-new-privileges", "seccomp=default"],  # seccomp=default == RuntimeDefault
+                # no-new-privileges blocks setuid escalation. We deliberately DO NOT pass
+                # seccomp=... here: Docker applies the default (RuntimeDefault-equivalent)
+                # profile when no override is given. Explicit 'seccomp=default' is not a
+                # valid value — Docker tries to parse it as JSON.
+                security_opt=["no-new-privileges"],
                 user="10001:10001",
                 mem_limit=f"{limits.memory_mb}m",
                 nano_cpus=int(limits.cpu * 1_000_000_000),
@@ -144,6 +149,16 @@ class DockerDriver(RuntimeDriver):
                 restart_policy={"Name": "no"},  # runtime service decides restarts
                 labels={"mcpgateway.managed": "true", "mcpgateway.role": "deployed-mcp-server"},
             )
+            container = client.containers.create(**create_kwargs)
+            try:
+                container.start()
+            except Exception:
+                # Guaranteed cleanup so a failed start never leaks a 'Created' container.
+                try:
+                    container.remove(force=True)
+                except Exception as rm_err:  # noqa: BLE001
+                    logger.warning("start: cleanup remove raised: %s", rm_err)
+                raise
             return ContainerHandle(container_id=container.id, host_port=host_port, image_tag=image_tag)
 
         return await asyncio.to_thread(_do_start)
