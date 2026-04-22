@@ -7099,6 +7099,325 @@ async def admin_restart_stdio_bridge(
         return JSONResponse(content={"message": f"Failed to restart stdio bridge: {e}", "success": False}, status_code=500)
 
 
+# ---------------------------------------------------------------------------
+# Deployed MCP server endpoints (gateway-hosted Python/Node source builds).
+# ---------------------------------------------------------------------------
+
+# In-process staging for uploaded archives. Keyed by an opaque token returned to the
+# client; the POST /gateways/deploy call references the token in its DeploymentSpec.
+# Tokens are single-use and expire automatically with the in-process dict lifetime.
+_DEPLOY_UPLOAD_STAGING: Dict[str, Dict[str, Any]] = {}
+
+
+@admin_router.post("/gateways/deploy/upload")
+async def admin_deploy_upload(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Stage an uploaded source archive for a subsequent deploy() call.
+
+    Returns an upload_token the client passes via DeploymentSpec.upload_token.
+
+    Args:
+        request: multipart request with an 'archive' file field.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        JSONResponse with {upload_token, filename, size_bytes}.
+    """
+    # First-Party
+    from mcpgateway.config import settings  # pylint: disable=import-outside-toplevel
+
+    if not settings.mcpgateway_deploy_enabled:
+        return JSONResponse(content={"message": "Deploy feature is disabled", "success": False}, status_code=403)
+
+    try:
+        form = await request.form()
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(content={"message": f"failed to parse multipart form: {e}", "success": False}, status_code=422)
+
+    archive = form.get("archive")
+    if not isinstance(archive, StarletteUploadFile):
+        return JSONResponse(content={"message": "missing 'archive' file field", "success": False}, status_code=422)
+
+    max_bytes = settings.mcpgateway_deploy_max_archive_mb * 1024 * 1024
+    data = await archive.read()
+    if len(data) > max_bytes:
+        return JSONResponse(content={"message": f"archive exceeds {settings.mcpgateway_deploy_max_archive_mb} MiB cap", "success": False}, status_code=413)
+
+    # Standard
+    import secrets as _secrets  # pylint: disable=import-outside-toplevel
+
+    token = _secrets.token_urlsafe(24)
+    _DEPLOY_UPLOAD_STAGING[token] = {
+        "bytes": data,
+        "filename": archive.filename or "archive",
+        "owner": get_user_email(user),
+    }
+    return JSONResponse(content={"upload_token": token, "filename": archive.filename, "size_bytes": len(data), "success": True}, status_code=200)
+
+
+@admin_router.post("/gateways/deploy")
+async def admin_deploy_gateway(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Deploy a user-supplied Python/Node MCP server and register it as a gateway.
+
+    Accepts a JSON body shaped like GatewayCreate with a 'deployment' field
+    conforming to DeploymentSpec. When deployment.source='upload',
+    deployment.upload_token must reference a prior POST /gateways/deploy/upload.
+
+    Args:
+        request: FastAPI request.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        JSONResponse with the created Gateway or an error payload.
+    """
+    # First-Party
+    from mcpgateway.config import settings  # pylint: disable=import-outside-toplevel
+    from mcpgateway.schemas import GatewayCreate  # pylint: disable=import-outside-toplevel
+
+    if not settings.mcpgateway_deploy_enabled:
+        return JSONResponse(content={"message": "Deploy feature is disabled", "success": False}, status_code=403)
+
+    try:
+        body = await request.json()
+        payload = GatewayCreate(**body)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(content={"message": f"invalid payload: {e}", "success": False}, status_code=422)
+
+    if payload.deployment is None:
+        return JSONResponse(content={"message": "deployment spec is required", "success": False}, status_code=422)
+
+    # Resolve upload_token -> archive bytes and attach them to the spec for the service.
+    if payload.deployment.source == "upload":
+        token = payload.deployment.upload_token
+        staged = _DEPLOY_UPLOAD_STAGING.pop(token, None) if token else None
+        if not staged:
+            return JSONResponse(content={"message": "upload_token is unknown or already consumed", "success": False}, status_code=400)
+        if staged.get("owner") and staged["owner"] != get_user_email(user):
+            return JSONResponse(content={"message": "upload_token does not belong to the current user", "success": False}, status_code=403)
+        # Stash the bytes on the spec object so register_gateway's deploy branch finds them.
+        object.__setattr__(payload.deployment, "_archive_bytes", staged["bytes"])
+        object.__setattr__(payload.deployment, "_archive_filename", staged["filename"])
+
+    user_email = get_user_email(user)
+    team_service = TeamManagementService(db)
+    team_id = await team_service.verify_team_for_user(user_email, payload.team_id)
+    metadata = MetadataCapture.extract_creation_metadata(request, user)
+
+    try:
+        created = await gateway_service.register_gateway(
+            db,
+            payload,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via="deploy",
+            created_user_agent=metadata["created_user_agent"],
+            visibility=payload.visibility or "private",
+            team_id=typing_cast(Optional[str], team_id),
+            owner_email=user_email,
+        )
+        return JSONResponse(content={"gateway": jsonable_encoder(created.model_dump()), "success": True}, status_code=201)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(content={"message": f"deploy failed: {e}", "success": False}, status_code=500)
+
+
+@admin_router.get("/gateways/{gateway_id}/deployment/status")
+async def admin_deployment_status(
+    gateway_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Return runtime status for a deployed gateway.
+
+    Args:
+        gateway_id: Gateway ID.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        JSONResponse with DeploymentStatus-shaped body.
+    """
+    # First-Party
+    from mcpgateway.db import Gateway as DbGw  # pylint: disable=import-outside-toplevel
+    from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+
+    gw = db.get(DbGw, gateway_id)
+    if not gw or not gw.deployment_source:
+        return JSONResponse(content={"message": "No deployment found for this gateway", "success": False}, status_code=404)
+
+    in_proc = deployment_runtime_service.status(gateway_id) or {}
+    body = {
+        "build_status": gw.deployment_build_status,
+        "container_status": in_proc.get("status"),
+        "host_port": gw.deployment_host_port,
+        "image_tag": gw.deployment_image_tag,
+        "source_sha256": gw.deployment_source_sha256,
+        "last_built_at": gw.deployment_last_built_at.isoformat() if gw.deployment_last_built_at else None,
+        "last_started_at": gw.deployment_last_started_at.isoformat() if gw.deployment_last_started_at else None,
+        "restart_count": in_proc.get("restart_count"),
+        "uptime_seconds": in_proc.get("uptime_seconds"),
+        "container_id": in_proc.get("container_id"),
+    }
+    return JSONResponse(content={"status": body, "success": True}, status_code=200)
+
+
+@admin_router.get("/gateways/{gateway_id}/deployment/logs")
+async def admin_deployment_logs(
+    gateway_id: str,
+    kind: str = Query("runtime", pattern="^(build|runtime)$"),
+    tail: int = Query(500, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> Response:
+    """Return build or runtime logs for a deployed gateway.
+
+    Args:
+        gateway_id: Gateway ID.
+        kind: 'build' or 'runtime'.
+        tail: Number of lines / bytes to return (runtime uses lines; build uses KiB).
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        Plain-text Response with the log content.
+    """
+    # First-Party
+    from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+
+    if kind == "build":
+        body = await deployment_runtime_service.build_log(gateway_id, tail_bytes=tail * 128)  # ~128 bytes per 'line'
+    else:
+        body = await deployment_runtime_service.logs(gateway_id, tail=tail)
+    return Response(content=body, media_type="text/plain", status_code=200)
+
+
+@admin_router.post("/gateways/{gateway_id}/deployment/restart")
+async def admin_deployment_restart(
+    gateway_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Stop and restart the container for a deployed gateway (no rebuild).
+
+    Args:
+        gateway_id: Gateway ID.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        JSONResponse with restart result.
+    """
+    # First-Party
+    from mcpgateway.db import Gateway as DbGw  # pylint: disable=import-outside-toplevel
+    from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+
+    gw = db.get(DbGw, gateway_id)
+    if not gw or not gw.deployment_source:
+        return JSONResponse(content={"message": "No deployment found for this gateway", "success": False}, status_code=404)
+
+    try:
+        new_port = await deployment_runtime_service.restart(gateway_id, db=db)
+        if new_port is None:
+            return JSONResponse(content={"message": "No active container to restart", "success": False}, status_code=409)
+        gw.deployment_host_port = new_port
+        gw.url = f"http://127.0.0.1:{new_port}/mcp"
+        gw.deployment_last_started_at = datetime.now(timezone.utc)
+        db.commit()
+        return JSONResponse(content={"message": "restarted", "host_port": new_port, "success": True}, status_code=200)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(content={"message": f"restart failed: {e}", "success": False}, status_code=500)
+
+
+@admin_router.post("/gateways/{gateway_id}/deployment/rebuild")
+async def admin_deployment_rebuild(
+    gateway_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Re-ingest source (for git) or re-run a staged upload, rebuild image, restart.
+
+    v1 behavior: for git-backed deployments, re-clones the same URL@ref and rebuilds.
+    For upload-backed deployments, returns 409 — the client must upload a fresh
+    archive and POST /gateways/deploy with the new token.
+
+    Args:
+        gateway_id: Gateway ID.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        JSONResponse indicating success or next-step guidance.
+    """
+    # First-Party
+    from mcpgateway.db import Gateway as DbGw  # pylint: disable=import-outside-toplevel
+    from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+    from mcpgateway.utils.services_auth import decode_auth  # pylint: disable=import-outside-toplevel
+
+    gw = db.get(DbGw, gateway_id)
+    if not gw or not gw.deployment_source:
+        return JSONResponse(content={"message": "No deployment found for this gateway", "success": False}, status_code=404)
+
+    if gw.deployment_source == "upload":
+        return JSONResponse(
+            content={
+                "message": "Rebuild for upload deployments requires a new upload + deploy; git-backed deployments can rebuild in place.",
+                "success": False,
+            },
+            status_code=409,
+        )
+
+    # Parse the stored source_ref: '<git_url>@<ref>#<subpath>'
+    src_ref = gw.deployment_source_ref or ""
+    git_url = src_ref.split("@", 1)[0] if "@" in src_ref else src_ref
+    rest = src_ref.split("@", 1)[1] if "@" in src_ref else ""
+    subpath = None
+    if "#" in rest:
+        ref, subpath = rest.split("#", 1)
+    else:
+        ref = rest or None
+    env = decode_auth(gw.deployment_env_encrypted) if gw.deployment_env_encrypted else None
+
+    try:
+        # Tear down the current container first; keep the Gateway row.
+        await deployment_runtime_service.delete(gateway_id, image_tag=gw.deployment_image_tag)
+        image_tag, host_port, source_sha, source_ref, build_log_path = await deployment_runtime_service.deploy(
+            gateway_id=gateway_id,
+            source="git",
+            git_url=git_url,
+            git_ref=ref,
+            subpath=subpath,
+            runtime=gw.deployment_runtime,
+            entry_mode=gw.deployment_entry_mode,
+            entry_command=gw.deployment_entry_command,
+            env=env,
+            resource_limits=gw.deployment_resource_limits,
+            egress_allowlist=gw.deployment_egress_allowlist,
+        )
+        gw.deployment_image_tag = image_tag
+        gw.deployment_host_port = host_port
+        gw.deployment_source_sha256 = source_sha
+        gw.deployment_source_ref = source_ref
+        gw.deployment_build_log_ref = build_log_path
+        gw.deployment_build_status = "ready"
+        gw.deployment_last_built_at = datetime.now(timezone.utc)
+        gw.deployment_last_started_at = datetime.now(timezone.utc)
+        gw.url = f"http://127.0.0.1:{host_port}/mcp"
+        db.commit()
+        return JSONResponse(content={"message": "rebuilt", "host_port": host_port, "image_tag": image_tag, "success": True}, status_code=200)
+    except Exception as e:  # noqa: BLE001
+        gw.deployment_build_status = "failed"
+        db.commit()
+        return JSONResponse(content={"message": f"rebuild failed: {e}", "success": False}, status_code=500)
+
+
 # OAuth callback is now handled by the dedicated OAuth router at /oauth/callback
 # This route has been removed to avoid conflicts with the complete implementation
 @admin_router.post("/gateways/{gateway_id}/edit")
