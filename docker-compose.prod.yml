@@ -173,6 +173,12 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - deploy_artifacts:/app/var/deployments
+    # Grant the gateway container UID 1001 membership in the host's docker
+    # group so it can open /var/run/docker.sock. Find the GID on the host
+    # with:   getent group docker | cut -d: -f3
+    # and set DOCKER_GID=<value> in .env. Common defaults: 999, 998, 100.
+    group_add:
+      - "${DOCKER_GID:-999}"
     depends_on:
       postgres:
         condition: service_healthy
