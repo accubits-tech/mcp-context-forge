@@ -114,12 +114,22 @@ class DockerDriver(RuntimeDriver):
         """Start a container with the full sandbox defaults applied."""
         client = self._get_client()
 
-        # Network: deny by default. If an allowlist is configured, the runtime
-        # service is responsible for attaching an egress-proxy sidecar and passing
-        # its network name via egress.allowlist[0] (see DeploymentRuntimeService).
-        # The driver itself always uses 'none' for the deployed container.
-        network_mode = "none" if egress.is_deny_all else None
-        network = None if egress.is_deny_all else f"mcpdeploy-egress-{container_name}"
+        # Network: v1 uses Docker's default bridge so the 127.0.0.1-published port is
+        # actually reachable from the host. --network=none would remove the container's
+        # network interface entirely, which makes HostConfig.PortBindings a no-op
+        # (the port record exists but nothing is published to the bridge).
+        # Full egress isolation is the Envoy-sidecar work tracked as v1.5.
+        # TODO(deploy): wire the Envoy sidecar + allowlist enforcement so
+        # egress.is_deny_all can translate to a real network-level deny without
+        # breaking inbound publish.
+        network_mode = None  # default bridge
+        network = None
+        if not egress.is_deny_all:
+            logger.warning(
+                "start: egress allowlist %r supplied but v1 has no sidecar yet; "
+                "container will have unrestricted egress",
+                egress.allowlist,
+            )
 
         def _do_start() -> ContainerHandle:
             # Split create + start so a start failure doesn't leak a created-but-unreachable container.

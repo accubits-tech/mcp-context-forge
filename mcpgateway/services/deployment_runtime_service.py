@@ -202,10 +202,13 @@ class DeploymentRuntimeService:
             self._used_ports.discard(port)
             raise
 
-        # 5) Wait for the container's HTTP surface to become healthy.
+        # 5) Wait for the container's HTTP surface to become healthy. 60s is plenty —
+        # by this point the image is built and the container has been started; we're
+        # only waiting for the in-container server to bind its port. Capping at 60s
+        # means a misconfigured deployment fails fast instead of blocking for 10min.
         bridge_url = f"http://127.0.0.1:{port}"
         try:
-            await self._wait_for_health(bridge_url, timeout=limits.build_timeout_s)
+            await self._wait_for_health(bridge_url, timeout=60)
         except Exception:
             try:
                 await self.driver().stop(handle)
