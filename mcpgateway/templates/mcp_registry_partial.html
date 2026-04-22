@@ -414,8 +414,13 @@
         <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
           {{ server.name }}
         </h3>
-        {% if server.is_registered %}
-        <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+        {% if server.registered_instance_count and server.registered_instance_count > 0 %}
+        <span
+          class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
+          title="{{ server.registered_instance_count }} instance(s) already registered"
+        >
+          {{ server.registered_instance_count }} registered
+        </span>
         {% endif %}
       </div>
 
@@ -516,16 +521,8 @@
         >
           View Details
         </button>
-        <!-- Register / Add Button -->
-        {% if server.is_registered %}
-        <button
-          class="flex-1 px-4 py-2 bg-gray-300 text-gray-600 rounded-md cursor-not-allowed text-sm"
-          disabled
-        >
-          Registered
-        </button>
-        {% else %} {% if server.requires_api_key or server.auth_type in ["API
-        Key", "OAuth2.1 & API Key"] %}
+        <!-- Register / Add Button — always shown so users can add more instances -->
+        {% if server.requires_api_key or server.auth_type in ["API Key", "OAuth2.1 & API Key"] %}
         <button
           class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
           onclick="showApiKeyModal('{{ server.id }}', '{{ server.name }}', '{{ server.url }}')"
@@ -552,7 +549,7 @@
             </span>
           </button>
         </div>
-        {% endif %} {% endif %}
+        {% endif %}
       </div>
     </div>
     {% endfor %}

@@ -90,15 +90,79 @@ async def test_register_catalog_server_not_found(service):
 
 
 @pytest.mark.asyncio
-async def test_register_catalog_server_already_registered(service):
+async def test_register_catalog_server_name_conflict(service):
+    """Registering under a name whose slug already exists in the caller's scope
+    should return a friendly name_conflict response, not the generic mapper."""
+    # First-Party
+    from mcpgateway.services.gateway_service import GatewayNameConflictError  # pylint: disable=import-outside-toplevel
+
     fake_catalog = {"catalog_servers": [{"id": "1", "name": "srv", "url": "http://a", "description": "desc"}]}
+    req = CatalogServerRegisterRequest(server_id="1", name="srv")
     with patch.object(service, "load_catalog", AsyncMock(return_value=fake_catalog)):
         db = MagicMock()
-        db.execute.return_value.scalar_one_or_none.return_value = MagicMock(id=123)
-        with patch("mcpgateway.services.catalog_service.select"):
-            result = await service.register_catalog_server("1", None, db)
+        db.execute.return_value.scalar_one_or_none.return_value = None
+        with (
+            patch("mcpgateway.services.catalog_service.select"),
+            patch.object(
+                service._gateway_service,
+                "register_gateway",
+                AsyncMock(side_effect=GatewayNameConflictError("srv", enabled=True, gateway_id="existing-id", visibility="private")),
+            ),
+        ):
+            result = await service.register_catalog_server("1", req, db, user={"email": "alice@example.com"})
             assert not result.success
-            assert "already registered" in result.message
+            assert result.error == "name_conflict"
+            assert "srv" in result.message
+
+
+@pytest.mark.asyncio
+async def test_register_catalog_server_multi_instance_same_url_different_name(service):
+    """Two registrations of the same catalog URL with different names both succeed."""
+    fake_catalog = {"catalog_servers": [{"id": "1", "name": "Linear", "url": "http://a", "description": "desc", "auth_type": "API Key"}]}
+    with patch.object(service, "load_catalog", AsyncMock(return_value=fake_catalog)):
+        db = MagicMock()
+        db.execute.return_value.scalar_one_or_none.return_value = None
+        with (
+            patch("mcpgateway.services.catalog_service.select"),
+            patch.object(
+                service._gateway_service,
+                "register_gateway",
+                AsyncMock(side_effect=[MagicMock(id="gw-1", name="Linear"), MagicMock(id="gw-2", name="Linear Work")]),
+            ),
+        ):
+            first = await service.register_catalog_server(
+                "1",
+                CatalogServerRegisterRequest(server_id="1", name="Linear", api_key="key-personal"),
+                db,
+                user={"email": "alice@example.com"},
+            )
+            second = await service.register_catalog_server(
+                "1",
+                CatalogServerRegisterRequest(server_id="1", name="Linear Work", api_key="key-work"),
+                db,
+                user={"email": "alice@example.com"},
+            )
+            assert first.success and first.server_id == "gw-1"
+            assert second.success and second.server_id == "gw-2"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_servers_count_is_user_scoped(service):
+    """User A's private gateway should not appear in user B's registered_instance_count."""
+    fake_catalog = {
+        "catalog_servers": [
+            {"id": "1", "name": "Linear", "url": "http://linear", "category": "pm", "auth_type": "API Key", "provider": "Linear", "tags": [], "description": "d"},
+        ]
+    }
+    req = CatalogListRequest(show_registered_only=False, show_available_only=False, offset=0, limit=10)
+    with patch.object(service, "load_catalog", AsyncMock(return_value=fake_catalog)):
+        db = MagicMock()
+        # db.execute returns an iterable of (url,) tuples for the count query;
+        # return empty so that user B sees zero instances of this catalog entry.
+        db.execute.return_value = iter([])
+        result = await service.get_catalog_servers(req, db, user={"email": "bob@example.com"})
+        assert result.servers[0].registered_instance_count == 0
+        assert result.servers[0].is_registered is False
 
 
 @pytest.mark.asyncio

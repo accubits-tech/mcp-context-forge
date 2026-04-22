@@ -26,7 +26,7 @@ import re
 from typing import Optional
 
 # Third-Party
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -761,11 +761,15 @@ class EmailAuthService:
             logger.error(f"Error deactivating user {email}: {e}")
             raise
 
-    async def delete_user(self, email: str) -> bool:
+    async def delete_user(self, email: str, acting_admin_email: Optional[str] = None) -> bool:
         """Delete a user account permanently.
 
         Args:
             email: User's email address
+            acting_admin_email: Email of the admin performing the deletion. Used to
+                reassign NOT-NULL actor FK columns (e.g. roles.created_by,
+                token_revocations.revoked_by) that would otherwise block deletion.
+                If None, falls back to the last remaining active admin.
 
         Returns:
             bool: True if user was deleted
@@ -773,6 +777,7 @@ class EmailAuthService:
         Raises:
             ValueError: If user doesn't exist
             ValueError: If user owns teams that cannot be transferred
+            ValueError: If no acting admin is available to reassign NOT-NULL actor rows
         """
         try:
             stmt = select(EmailUser).where(EmailUser.email == email)
@@ -784,7 +789,24 @@ class EmailAuthService:
 
             # Check if user owns any teams
             # First-Party
-            from mcpgateway.db import EmailTeam, EmailTeamMember, EmailTeamMemberHistory  # pylint: disable=import-outside-toplevel
+            from mcpgateway.db import (  # pylint: disable=import-outside-toplevel
+                EmailTeam,
+                EmailTeamInvitation,
+                EmailTeamJoinRequest,
+                EmailTeamMember,
+                EmailTeamMemberHistory,
+                PendingUserApproval,
+                Role,
+                SSOAuthSession,
+                TokenRevocation,
+                UserRole,
+            )
+
+            # Resolve a reassignment target for NOT-NULL actor FK columns.
+            reassign_to = acting_admin_email if acting_admin_email and acting_admin_email != email else None
+            if reassign_to is None:
+                fallback_stmt = select(EmailUser.email).where(EmailUser.email != email, EmailUser.is_admin.is_(True), EmailUser.is_active.is_(True)).limit(1)
+                reassign_to = self.db.execute(fallback_stmt).scalar_one_or_none()
 
             teams_owned_stmt = select(EmailTeam).where(EmailTeam.created_by == email)
             teams_owned = self.db.execute(teams_owned_stmt).scalars().all()
@@ -828,6 +850,11 @@ class EmailAuthService:
             auth_events_stmt = delete(EmailAuthEvent).where(EmailAuthEvent.user_email == email)
             self.db.execute(auth_events_stmt)
 
+            # Null nullable actor columns in history/membership tables before deleting
+            # the user's own rows, so we don't drop audit context for other users.
+            self.db.execute(update(EmailTeamMemberHistory).where(EmailTeamMemberHistory.action_by == email).values(action_by=None))
+            self.db.execute(update(EmailTeamMember).where(EmailTeamMember.invited_by == email).values(invited_by=None))
+
             # Remove user's team member history (FK constraint on email_team_members)
             team_member_history_stmt = delete(EmailTeamMemberHistory).where(EmailTeamMemberHistory.user_email == email)
             self.db.execute(team_member_history_stmt)
@@ -835,6 +862,42 @@ class EmailAuthService:
             # Remove user from all team memberships
             team_members_stmt = delete(EmailTeamMember).where(EmailTeamMember.user_email == email)
             self.db.execute(team_members_stmt)
+
+            # Team join requests: delete the user's own pending/resolved requests,
+            # and null the reviewer column on requests they reviewed for others.
+            self.db.execute(update(EmailTeamJoinRequest).where(EmailTeamJoinRequest.reviewed_by == email).values(reviewed_by=None))
+            self.db.execute(delete(EmailTeamJoinRequest).where(EmailTeamJoinRequest.user_email == email))
+
+            # Pending approvals they signed off on: approved_by is nullable.
+            self.db.execute(update(PendingUserApproval).where(PendingUserApproval.approved_by == email).values(approved_by=None))
+
+            # User_roles: drop both assignments where the victim is the grantee
+            # and grants they issued to others (granted_by is NOT NULL so can't be nulled).
+            self.db.execute(delete(UserRole).where((UserRole.user_email == email) | (UserRole.granted_by == email)))
+
+            # Pending team invitations they sent are invalidated on their removal.
+            self.db.execute(delete(EmailTeamInvitation).where(EmailTeamInvitation.invited_by == email))
+
+            # SSO auth sessions are short-lived and user-specific; safe to drop.
+            self.db.execute(delete(SSOAuthSession).where(SSOAuthSession.user_email == email))
+
+            # Reassign NOT-NULL actor columns on records we must preserve: custom
+            # roles the user created, and token revocation records they issued.
+            # Without a reassignment target these can't be resolved without data
+            # loss, so fail loudly.
+            owned_roles_count = self.db.execute(select(func.count()).select_from(Role).where(Role.created_by == email)).scalar() or 0  # pylint: disable=not-callable
+            issued_revocations_count = self.db.execute(select(func.count()).select_from(TokenRevocation).where(TokenRevocation.revoked_by == email)).scalar() or 0  # pylint: disable=not-callable
+            if (owned_roles_count or issued_revocations_count) and not reassign_to:
+                raise ValueError(
+                    f"Cannot delete user {email}: they own {owned_roles_count} role(s) and issued "
+                    f"{issued_revocations_count} token revocation(s), and no other active admin is "
+                    "available to reassign these records to."
+                )
+            if reassign_to:
+                if owned_roles_count:
+                    self.db.execute(update(Role).where(Role.created_by == email).values(created_by=reassign_to))
+                if issued_revocations_count:
+                    self.db.execute(update(TokenRevocation).where(TokenRevocation.revoked_by == email).values(revoked_by=reassign_to))
 
             # Delete the user
             self.db.delete(user)

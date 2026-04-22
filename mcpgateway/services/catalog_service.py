@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # Third-Party
 import httpx
@@ -87,12 +87,19 @@ class CatalogService:
             logger.error(f"Failed to load catalog: {e}")
             return {"catalog_servers": [], "categories": [], "auth_types": []}
 
-    async def get_catalog_servers(self, request: CatalogListRequest, db) -> CatalogListResponse:
+    async def get_catalog_servers(
+        self,
+        request: CatalogListRequest,
+        db,
+        user: Optional[Dict[str, Any]] = None,
+    ) -> CatalogListResponse:
         """Get filtered list of catalog servers.
 
         Args:
             request: Filter criteria
             db: Database session
+            user: Authenticated user context (dict with at least ``email``); used to scope
+                the ``registered_instance_count`` to what this user can actually see.
 
         Returns:
             Filtered catalog servers response
@@ -100,27 +107,58 @@ class CatalogService:
         catalog_data = await self.load_catalog()
         servers = catalog_data.get("catalog_servers", [])
 
-        # Check which servers are already registered
-        registered_urls = set()
+        # Count registered instances per URL, scoped to what this user can see.
+        # A gateway is "visible" to the user if it is public, OR private and owned by them,
+        # OR team-scoped to a team they belong to. Public+private alone cover the common
+        # cases; team membership is resolved when a user is provided.
+        registered_counts: Dict[str, int] = {}
         if servers:
             try:
-                # Ensure we're using the correct Gateway model
                 # First-Party
+                from mcpgateway.db import EmailTeamMember as DbEmailTeamMember  # pylint: disable=import-outside-toplevel
                 from mcpgateway.db import Gateway as DbGateway  # pylint: disable=import-outside-toplevel
 
-                stmt = select(DbGateway.url)
-                result = db.execute(stmt)
-                registered_urls = {row[0] for row in result}
+                # Third-Party
+                from sqlalchemy import or_  # pylint: disable=import-outside-toplevel
+
+                user_email = (user or {}).get("email") if user else None
+                team_ids: List[str] = []
+                if user_email:
+                    try:
+                        team_rows = db.execute(
+                            select(DbEmailTeamMember.team_id).where(
+                                DbEmailTeamMember.user_email == user_email,
+                                DbEmailTeamMember.is_active.is_(True),
+                            )
+                        ).all()
+                        team_ids = [row[0] for row in team_rows if row[0]]
+                    except Exception as te:  # pragma: no cover - defensive
+                        logger.warning(f"Failed to resolve team memberships for {user_email}: {te}")
+                        team_ids = []
+
+                visibility_clauses = [DbGateway.visibility == "public"]
+                if user_email:
+                    visibility_clauses.append((DbGateway.visibility == "private") & (DbGateway.owner_email == user_email))
+                if team_ids:
+                    visibility_clauses.append((DbGateway.visibility == "team") & (DbGateway.team_id.in_(team_ids)))
+
+                stmt = select(DbGateway.url).where(DbGateway.url.is_not(None), or_(*visibility_clauses))
+                for row in db.execute(stmt):
+                    url = row[0]
+                    if not url:
+                        continue
+                    registered_counts[url] = registered_counts.get(url, 0) + 1
             except Exception as e:
                 logger.warning(f"Failed to check registered servers: {e}")
-                # Continue without marking registered servers
-                registered_urls = set()
+                registered_counts = {}
 
         # Convert to CatalogServer objects and mark registered ones
         catalog_servers = []
         for server_data in servers:
             server = CatalogServer(**server_data)
-            server.is_registered = server.url in registered_urls
+            count = registered_counts.get(server.url, 0)
+            server.registered_instance_count = count
+            server.is_registered = count > 0
             server.source = "catalog"
             # Set availability based on registration status (registered servers are assumed available)
             # Individual health checks can be done via the /status endpoint
@@ -181,7 +219,11 @@ class CatalogService:
 
         if request.search:
             search_lower = request.search.lower()
-            filtered = [s for s in filtered if search_lower in s.name.lower() or search_lower in s.description.lower() or search_lower in s.provider.lower() or any(search_lower in tag.lower() for tag in s.tags)]
+            filtered = [
+                s
+                for s in filtered
+                if search_lower in s.name.lower() or search_lower in s.description.lower() or search_lower in s.provider.lower() or any(search_lower in tag.lower() for tag in s.tags)
+            ]
 
         if request.tags:
             filtered = [s for s in filtered if any(tag in s.tags for tag in request.tags)]
@@ -206,17 +248,33 @@ class CatalogService:
 
         return CatalogListResponse(servers=paginated, total=total, categories=all_categories, auth_types=all_auth_types, providers=all_providers, all_tags=all_tags)
 
-    async def register_catalog_server(self, catalog_id: str, request: Optional[CatalogServerRegisterRequest], db: Session) -> CatalogServerRegisterResponse:
+    async def register_catalog_server(
+        self,
+        catalog_id: str,
+        request: Optional[CatalogServerRegisterRequest],
+        db: Session,
+        user: Optional[Dict[str, Any]] = None,
+    ) -> CatalogServerRegisterResponse:
         """Register a catalog server as a gateway.
 
         Args:
             catalog_id: Catalog server ID
             request: Registration request with optional overrides
             db: Database session
+            user: Authenticated user context (dict with at least ``email``)
 
         Returns:
             Registration response
         """
+        # Resolve instance visibility, team, and owner before the big try so the
+        # name-conflict handler below can reference the resolved name for a
+        # friendly error message.
+        owner_email = (user or {}).get("email") if user else None
+        requested_visibility = (request.visibility if request and request.visibility else "private").lower()
+        if requested_visibility not in ("private", "team", "public"):
+            requested_visibility = "private"
+        instance_team_id = request.team_id if request and requested_visibility == "team" else None
+
         try:
             # Load catalog to find the server
             catalog_data = await self.load_catalog()
@@ -231,21 +289,6 @@ class CatalogService:
 
             if not server_data:
                 return CatalogServerRegisterResponse(success=False, server_id="", message="Server not found in catalog", error="Invalid catalog server ID")
-
-            # Check if already registered
-            try:
-                # First-Party
-                from mcpgateway.db import Gateway as DbGateway  # pylint: disable=import-outside-toplevel
-
-                stmt = select(DbGateway).where(DbGateway.url == server_data["url"])
-                result = db.execute(stmt)
-                existing = result.scalar_one_or_none()
-            except Exception as e:
-                logger.warning(f"Error checking existing registration: {e}")
-                existing = None
-
-            if existing:
-                return CatalogServerRegisterResponse(success=False, server_id=str(existing.id), message="Server already registered", error="This server is already registered in the system")
 
             # Prepare gateway creation request using proper schema
             # First-Party
@@ -279,7 +322,7 @@ class CatalogService:
             gateway_data = {
                 "name": request.name if request and request.name else server_data["name"],
                 "url": server_data["url"],
-                "description": server_data["description"],
+                "description": request.description if request and request.description else server_data["description"],
                 "transport": transport,
                 "tags": server_data.get("tags", []),
             }
@@ -358,6 +401,24 @@ class CatalogService:
 
                 slug_name = slugify(gateway_data["name"])
 
+                # Pre-check slug uniqueness in this instance's scope so we can return
+                # a friendly conflict response instead of letting IntegrityError surface.
+                slug_conflict_stmt = select(DbGateway).where(DbGateway.slug == slug_name)
+                if requested_visibility == "public":
+                    slug_conflict_stmt = slug_conflict_stmt.where(DbGateway.visibility == "public")
+                elif requested_visibility == "team":
+                    slug_conflict_stmt = slug_conflict_stmt.where(DbGateway.visibility == "team", DbGateway.team_id == instance_team_id)
+                else:
+                    slug_conflict_stmt = slug_conflict_stmt.where(DbGateway.visibility == "private", DbGateway.owner_email == owner_email)
+                if db.execute(slug_conflict_stmt).scalar_one_or_none():
+                    suggestion = f"{gateway_data['name']} Work"
+                    return CatalogServerRegisterResponse(
+                        success=False,
+                        server_id="",
+                        message=f"A server named '{gateway_data['name']}' already exists in your scope. Try a different name, e.g. '{suggestion}' or '{gateway_data['name']} 2'. Names may contain letters, numbers, spaces, underscores, and hyphens.",
+                        error="name_conflict",
+                    )
+
                 db_gateway = DbGateway(
                     name=gateway_data["name"],
                     slug=slug_name,
@@ -370,7 +431,9 @@ class CatalogService:
                     oauth_config=oauth_config_for_gateway,
                     enabled=False,  # Disabled until OAuth credentials are configured
                     created_via="catalog",
-                    visibility="public",
+                    visibility=requested_visibility,
+                    team_id=instance_team_id,
+                    owner_email=owner_email,
                     version=1,
                 )
 
@@ -392,12 +455,17 @@ class CatalogService:
 
             gateway_create = GatewayCreate(**gateway_data)
 
-            # Use the proper gateway registration method which will discover tools
+            # Use the proper gateway registration method which will discover tools.
+            # Visibility defaults to private so multi-instance registrations are
+            # scoped per-owner and don't collide in the global public slug namespace.
             gateway_read = await self._gateway_service.register_gateway(
                 db=db,
                 gateway=gateway_create,
                 created_via="catalog",
-                visibility="public",  # Catalog servers should be public
+                created_by=owner_email,
+                team_id=instance_team_id,
+                owner_email=owner_email,
+                visibility=requested_visibility,
             )
 
             logger.info(f"Registered catalog server: {gateway_read.name} ({catalog_id})")
@@ -420,6 +488,35 @@ class CatalogService:
             return CatalogServerRegisterResponse(success=True, server_id=str(gateway_read.id), message=message, error=None)
 
         except Exception as e:
+            # First-Party
+            from mcpgateway.services.gateway_service import GatewayDuplicateConflictError, GatewayNameConflictError  # pylint: disable=import-outside-toplevel
+
+            # Handle user-recoverable conflicts explicitly so the generic mapper below
+            # doesn't swallow them into a useless "Registration failed" message.
+            if isinstance(e, GatewayNameConflictError):
+                logger.info(f"Name conflict registering catalog server {catalog_id}: {e}")
+                attempted_name = (request.name if request and request.name else None) or getattr(e, "name", "") or ""
+                suggestion = f"{attempted_name} Work" if attempted_name else ""
+                msg = (
+                    (
+                        f"A server named '{attempted_name}' already exists in your scope. "
+                        f"Try a different name, e.g. '{suggestion}' or '{attempted_name} 2'. "
+                        f"Names may contain letters, numbers, spaces, underscores, and hyphens."
+                    )
+                    if attempted_name
+                    else ("A server with that name already exists in your scope. Try a different name.")
+                )
+                return CatalogServerRegisterResponse(success=False, server_id="", message=msg, error="name_conflict")
+
+            if isinstance(e, GatewayDuplicateConflictError):
+                logger.info(f"Duplicate gateway (same URL + credentials) for catalog server {catalog_id}: {e}")
+                return CatalogServerRegisterResponse(
+                    success=False,
+                    server_id="",
+                    message="A gateway with the same URL and credentials already exists in this scope. Use different credentials or choose a different visibility.",
+                    error="duplicate_conflict",
+                )
+
             logger.error(f"Failed to register catalog server {catalog_id}: {e}")
 
             # Map common exceptions to user-friendly messages

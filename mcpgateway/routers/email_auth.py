@@ -222,9 +222,7 @@ async def login(login_request: EmailLoginRequest, request: Request, db: Session 
         access_token, expires_in = await create_access_token(user)
 
         # Return authentication response
-        return AuthenticationResponse(
-            access_token=access_token, token_type="bearer", expires_in=expires_in, user=EmailUserResponse.from_email_user(user)
-        )  # nosec B106 - OAuth2 token type, not a password
+        return AuthenticationResponse(access_token=access_token, token_type="bearer", expires_in=expires_in, user=EmailUserResponse.from_email_user(user))  # nosec B106 - OAuth2 token type, not a password
 
     except Exception as e:
         logger.error(f"Login error for {login_request.email}: {e}")
@@ -273,9 +271,7 @@ async def register(registration_request: EmailRegistrationRequest, request: Requ
 
         logger.info(f"New user registered: {user.email}")
 
-        return AuthenticationResponse(
-            access_token=access_token, token_type="bearer", expires_in=expires_in, user=EmailUserResponse.from_email_user(user)
-        )  # nosec B106 - OAuth2 token type, not a password
+        return AuthenticationResponse(access_token=access_token, token_type="bearer", expires_in=expires_in, user=EmailUserResponse.from_email_user(user))  # nosec B106 - OAuth2 token type, not a password
 
     except EmailValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -620,12 +616,19 @@ async def delete_user(user_email: str, user=Depends(get_current_user_with_permis
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete the last remaining admin user")
 
         # Hard delete using auth service
-        await auth_service.delete_user(user_email)
+        await auth_service.delete_user(user_email, acting_admin_email=user["email"])
 
         logger.info(f"Admin {user['email']} deleted user: {user_email}")
 
         return SuccessResponse(success=True, message=f"User {user_email} has been deleted")
 
-    except Exception as e:
-        logger.error(f"Error deleting user {user_email}: {e}")
+    except HTTPException:
+        raise
+    except ValueError as e:
+        # Surface service-level preconditions (e.g. owns team with no other owner)
+        # as 400s instead of masking them as 500s.
+        logger.warning(f"Cannot delete user {user_email}: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        logger.exception(f"Error deleting user {user_email}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete user")

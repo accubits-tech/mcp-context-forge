@@ -5052,6 +5052,7 @@ class EmailRegistrationRequest(BaseModel):
     email: EmailStr = Field(..., description="User's email address")
     password: str = Field(..., min_length=8, description="User's password")
     full_name: Optional[str] = Field(None, max_length=255, description="User's full name")
+    is_admin: bool = Field(False, description="Whether user has admin privileges (honored only on admin-initiated creation)")
 
     @field_validator("password")
     @classmethod
@@ -6725,7 +6726,8 @@ class CatalogServer(BaseModel):
     documentation_url: Optional[str] = Field(None, description="URL to server documentation")
     tools: List[str] = Field(default_factory=list, description="List of tool names provided by this server")
     oauth_config: Optional[CatalogOAuthConfig] = Field(None, description="OAuth configuration details")
-    is_registered: bool = Field(default=False, description="Whether server is already registered")
+    is_registered: bool = Field(default=False, description="Whether server has at least one registered instance visible to the caller (computed from registered_instance_count)")
+    registered_instance_count: int = Field(default=0, description="Number of registered gateway instances of this catalog entry visible to the caller")
     is_available: bool = Field(default=True, description="Whether server is currently available")
     # User-published entry fields
     source: str = Field(default="catalog", description="Entry source: catalog or user_published")
@@ -6739,6 +6741,9 @@ class CatalogServerRegisterRequest(BaseModel):
 
     server_id: str = Field(..., description="Catalog server ID to register")
     name: Optional[str] = Field(None, description="Optional custom name for the server")
+    description: Optional[str] = Field(None, description="Optional description override for this instance")
+    visibility: Optional[str] = Field(None, description="Instance visibility: 'private', 'team', or 'public'. Defaults to 'private' when not supplied.")
+    team_id: Optional[str] = Field(None, description="Team ID when visibility='team'")
     api_key: Optional[str] = Field(None, description="API key if required")
     oauth_credentials: Optional[Dict[str, Any]] = Field(None, description="OAuth credentials if required")
 

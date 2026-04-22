@@ -12085,7 +12085,7 @@ async def list_catalog_servers(
         offset=offset,
     )
 
-    return await catalog_service.get_catalog_servers(catalog_request, db)
+    return await catalog_service.get_catalog_servers(catalog_request, db, user=_user)
 
 
 @admin_router.post("/mcp-registry/{server_id}/register", response_model=CatalogServerRegisterResponse)
@@ -12113,7 +12113,7 @@ async def register_catalog_server(
     if not settings.mcpgateway_catalog_enabled:
         raise HTTPException(status_code=404, detail="Catalog feature is disabled")
 
-    return await catalog_service.register_catalog_server(catalog_id=server_id, request=request, db=db)
+    return await catalog_service.register_catalog_server(catalog_id=server_id, request=request, db=db, user=_user)
 
 
 @admin_router.get("/mcp-registry/{server_id}/status", response_model=CatalogServerStatusResponse)

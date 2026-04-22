@@ -372,7 +372,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         self._http_client = ResilientHttpClient(client_args={"timeout": settings.federation_timeout, "verify": not settings.skip_ssl_verify})
         self._health_check_interval = GW_HEALTH_CHECK_INTERVAL
         self._health_check_task: Optional[asyncio.Task] = None
-        self._active_gateways: Set[str] = set()  # Track active gateway URLs
+        self._active_gateways: Set[str] = set()  # Track active gateway IDs (multiple gateways may share a URL)
         self._stream_response = None
         self._pending_responses = {}
         self.tool_service = ToolService()
@@ -928,7 +928,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             # Stdio bridges need longer validation timeout since the underlying MCP server
             # may still be initializing after the bridge's /healthz is already responding
             stdio_validation_timeout = (gateway.stdio_timeout or 60) if is_stdio else None
-            capabilities, tools, resources, prompts = await self._initialize_gateway(normalized_url, authentication_headers, effective_transport, auth_type, oauth_config, ca_certificate, validation_timeout=stdio_validation_timeout)
+            capabilities, tools, resources, prompts = await self._initialize_gateway(
+                normalized_url, authentication_headers, effective_transport, auth_type, oauth_config, ca_certificate, validation_timeout=stdio_validation_timeout
+            )
 
             if gateway.one_time_auth:
                 # For one-time auth, clear auth_type and auth_value after initialization
@@ -1066,8 +1068,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             db.refresh(db_gateway)
 
             # Update tracking
-            if db_gateway.url:
-                self._active_gateways.add(db_gateway.url)
+            if db_gateway.id:
+                self._active_gateways.add(db_gateway.id)
 
             # Notify subscribers
             await self._notify_gateway_added(db_gateway)
@@ -1791,9 +1793,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                         if prompts_to_add:
                             db.add_all(prompts_to_add)
 
-                        # Update tracking with new URL
-                        self._active_gateways.discard(gateway.url)
-                        self._active_gateways.add(gateway.url)
+                        # Refresh tracking by ID (gateway URL may have changed)
+                        self._active_gateways.discard(gateway.id)
+                        self._active_gateways.add(gateway.id)
                     except Exception as e:
                         logger.warning(f"Failed to initialize updated gateway: {e}")
 
@@ -1980,8 +1982,8 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 gateway.reachable = reachable
                 gateway.updated_at = datetime.now(timezone.utc)
                 # Update tracking
-                if activate and reachable and gateway.url:
-                    self._active_gateways.add(gateway.url)
+                if activate and reachable and gateway.id:
+                    self._active_gateways.add(gateway.id)
 
                     # Initialize empty lists in case initialization fails
                     tools_to_add = []
@@ -2057,7 +2059,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     except Exception as e:
                         logger.warning(f"Failed to initialize reactivated gateway: {e}")
                 else:
-                    self._active_gateways.discard(gateway.url)
+                    self._active_gateways.discard(gateway.id)
 
                 db.commit()
                 db.refresh(gateway)
@@ -2166,9 +2168,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             db.delete(gateway)
             db.commit()
 
-            # Update tracking
-            if gateway.url:
-                self._active_gateways.discard(gateway.url)
+            # Update tracking (by ID — multiple gateways may share a URL)
+            if gateway.id:
+                self._active_gateways.discard(gateway.id)
 
             # Notify subscribers
             await self._notify_gateway_deleted(gateway_info)
@@ -2182,9 +2184,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             db.rollback()
             raise GatewayError(f"Failed to delete gateway: {str(e)}")
 
-    async def forward_request(
-        self, gateway_or_db, method: str, params: Optional[Dict[str, Any]] = None, app_user_email: Optional[str] = None
-    ) -> Any:  # noqa: F811 # pylint: disable=function-redefined
+    async def forward_request(self, gateway_or_db, method: str, params: Optional[Dict[str, Any]] = None, app_user_email: Optional[str] = None) -> Any:  # noqa: F811 # pylint: disable=function-redefined
         """
         Forward a request to a gateway or multiple gateways.
 
@@ -2626,7 +2626,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                                             # Pass refresh_token and token_uri so downstream servers can build full credentials
                                             from mcpgateway.db import OAuthToken as OAuthTokenModel  # pylint: disable=import-outside-toplevel
 
-                                            token_record = db.execute(select(OAuthTokenModel).where(OAuthTokenModel.gateway_id == gateway.id, OAuthTokenModel.app_user_email == user_email)).scalar_one_or_none()
+                                            token_record = db.execute(
+                                                select(OAuthTokenModel).where(OAuthTokenModel.gateway_id == gateway.id, OAuthTokenModel.app_user_email == user_email)
+                                            ).scalar_one_or_none()
                                             self._add_oauth_credential_headers(headers, token_record, gateway.oauth_config)
                                         else:
                                             if span:
@@ -3713,7 +3715,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     return capabilities, tools, resources, prompts
         raise GatewayConnectionError(f"Failed to initialize gateway at {server_url}")
 
-    async def connect_to_streamablehttp_server(self, server_url: str, authentication: Optional[Dict[str, str]] = None, ca_certificate: Optional[bytes] = None, validation_timeout: Optional[int] = None):
+    async def connect_to_streamablehttp_server(
+        self, server_url: str, authentication: Optional[Dict[str, str]] = None, ca_certificate: Optional[bytes] = None, validation_timeout: Optional[int] = None
+    ):
         """Connect to an MCP server running with Streamable HTTP transport.
 
         Args:
