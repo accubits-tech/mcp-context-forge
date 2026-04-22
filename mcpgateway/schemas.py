@@ -2451,6 +2451,100 @@ class TransportType(str, Enum):
     STREAMABLEHTTP = "STREAMABLEHTTP"
 
 
+class DeploymentSpec(BaseModel):
+    """Schema for deploying a user-supplied MCP server (Python or Node.js).
+
+    The gateway builds the source into an isolated container and auto-registers the
+    resulting endpoint as a Streamable HTTP gateway bound to 127.0.0.1.
+
+    Mutually exclusive with stdio_command and url on the parent GatewayCreate/Update.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    source: Literal["git", "upload"] = Field(..., description="Source of the MCP server code")
+    git_url: Optional[str] = Field(None, description="HTTPS git URL (required when source='git')")
+    git_ref: Optional[str] = Field(None, description="Git ref (branch/tag/SHA); defaults to repository default branch")
+    subpath: Optional[str] = Field(None, description="Relative subdirectory within the repo/archive that contains the MCP server")
+    upload_token: Optional[str] = Field(None, description="Token returned by the upload endpoint (required when source='upload')")
+    runtime: Literal["python", "node"] = Field(..., description="Runtime used to build and run the server")
+    entry_mode: Literal["stdio", "http"] = Field(..., description="How the server exposes MCP: stdio (wrapped by translate) or native HTTP")
+    entry_command: str = Field(..., description="Command executed in the container (stdio cmd or HTTP server entrypoint)")
+    env: Optional[Dict[str, str]] = Field(None, description="Environment variables passed to the container (encrypted at rest)")
+    resource_limits: Optional[Dict[str, Any]] = Field(None, description="Per-deployment override of CPU/memory/pids/disk/timeout limits; gateway-configured defaults apply otherwise")
+    egress_allowlist: Optional[List[str]] = Field(None, description="List of hosts the container may reach; empty/None means --network=none")
+
+    @field_validator("git_url")
+    @classmethod
+    def validate_git_url(cls, v: Optional[str]) -> Optional[str]:
+        """Enforce https-only git URLs; full SSRF check happens at ingest time.
+
+        Args:
+            v: Git URL to validate.
+
+        Returns:
+            The validated URL or None.
+        """
+        if v is None:
+            return v
+        v = v.strip()
+        parsed = urlparse(v)
+        if parsed.scheme != "https":
+            raise ValueError("git_url must use https://")
+        if not parsed.netloc:
+            raise ValueError("git_url is missing a host")
+        return v
+
+    @field_validator("entry_command")
+    @classmethod
+    def validate_entry_command(cls, v: str) -> str:
+        """Reject shell metacharacters in entry_command (same rule as stdio_command).
+
+        Args:
+            v: Command to validate.
+
+        Returns:
+            The validated command.
+        """
+        dangerous_chars = set(";|&$`\\!><()")
+        if any(c in dangerous_chars for c in v):
+            raise ValueError(f"entry_command contains disallowed shell metacharacters: {v}")
+        return v.strip()
+
+    @model_validator(mode="after")
+    def validate_source_fields(self) -> "DeploymentSpec":
+        """Ensure source-specific fields are present for the chosen source."""
+        if self.source == "git":
+            if not self.git_url:
+                raise ValueError("git_url is required when source='git'")
+            if self.upload_token:
+                raise ValueError("upload_token must not be provided when source='git'")
+        else:  # upload
+            if not self.upload_token:
+                raise ValueError("upload_token is required when source='upload'")
+            if self.git_url or self.git_ref:
+                raise ValueError("git_url/git_ref must not be provided when source='upload'")
+        return self
+
+
+class DeploymentStatus(BaseModel):
+    """Runtime status for a deployed gateway.
+
+    Returned by GET /admin/gateways/{id}/deployment/status.
+    """
+
+    build_status: Optional[str] = Field(None, description="pending|building|ready|failed|stopped")
+    container_status: Optional[str] = Field(None, description="running|exited|restarting|unknown")
+    host_port: Optional[int] = Field(None, description="Port on 127.0.0.1 where the container is reachable")
+    image_tag: Optional[str] = Field(None, description="Container image tag")
+    image_digest: Optional[str] = Field(None, description="Container image digest (sha256:...)")
+    source_sha256: Optional[str] = Field(None, description="sha256 of the source archive or resolved git commit")
+    last_built_at: Optional[datetime] = Field(None, description="Timestamp of the last successful build")
+    last_started_at: Optional[datetime] = Field(None, description="Timestamp of the last container start")
+    health: Optional[str] = Field(None, description="healthy|unhealthy|unknown")
+    error: Optional[str] = Field(None, description="Short error summary if build_status is 'failed'")
+
+
 class GatewayCreate(BaseModel):
     """
     Schema for creating a new gateway.
@@ -2469,6 +2563,7 @@ class GatewayCreate(BaseModel):
         auth_header_value (Optional[str]): Value for custom headers authentication.
         auth_headers (Optional[List[Dict[str, str]]]): List of custom headers for authentication.
         auth_value (Optional[str]): Alias for authentication value, used for better access post-validation.
+        deployment (Optional[DeploymentSpec]): Source/runtime spec for a gateway-hosted MCP server build.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -2485,6 +2580,9 @@ class GatewayCreate(BaseModel):
     stdio_env: Optional[Dict[str, str]] = Field(None, description="Environment variables for the stdio process")
     stdio_cwd: Optional[str] = Field(None, description="Working directory for the stdio process")
     stdio_timeout: Optional[int] = Field(default=60, ge=5, le=600, description="Startup timeout in seconds for the stdio bridge")
+
+    # Deployment configuration (user-supplied MCP server built and run in an isolated container)
+    deployment: Optional[DeploymentSpec] = Field(None, description="Spec to build and host a user-supplied Python/Node MCP server")
 
     # Authorizations
     auth_type: Optional[str] = Field(None, description="Type of authentication: basic, bearer, headers, oauth, or none")
@@ -2622,7 +2720,14 @@ class GatewayCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_stdio_or_url(self) -> "GatewayCreate":
-        """Enforce mutual exclusivity between STDIO and URL-based transports."""
+        """Enforce mutual exclusivity between URL, STDIO, and deployment-based gateways."""
+        if self.deployment is not None:
+            if self.url:
+                raise ValueError("url must not be provided when deployment is set")
+            if self.stdio_command:
+                raise ValueError("stdio_command must not be provided when deployment is set")
+            # URL will be filled in by DeploymentRuntimeService once the container is running.
+            return self
         if self.transport == "STDIO":
             if not self.stdio_command:
                 raise ValueError("stdio_command is required when transport is STDIO")
@@ -2842,6 +2947,11 @@ class GatewayUpdate(BaseModelWithConfigDict):
     stdio_env: Optional[Dict[str, str]] = Field(None, description="Environment variables for the stdio process")
     stdio_cwd: Optional[str] = Field(None, description="Working directory for the stdio process")
     stdio_timeout: Optional[int] = Field(None, ge=5, le=600, description="Startup timeout in seconds for the stdio bridge")
+
+    # Deployment configuration (editable subset only; source/runtime changes require POST .../deployment/rebuild)
+    deployment_env: Optional[Dict[str, str]] = Field(None, description="Updated environment variables for the deployed container (encrypted at rest)")
+    deployment_resource_limits: Optional[Dict[str, Any]] = Field(None, description="Updated per-deployment resource limits")
+    deployment_egress_allowlist: Optional[List[str]] = Field(None, description="Updated egress allowlist for the deployed container")
 
     # Authorizations
     auth_type: Optional[str] = Field(None, description="auth_type: basic, bearer, headers or None")
@@ -3105,6 +3215,22 @@ class GatewayRead(BaseModelWithConfigDict):
     stdio_timeout: Optional[int] = Field(None, description="Stdio bridge startup timeout")
     stdio_bridge_port: Optional[int] = Field(None, description="Port of the stdio bridge process")
     stdio_status: Optional[str] = Field(None, description="Stdio bridge status: running, stopped, or crashed")
+
+    # Deployment fields (read-only display; secrets never returned)
+    deployment_source: Optional[str] = Field(None, description="Source type for deployed gateways: git or upload")
+    deployment_source_ref: Optional[str] = Field(None, description="Git URL@ref+subpath or artifact reference")
+    deployment_source_sha256: Optional[str] = Field(None, description="sha256 of the source archive or resolved commit SHA")
+    deployment_runtime: Optional[str] = Field(None, description="Runtime: python or node")
+    deployment_entry_mode: Optional[str] = Field(None, description="Entry mode: stdio or http")
+    deployment_entry_command: Optional[str] = Field(None, description="Entry command executed in the container")
+    deployment_image_tag: Optional[str] = Field(None, description="Container image tag")
+    deployment_host_port: Optional[int] = Field(None, description="127.0.0.1-bound host port the container is published on")
+    deployment_build_status: Optional[str] = Field(None, description="pending|building|ready|failed|stopped")
+    deployment_env_keys: Optional[List[str]] = Field(None, description="Deployment environment variable key names (values hidden)")
+    deployment_resource_limits: Optional[Dict[str, Any]] = Field(None, description="Per-deployment resource limits")
+    deployment_egress_allowlist: Optional[List[str]] = Field(None, description="Egress allowlist; empty means no outbound network")
+    deployment_last_built_at: Optional[datetime] = Field(None, description="Timestamp of the last successful build")
+    deployment_last_started_at: Optional[datetime] = Field(None, description="Timestamp of the last container start")
     capabilities: Dict[str, Any] = Field(default_factory=dict, description="Gateway capabilities")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp")
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Last update timestamp")

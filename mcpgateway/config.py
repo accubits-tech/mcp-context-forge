@@ -354,10 +354,7 @@ class Settings(BaseSettings):
 
     # Security: Trusted Proxies for X-Forwarded-For / X-Real-IP
     trusted_proxies: List[str] = Field(default_factory=list, description="List of trusted proxy IP addresses/CIDRs for X-Forwarded-For (empty = don't trust forwarded headers)")
-    trusted_proxy_hosts: str = Field(
-        default="127.0.0.1,::1",
-        description="Comma-separated list of trusted proxy hosts/IPs. Use '*' only in development."
-    )
+    trusted_proxy_hosts: str = Field(default="127.0.0.1,::1", description="Comma-separated list of trusted proxy hosts/IPs. Use '*' only in development.")
 
     # A2A (Agent-to-Agent) Feature Flags
     mcpgateway_a2a_enabled: bool = True
@@ -636,14 +633,10 @@ class Settings(BaseSettings):
             if violations:
                 for name in violations:
                     logger.error(
-                        "FATAL: Default credential detected for %s in production environment. "
-                        "You MUST set a strong, unique value before running in production.",
+                        "FATAL: Default credential detected for %s in production environment. " "You MUST set a strong, unique value before running in production.",
                         name,
                     )
-                logger.error(
-                    "FATAL: Refusing to start with default credentials in production. "
-                    "Set the above environment variables to secure values and restart."
-                )
+                logger.error("FATAL: Refusing to start with default credentials in production. " "Set the above environment variables to secure values and restart.")
                 raise SystemExit(1)
 
         # Check for dangerous combinations - only log warnings, don't raise errors
@@ -1483,6 +1476,28 @@ Disallow: /
     mcpgateway_stdio_port_range_end: int = Field(default=9200, ge=1024, le=65535, description="End of port range for stdio bridges")
     mcpgateway_stdio_health_check_interval: int = Field(default=30, ge=5, le=300, description="Health check interval in seconds for stdio bridges")
     mcpgateway_stdio_restart_max_retries: int = Field(default=3, ge=0, le=10, description="Maximum restart attempts for crashed stdio bridges")
+
+    # Deployed MCP server settings (user-supplied Python/Node source built and run in isolated containers)
+    mcpgateway_deploy_enabled: bool = Field(default=False, description="Enable building and hosting user-supplied MCP servers")
+    mcpgateway_deploy_driver: Literal["docker", "podman", "kubernetes"] = Field(default="docker", description="Container runtime driver for deployments")
+    mcpgateway_deploy_base_image_python: str = Field(default="python:3.12-slim", description="Base image for Python deployments; pin by @sha256 in production")
+    mcpgateway_deploy_base_image_node: str = Field(default="node:20-slim", description="Base image for Node.js deployments; pin by @sha256 in production")
+    mcpgateway_deploy_max_archive_mb: int = Field(default=50, ge=1, le=1024, description="Maximum uncompressed-archive size accepted on upload")
+    mcpgateway_deploy_max_build_seconds: int = Field(default=600, ge=30, le=3600, description="Build timeout per deployment")
+    mcpgateway_deploy_max_concurrent_builds: int = Field(default=3, ge=1, le=20, description="Concurrent build cap across the gateway")
+    mcpgateway_deploy_port_range_start: int = Field(default=9201, ge=1024, le=65535, description="Start of port range for deployed containers (disjoint from stdio bridge range)")
+    mcpgateway_deploy_port_range_end: int = Field(default=9400, ge=1024, le=65535, description="End of port range for deployed containers")
+    mcpgateway_deploy_cpu_limit: float = Field(default=1.0, gt=0.0, le=16.0, description="Default CPU limit (cores) per deployment")
+    mcpgateway_deploy_memory_mb: int = Field(default=512, ge=64, le=16384, description="Default memory limit (MiB) per deployment")
+    mcpgateway_deploy_pids_limit: int = Field(default=128, ge=8, le=4096, description="Default PID limit per deployment")
+    mcpgateway_deploy_disk_mb: int = Field(default=512, ge=64, le=16384, description="Default writable-layer size (MiB) per deployment")
+    mcpgateway_deploy_egress_default: Literal["deny", "allow"] = Field(default="deny", description="Default egress posture for deployments")
+    mcpgateway_deploy_egress_allowlist: list[str] = Field(default_factory=list, description="Gateway-wide default egress allowlist")
+    mcpgateway_deploy_max_per_team: int = Field(default=10, ge=1, le=1000, description="Maximum number of deployed gateways per team")
+    mcpgateway_deploy_artifact_dir: str = Field(default="var/deployments", description="Local directory for source artifacts and build logs")
+    mcpgateway_deploy_log_retention_days: int = Field(default=14, ge=1, le=365, description="Retention window for build/runtime logs")
+    mcpgateway_deploy_health_check_interval: int = Field(default=30, ge=5, le=300, description="Health check interval in seconds for deployed containers")
+    mcpgateway_deploy_restart_max_retries: int = Field(default=3, ge=0, le=10, description="Maximum restart attempts for crashed deployed containers")
 
     # Ed25519 keys for signing
     enable_ed25519_signing: bool = Field(default=False, description="Enable Ed25519 signing for certificates")

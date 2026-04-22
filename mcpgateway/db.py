@@ -2834,6 +2834,24 @@ class Gateway(Base):
     stdio_timeout: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=60)
     stdio_bridge_port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Deployed MCP server configuration (user-supplied Python/Node source built and run in an isolated container)
+    deployment_source: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # 'git' | 'upload'
+    deployment_source_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)  # git URL@ref+subpath OR artifact path
+    deployment_source_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # archive hash or resolved commit SHA
+    deployment_runtime: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # 'python' | 'node'
+    deployment_entry_mode: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # 'stdio' | 'http'
+    deployment_entry_command: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    deployment_image_tag: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    deployment_container_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    deployment_host_port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 127.0.0.1-bound
+    deployment_build_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # pending|building|ready|failed|stopped
+    deployment_build_log_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    deployment_resource_limits: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    deployment_egress_allowlist: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    deployment_env_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # AES-encrypted JSON dict
+    deployment_last_built_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deployment_last_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Header passthrough configuration
     passthrough_headers: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)  # Store list of strings as JSON array
 
