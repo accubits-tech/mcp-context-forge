@@ -362,7 +362,13 @@ class DeploymentRuntimeService:
             self._used_ports.discard(record.host_port)
 
     async def _wait_for_health(self, bridge_url: str, timeout: int) -> None:
-        """Poll the container's health surface until responsive or timeout."""
+        """Poll the container's health surface until responsive or timeout.
+
+        Catches httpx.HTTPError broadly because the container may accept a
+        TCP connection then close it mid-handshake as it's still starting up,
+        which httpcore surfaces as RemoteProtocolError rather than
+        ConnectError. Any HTTP-level failure is just "not ready yet".
+        """
         deadline = asyncio.get_event_loop().time() + timeout
         async with httpx.AsyncClient() as client:
             while asyncio.get_event_loop().time() < deadline:
@@ -372,7 +378,7 @@ class DeploymentRuntimeService:
                         # 2xx, 3xx, or even 401/404 means the server is up and HTTP-speaking.
                         if resp.status_code < 500:
                             return
-                    except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout):
+                    except httpx.HTTPError:
                         pass
                 await asyncio.sleep(0.5)
         raise RuntimeError(f"deployed container at {bridge_url} failed to become healthy within {timeout}s")
