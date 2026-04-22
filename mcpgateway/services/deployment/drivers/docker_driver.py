@@ -74,7 +74,10 @@ class DockerDriver(RuntimeDriver):
                     pull=True,
                     decode=True,
                     timeout=limits.build_timeout_s,
-                    network_mode="none",  # Build must not reach the network except via base-image pull
+                    # Build needs network for pip/npm. The *runtime* container is still
+                    # locked to --network=none unless an allowlist is configured.
+                    # TODO(deploy): host build behind a buildkit daemon with a scoped
+                    # egress allowlist (e.g. only pypi.org, registry.npmjs.org).
                 )
                 for chunk in log_stream:
                     if "stream" in chunk:
