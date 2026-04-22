@@ -76,6 +76,12 @@ services:
       - EMAIL_AUTH_ENABLED=true
       - PLATFORM_ADMIN_EMAIL=${PLATFORM_ADMIN_EMAIL:-admin@example.com}
       - PLATFORM_ADMIN_PASSWORD=${PLATFORM_ADMIN_PASSWORD:-changeme}
+      # ── Basic Auth (legacy admin UI + /docs gate) ──
+      # Values MUST be non-default when ENVIRONMENT=production; the gateway
+      # refuses to start otherwise. Set BASIC_AUTH_USER and BASIC_AUTH_PASSWORD
+      # in .env to strong values (not 'admin' / 'changeme').
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER:-admin}
+      - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:-changeme}
       - MCP_CLIENT_AUTH_ENABLED=true
       - TRUST_PROXY_AUTH=false
       # ── CORS & Security ──
