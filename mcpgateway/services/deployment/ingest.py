@@ -6,9 +6,12 @@ Two paths:
   zip-slip/symlink/setuid protection via tarfile.data_filter (PEP 706).
 - Git clone: shallow clone via `git` subprocess over https only, SSRF-checked.
 
-Rejects archives that ship a user Dockerfile/Containerfile at the root; v1 uses
-only the gateway's rendered template. Writes a manifest with source sha256 to the
-extracted tree.
+User Dockerfile/Containerfile at the build root is renamed to *.user and ignored;
+v1 always builds from the gateway's rendered template. This is safe because the
+build call explicitly passes dockerfile='Containerfile' and render_containerfile
+writes that exact filename — the user's Dockerfile cannot be picked up.
+
+Writes a manifest with source sha256 to the extracted tree.
 """
 
 # Standard
@@ -79,14 +82,25 @@ def _assert_safe_member(name: str) -> None:
         raise IngestError(f"archive contains a parent-directory path: {name}")
 
 
-def _reject_user_containerfile(extract_dir: Path, subpath: Optional[str]) -> None:
-    """v1 rejects user-supplied Dockerfile/Containerfile at the build root."""
+def _neutralize_user_containerfile(extract_dir: Path, subpath: Optional[str]) -> None:
+    """Rename any user-supplied Dockerfile/Containerfile at the build root to *.user.
+
+    Ignoring a user Dockerfile is safe — the Docker build call passes
+    dockerfile='Containerfile' explicitly, and render_containerfile writes that
+    filename itself. But renaming makes the intent auditable in the build log
+    ('Dockerfile.user present but ignored') and prevents accidental use if a
+    future code path uses the default Dockerfile name.
+    """
     root = (extract_dir / subpath) if subpath else extract_dir
     for name in _FORBIDDEN_ROOT_NAMES:
-        if (root / name).exists():
-            raise IngestError(
-                f"user-supplied {name} is not accepted in v1; the gateway generates the Containerfile"
-            )
+        src = root / name
+        if src.exists():
+            dst = root / f"{name}.user"
+            try:
+                src.rename(dst)
+                logger.info("Ingest: renamed user %s to %s.user (gateway generates the Containerfile)", name, name)
+            except OSError as e:
+                logger.warning("Ingest: could not rename user %s (will be ignored by build): %s", name, e)
 
 
 async def ingest_upload(
@@ -107,8 +121,7 @@ async def ingest_upload(
         IngestResult describing the extracted source tree.
 
     Raises:
-        IngestError: On oversize, path-traversal, symlink/setuid/device-node, or
-            presence of a user Dockerfile at the build root.
+        IngestError: On oversize, path-traversal, or symlink/setuid/device-node.
     """
     max_bytes = settings.mcpgateway_deploy_max_archive_mb * 1024 * 1024
     if len(archive_bytes) > max_bytes:
@@ -158,7 +171,7 @@ async def ingest_upload(
         except OSError:
             pass
 
-    _reject_user_containerfile(src_dir, subpath)
+    _neutralize_user_containerfile(src_dir, subpath)
 
     manifest = {"source": "upload", "sha256": sha, "original_filename": original_filename, "subpath": subpath}
     (dep_dir / "source.manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -183,7 +196,7 @@ async def ingest_git(
         IngestResult with source_sha256 set to the resolved commit SHA.
 
     Raises:
-        IngestError: On clone failure, SSRF rejection, or user-Dockerfile presence.
+        IngestError: On clone failure or SSRF rejection.
     """
     if not git_url.startswith("https://"):
         raise IngestError("git_url must use https://")
@@ -231,7 +244,7 @@ async def ingest_git(
     # Remove .git to keep the build context minimal and avoid leaking repo metadata.
     shutil.rmtree(src_dir / ".git", ignore_errors=True)
 
-    _reject_user_containerfile(src_dir, subpath)
+    _neutralize_user_containerfile(src_dir, subpath)
 
     manifest = {"source": "git", "url": git_url, "ref": git_ref, "commit": commit_sha, "subpath": subpath}
     (dep_dir / "source.manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

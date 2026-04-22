@@ -16,18 +16,19 @@ RUN groupadd --system --gid 10001 app && \
 WORKDIR /app
 COPY --chown=10001:10001 . /app/
 
-# Install deps strictly from lockfile; no network fetches beyond the declared deps.
-# pyproject + uv.lock is preferred; fallback to requirements.txt.
+# Install the project + its deps so `python -m <pkg>` works at runtime.
+# System install (not a .venv) keeps PATH simple and avoids multi-stage complexity;
+# the container is single-purpose and short-lived, so a venv adds no value here.
+# TODO(deploy): honour uv.lock for reproducible builds once we multi-stage.
 RUN set -eu; \
     pip install --upgrade pip setuptools wheel; \
-    if [ -f pyproject.toml ] && [ -f uv.lock ]; then \
-        pip install uv && uv sync --frozen --no-dev --no-install-project --compile-bytecode; \
-    elif [ -f requirements.txt ]; then \
-        pip install --require-hashes -r requirements.txt || pip install -r requirements.txt; \
-    elif [ -f pyproject.toml ]; then \
+    if [ -f requirements.txt ]; then \
+        pip install -r requirements.txt; \
+    fi; \
+    if [ -f pyproject.toml ] || [ -f setup.py ]; then \
         pip install .; \
-    else \
-        echo "no pyproject.toml or requirements.txt found" >&2; exit 1; \
+    elif [ ! -f requirements.txt ]; then \
+        echo "no pyproject.toml / setup.py / requirements.txt found" >&2; exit 1; \
     fi
 
 {% if entry_mode == "stdio" %}

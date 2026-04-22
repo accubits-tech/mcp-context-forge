@@ -194,15 +194,32 @@ class DockerDriver(RuntimeDriver):
         await asyncio.to_thread(_do_stop)
 
     async def logs(self, handle: ContainerHandle, tail: int = 500) -> AsyncIterator[str]:
-        """Yield recent runtime logs (non-streaming snapshot)."""
+        """Yield recent runtime logs (non-streaming snapshot).
+
+        Returns a friendly message instead of propagating daemon errors when the
+        container is gone (NotFound) or its log driver doesn't support reads
+        (some non-default drivers like 'none', 'gelf', 'splunk'). This keeps
+        the admin UI responsive for deployments that were force-removed mid-
+        request or whose build failed before the container entered a
+        log-readable state.
+        """
         client = self._get_client()
 
-        def _fetch() -> bytes:
-            container = client.containers.get(handle.container_id)
-            return container.logs(tail=tail, stdout=True, stderr=True)
+        def _fetch() -> bytes | str:
+            try:
+                container = client.containers.get(handle.container_id)
+            except Exception as e:  # noqa: BLE001 - docker.errors.NotFound across versions
+                return f"(container {handle.container_id[:12]} not found: {e})"
+            try:
+                return container.logs(tail=tail, stdout=True, stderr=True)
+            except Exception as e:  # noqa: BLE001 - APIError / log-driver read-unsupported
+                return f"(container logs unavailable: {e})"
 
-        raw = await asyncio.to_thread(_fetch)
-        yield raw.decode("utf-8", errors="replace")
+        result = await asyncio.to_thread(_fetch)
+        if isinstance(result, bytes):
+            yield result.decode("utf-8", errors="replace")
+        else:
+            yield result
 
     async def status(self, handle: ContainerHandle) -> ContainerStatus:
         """Report the current container state."""
