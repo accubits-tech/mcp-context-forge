@@ -341,6 +341,7 @@ class Settings(BaseSettings):
     # UI/Admin Feature Flags
     mcpgateway_ui_enabled: bool = False
     mcpgateway_admin_api_enabled: bool = False
+    mcpgateway_admin_html_ui_enabled: bool = False
     mcpgateway_bulk_import_enabled: bool = True
     mcpgateway_bulk_import_max_tools: int = 200
     mcpgateway_bulk_import_rate_limit: int = 10
@@ -646,7 +647,7 @@ class Settings(BaseSettings):
                 raise SystemExit(1)
 
         # Check for dangerous combinations - only log warnings, don't raise errors
-        if not self.auth_required and self.mcpgateway_ui_enabled:
+        if not self.auth_required and (self.mcpgateway_ui_enabled or self.mcpgateway_admin_html_ui_enabled):
             logger.warning("SECURITY WARNING: Admin UI is enabled without authentication. Consider setting AUTH_REQUIRED=true for production.")
 
         if self.skip_ssl_verify and not self.dev_mode:

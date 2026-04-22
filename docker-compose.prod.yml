@@ -82,8 +82,14 @@ services:
       - SECURE_COOKIES=${SECURE_COOKIES:-true}
       - SSRF_PROTECTION_ENABLED=${SSRF_PROTECTION_ENABLED:-true}
       # ── Features ──
-      - MCPGATEWAY_UI_ENABLED=${MCPGATEWAY_UI_ENABLED:-true}
+      # UI_ENABLED gates static-asset mounting and the / -> /admin redirect.
+      # ADMIN_API_ENABLED gates the entire /admin/* router (JSON + HTML).
+      # ADMIN_HTML_UI_ENABLED gates only the legacy HTMX/Alpine.js HTML pages
+      # (login, dashboard, partial fragments). Keep the JSON /admin/* endpoints
+      # enabled for the React frontend.
+      - MCPGATEWAY_UI_ENABLED=${MCPGATEWAY_UI_ENABLED:-false}
       - MCPGATEWAY_ADMIN_API_ENABLED=${MCPGATEWAY_ADMIN_API_ENABLED:-true}
+      - MCPGATEWAY_ADMIN_HTML_UI_ENABLED=${MCPGATEWAY_ADMIN_HTML_UI_ENABLED:-false}
       - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
       - PLUGIN_MAX_PAYLOAD_SIZE=${PLUGIN_MAX_PAYLOAD_SIZE:-5000000}
       - MCPGATEWAY_CATALOG_ENABLED=${MCPGATEWAY_CATALOG_ENABLED:-true}

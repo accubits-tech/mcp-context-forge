@@ -6689,11 +6689,44 @@ if settings.llmchat_enabled:
 # Feature flags for admin UI and API
 UI_ENABLED = settings.mcpgateway_ui_enabled
 ADMIN_API_ENABLED = settings.mcpgateway_admin_api_enabled
+ADMIN_HTML_UI_ENABLED = settings.mcpgateway_admin_html_ui_enabled
 logger.info(f"Admin UI enabled: {UI_ENABLED}")
 logger.info(f"Admin API enabled: {ADMIN_API_ENABLED}")
+logger.info(f"Admin HTML UI enabled: {ADMIN_HTML_UI_ENABLED}")
 
 # Conditional UI and admin API handling
 if ADMIN_API_ENABLED:
+    if not ADMIN_HTML_UI_ENABLED:
+        # Strip the legacy HTMX/Alpine.js HTML pages from admin_router so only the
+        # JSON endpoints (consumed by the React frontend) remain reachable.
+        # Removed: dashboard, login/logout forms, HTMX *_partial fragments, sections/*,
+        # teams/users HTML management pages, and observability HTML views.
+        _HTMX_PATH_SUFFIXES = ("/partial",)
+        _HTMX_PATH_PREFIXES = (
+            "/admin/teams",
+            "/admin/users",
+            "/admin/sections/",
+            "/admin/observability/partial",
+            "/admin/observability/metrics/partial",
+            "/admin/observability/traces",
+            "/admin/observability/trace/",
+        )
+        _HTMX_PATH_EXACT = {
+            "/admin/",
+            "/admin/login",
+            "/admin/logout",
+            "/admin/observability/stats",
+        }
+        kept_routes = []
+        dropped = 0
+        for route in admin_router.routes:
+            path = getattr(route, "path", "")
+            if path in _HTMX_PATH_EXACT or any(path.startswith(p) for p in _HTMX_PATH_PREFIXES) or any(path.endswith(s) for s in _HTMX_PATH_SUFFIXES):
+                dropped += 1
+                continue
+            kept_routes.append(route)
+        admin_router.routes = kept_routes
+        logger.info(f"Admin HTML UI disabled - dropped {dropped} HTMX/template routes from admin_router")
     logger.info("Including admin_router - Admin API enabled")
     app.include_router(admin_router)  # Admin routes imported from admin.py
 else:
