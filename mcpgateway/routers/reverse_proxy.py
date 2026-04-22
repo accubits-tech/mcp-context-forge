@@ -163,8 +163,8 @@ async def websocket_endpoint(
         websocket: WebSocket connection.
         db: Database session.
     """
-    # Get session ID from headers or generate new one
-    session_id = websocket.headers.get("X-Session-ID", uuid.uuid4().hex)
+    # Always generate server-side session ID to prevent client-supplied session fixation
+    session_id = uuid.uuid4().hex
 
     # Check authentication before accepting the connection
     user = None

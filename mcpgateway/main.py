@@ -1091,7 +1091,16 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_credentials=settings.cors_allow_credentials,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Request-ID",
+        "X-API-Key",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+        "Mcp-Protocol-Version",
+    ],
     expose_headers=["Content-Length", "X-Request-ID"],
 )
 
@@ -1138,8 +1147,9 @@ if plugin_manager:
 # Add custom DocsAuthMiddleware
 app.add_middleware(DocsAuthMiddleware)
 
-# Trust all proxies (or lock down with a list of host patterns)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# Trust only configured proxy hosts (default: localhost only)
+trusted = settings.trusted_proxy_hosts.split(",") if settings.trusted_proxy_hosts != "*" else "*"
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
 
 # Add request logging middleware if enabled
 if settings.log_requests:

@@ -417,9 +417,17 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             from mcpgateway.services.encryption_service import get_encryption_service  # pylint: disable=import-outside-toplevel
 
             encryption = get_encryption_service(settings.auth_encryption_secret)
-            decrypted_refresh = encryption.decrypt_secret(token_record.refresh_token)
-            if decrypted_refresh:
-                headers["X-Refresh-Token"] = decrypted_refresh
+            stored_refresh = token_record.refresh_token
+            if encryption.is_encrypted(stored_refresh):
+                decrypted_refresh = encryption.decrypt_secret(stored_refresh)
+                if decrypted_refresh:
+                    headers["X-Refresh-Token"] = decrypted_refresh
+                else:
+                    logger.warning(f"Failed to decrypt refresh token for gateway {getattr(token_record, 'gateway_id', 'unknown')}")
+            else:
+                # Legacy plaintext refresh token -- pass it through but warn
+                logger.warning(f"Refresh token for gateway {getattr(token_record, 'gateway_id', 'unknown')} is stored in plaintext. Run the token encryption migration.")
+                headers["X-Refresh-Token"] = stored_refresh
         if oauth_config and oauth_config.get("token_url"):
             headers["X-Token-URI"] = oauth_config["token_url"]
 
