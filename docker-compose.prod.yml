@@ -18,8 +18,9 @@ volumes:
   redisdata:
   nginx_cache:
   firecrawl_pgdata:
-  # Uncomment when enabling Deploy MCP Server (see gateway.volumes below):
-  # deploy_artifacts:
+  # Persists source archives + build logs across gateway restarts when the
+  # Deploy MCP Server feature is enabled (see gateway.volumes below).
+  deploy_artifacts:
 
 services:
 
@@ -133,13 +134,13 @@ services:
       - XDG_CACHE_HOME=/app/.cache
       - XDG_CONFIG_HOME=/app/.config
       # ── Deploy MCP Server (gateway-hosted Python/Node builds) ──
-      # WARNING: enabling this requires mounting /var/run/docker.sock below,
+      # WARNING: this feature requires the /var/run/docker.sock mount below,
       # which effectively grants the gateway container root-on-host via the
-      # Docker daemon. Do NOT enable on multi-tenant or public deployments
-      # without a rootless/Sysbox/DinD isolation strategy. See docs.
-      # Defaults to disabled. To enable, set MCPGATEWAY_DEPLOY_ENABLED=true
-      # in .env AND uncomment the docker.sock mount below.
-      - MCPGATEWAY_DEPLOY_ENABLED=${MCPGATEWAY_DEPLOY_ENABLED:-false}
+      # Docker daemon. Any RCE against the gateway can escape the container.
+      # Fine for single-tenant operator-controlled deployments. Set this to
+      # 'false' AND remove the docker.sock mount for multi-tenant or public
+      # deployments until a rootless/Sysbox/DinD isolation layer is in place.
+      - MCPGATEWAY_DEPLOY_ENABLED=${MCPGATEWAY_DEPLOY_ENABLED:-true}
       - MCPGATEWAY_DEPLOY_DRIVER=${MCPGATEWAY_DEPLOY_DRIVER:-docker}
       - MCPGATEWAY_DEPLOY_BASE_IMAGE_PYTHON=${MCPGATEWAY_DEPLOY_BASE_IMAGE_PYTHON:-python:3.12-slim}
       - MCPGATEWAY_DEPLOY_BASE_IMAGE_NODE=${MCPGATEWAY_DEPLOY_BASE_IMAGE_NODE:-node:20-slim}
@@ -158,13 +159,14 @@ services:
       - MCPGATEWAY_DEPLOY_LOG_RETENTION_DAYS=${MCPGATEWAY_DEPLOY_LOG_RETENTION_DAYS:-14}
       - MCPGATEWAY_DEPLOY_HEALTH_CHECK_INTERVAL=${MCPGATEWAY_DEPLOY_HEALTH_CHECK_INTERVAL:-30}
       - MCPGATEWAY_DEPLOY_RESTART_MAX_RETRIES=${MCPGATEWAY_DEPLOY_RESTART_MAX_RETRIES:-3}
-    # Uncomment the following volumes block ONLY if you enabled Deploy above.
-    # Mounting docker.sock is equivalent to granting root on the host via the
-    # Docker daemon. The named volume 'deploy_artifacts' keeps build logs and
-    # source archives persistent across gateway restarts.
-    # volumes:
-    #   - /var/run/docker.sock:/var/run/docker.sock
-    #   - deploy_artifacts:/app/var/deployments
+    # Mounts required for the Deploy MCP Server feature. Mounting
+    # docker.sock grants host-root-equivalent access via the Docker daemon
+    # to anyone who can reach this container — see the security warning on
+    # MCPGATEWAY_DEPLOY_ENABLED above. Remove both lines below AND set
+    # MCPGATEWAY_DEPLOY_ENABLED=false to disable the feature cleanly.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - deploy_artifacts:/app/var/deployments
     depends_on:
       postgres:
         condition: service_healthy
