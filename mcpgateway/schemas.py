@@ -6847,11 +6847,19 @@ class CatalogServer(BaseModel):
     requires_api_key: bool = Field(default=False, description="Whether API key is required")
     secure: bool = Field(default=False, description="Whether additional security is required")
     tags: List[str] = Field(default_factory=list, description="Tags for categorization")
-    transport: Optional[str] = Field(None, description="Transport type: SSE, STREAMABLEHTTP, or WEBSOCKET")
+    transport: Optional[str] = Field(None, description="Transport type: SSE, STREAMABLEHTTP, STDIO, or WEBSOCKET")
     logo_url: Optional[str] = Field(None, description="URL to server logo/icon")
     documentation_url: Optional[str] = Field(None, description="URL to server documentation")
     tools: List[str] = Field(default_factory=list, description="List of tool names provided by this server")
     oauth_config: Optional[CatalogOAuthConfig] = Field(None, description="OAuth configuration details")
+    # STDIO catalog metadata (only set for transport=="STDIO" entries)
+    stdio_command: Optional[str] = Field(None, description="Executable command for STDIO connectors (e.g., uvx, npx)")
+    stdio_args: Optional[List[str]] = Field(None, description="Arguments for the STDIO command")
+    stdio_timeout: Optional[int] = Field(None, description="Startup timeout in seconds for the STDIO bridge")
+    env_schema: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Schema describing environment variables required by a STDIO connector (each entry: key, label, required, secret, description, docs_url)",
+    )
     is_registered: bool = Field(default=False, description="Whether server has at least one registered instance visible to the caller (computed from registered_instance_count)")
     registered_instance_count: int = Field(default=0, description="Number of registered gateway instances of this catalog entry visible to the caller")
     is_available: bool = Field(default=True, description="Whether server is currently available")
