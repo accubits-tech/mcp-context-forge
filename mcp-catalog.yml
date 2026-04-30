@@ -1547,7 +1547,6 @@ catalog_servers:
         required: true
         secret: true
         description: "Get one at https://serper.dev"
-        docs_url: "https://serper.dev"
     auth_type: "API Key"
     requires_api_key: true
     provider: "garylab / Serper.dev"
