@@ -1533,6 +1533,42 @@ catalog_servers:
     documentation_url: "https://github.com/exa-labs/exa-mcp-server"
     tools: ["web_search_exa", "web_fetch_exa", "web_search_advanced_exa"]
 
+  - id: serper-search
+    name: "Serper (Google Search)"
+    category: "Web Search"
+    url: ""
+    transport: "STDIO"
+    stdio_command: "uvx"
+    stdio_args: ["serper-mcp-server"]
+    stdio_timeout: 60
+    env_schema:
+      - key: SERPER_API_KEY
+        label: "Serper API Key"
+        required: true
+        secret: true
+        description: "Get one at https://serper.dev"
+    auth_type: "API Key"
+    requires_api_key: true
+    provider: "garylab / Serper.dev"
+    description: "Google Search via the Serper API. Provides 13 tools: search, images, videos, news, places, maps, reviews, shopping, scholar, patents, lens, autocomplete, and webpage scraping. Runs as a local stdio MCP server (uvx); not yet installable from this catalog UI - use Add Gateway -> STDIO."
+    tags: ["web-search", "google", "serper", "stdio"]
+    logo_url: "https://img.logo.dev/serper.dev?token=pk_IQgnPY69T4mLXixm3ohN9A"
+    documentation_url: "https://github.com/garylab/serper-mcp-server"
+    tools:
+      - google_search
+      - google_search_images
+      - google_search_videos
+      - google_search_news
+      - google_search_places
+      - google_search_maps
+      - google_search_reviews
+      - google_search_shopping
+      - google_search_scholar
+      - google_search_patents
+      - google_search_lens
+      - google_search_autocomplete
+      - webpage_scrape
+
 # Categories for filtering
 categories:
   - Project Management

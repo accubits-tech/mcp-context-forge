@@ -1652,10 +1652,11 @@ class ToolService:
                                 headers = payload.headers.model_dump()
 
                     tool_call_result = ToolResult(content=[TextContent(text="", type="text")])
+                    upstream_url = tool.url or tool_gateway.url
                     if transport == "sse":
-                        tool_call_result = await connect_to_sse_server(tool_gateway.url, headers=headers)
+                        tool_call_result = await connect_to_sse_server(upstream_url, headers=headers)
                     elif transport == "streamablehttp":
-                        tool_call_result = await connect_to_streamablehttp_server(tool_gateway.url, headers=headers)
+                        tool_call_result = await connect_to_streamablehttp_server(upstream_url, headers=headers)
                     dump = tool_call_result.model_dump(by_alias=True)
                     logger.debug(f"Tool call result dump: {dump}")
                     content = dump.get("content", [])
