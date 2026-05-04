@@ -2397,6 +2397,300 @@ class PromptRead(BaseModelWithConfigDict):
     meta: Optional[Dict[str, Any]] = Field(None, alias="_meta", description="Optional metadata for protocol extension")
 
 
+# --- Skill Schemas ---
+# Agent Skills (agentskills.io + MCP SEP-2640 "Skills Extension").
+# A skill is an agentskills.io-format SKILL.md document served over MCP as a resource
+# under `skill://<skill_path>/SKILL.md`. Spec-core frontmatter fields (name, description,
+# license, compatibility, metadata, allowed-tools) live in their own DB columns so the
+# on-wire SKILL.md stays portable. Foundry-specific fields (allowed_gateway_ids, tags,
+# visibility, team scoping) stay in the DB and surface in MCP resource `_meta` under the
+# `io.hybrid360.foundry/` namespace.
+
+# agentskills.io spec: lowercase alphanumerics and hyphens, 1-64 chars,
+# no leading/trailing or consecutive hyphens.
+SKILL_NAME_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+SKILL_NAME_MAX_LEN = 64
+SKILL_DESCRIPTION_MAX_LEN = 1024
+SKILL_COMPATIBILITY_MAX_LEN = 500
+
+
+class SkillCreate(BaseModel):
+    """Schema for creating a new skill.
+
+    The `name` field follows the agentskills.io naming rules. The `skill_path` field
+    is the URI locator under `skill://<skill_path>/SKILL.md`; its final segment MUST
+    equal `name` per SEP-2640. If `skill_path` is omitted it defaults to `name`
+    (flat skills with no org prefix).
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(..., description="Skill name (lowercase alphanumerics and hyphens, max 64)")
+    skill_path: Optional[str] = Field(None, description="URI path locator; defaults to name")
+    description: str = Field(..., description="What the skill does and when to use it (max 1024)")
+    content_md: str = Field(default="", description="SKILL.md body, without frontmatter")
+    license: Optional[str] = Field(None, description="License name or reference to a bundled license")
+    compatibility: Optional[str] = Field(None, description="Environment requirements (max 500)")
+    metadata_json: Dict[str, Any] = Field(default_factory=dict, description="agentskills.io `metadata` frontmatter dict")
+    allowed_tools: Optional[str] = Field(None, description="Space-separated allowed-tools spec string (e.g. 'Read Bash(git:*)')")
+    allowed_gateway_ids: List[str] = Field(default_factory=list, description="Foundry gateway IDs referenced by this skill")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Tags for categorizing the skill")
+
+    # Team scoping fields
+    team_id: Optional[str] = Field(None, description="Team ID for resource organization")
+    owner_email: Optional[str] = Field(None, description="Email of the skill owner")
+    visibility: Optional[str] = Field(default="public", description="Visibility level (private, team, public)")
+
+    @field_validator("name")
+    @classmethod
+    def validate_skill_name(cls, v: str) -> str:
+        """Enforce agentskills.io naming rules (lowercase alphanumerics + hyphens, max 64).
+
+        Raises:
+            ValueError: if the name does not satisfy the agentskills.io spec.
+        """
+        import re
+
+        if not v or len(v) > SKILL_NAME_MAX_LEN:
+            raise ValueError(f"Skill name must be 1-{SKILL_NAME_MAX_LEN} characters")
+        if not re.match(SKILL_NAME_PATTERN, v):
+            raise ValueError("Skill name must be lowercase alphanumerics and hyphens only, with no leading/trailing or consecutive hyphens")
+        return v
+
+    @field_validator("skill_path")
+    @classmethod
+    def validate_skill_path(cls, v: Optional[str]) -> Optional[str]:
+        """Validate skill_path segments and ensure no leading/trailing slash.
+
+        Each segment must be a non-empty URL-safe token. Final-segment-must-equal-name
+        is enforced in a model-level validator after name is known.
+
+        Raises:
+            ValueError: if any segment is empty or contains invalid characters.
+        """
+        if v is None:
+            return v
+        if v.startswith("/") or v.endswith("/"):
+            raise ValueError("skill_path must not start or end with '/'")
+        segments = v.split("/")
+        for seg in segments:
+            if not seg:
+                raise ValueError("skill_path must not contain empty segments")
+        return v
+
+    @field_validator("description")
+    @classmethod
+    def validate_skill_description(cls, v: str) -> str:
+        """Enforce the agentskills.io 1024-char limit and run the standard safety filter.
+
+        Raises:
+            ValueError: when the description exceeds the spec maximum.
+        """
+        if not v:
+            raise ValueError("description is required")
+        if len(v) > SKILL_DESCRIPTION_MAX_LEN:
+            raise ValueError(f"description must be at most {SKILL_DESCRIPTION_MAX_LEN} characters")
+        return SecurityValidator.sanitize_display_text(v, "Description")
+
+    @field_validator("compatibility")
+    @classmethod
+    def validate_compatibility(cls, v: Optional[str]) -> Optional[str]:
+        """Enforce the agentskills.io 500-char compatibility limit.
+
+        Raises:
+            ValueError: when compatibility exceeds the spec maximum.
+        """
+        if v is None:
+            return v
+        if len(v) > SKILL_COMPATIBILITY_MAX_LEN:
+            raise ValueError(f"compatibility must be at most {SKILL_COMPATIBILITY_MAX_LEN} characters")
+        return v
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> List[str]:
+        """Normalize tags via the shared validator.
+
+        Returns:
+            list[str]: Validated, normalized tags.
+        """
+        return validate_tags_field(v)
+
+    @field_validator("visibility")
+    @classmethod
+    def validate_visibility(cls, v: Optional[str]) -> Optional[str]:
+        """Restrict visibility to the enumerated values.
+
+        Raises:
+            ValueError: if visibility is not private/team/public.
+        """
+        if v is None:
+            return v
+        if v not in ("private", "team", "public"):
+            raise ValueError("visibility must be one of: private, team, public")
+        return v
+
+    @model_validator(mode="after")
+    def validate_path_ends_with_name(self) -> "SkillCreate":
+        """Enforce SEP-2640: the last segment of skill_path MUST equal name.
+
+        Raises:
+            ValueError: if skill_path's final segment does not match name.
+        """
+        if self.skill_path is None:
+            # default to flat skill_path = name
+            object.__setattr__(self, "skill_path", self.name)
+            return self
+        last = self.skill_path.rsplit("/", 1)[-1]
+        if last != self.name:
+            raise ValueError(f"skill_path final segment '{last}' must equal name '{self.name}' (SEP-2640)")
+        return self
+
+
+class SkillUpdate(BaseModelWithConfigDict):
+    """Schema for partial update of an existing skill.
+
+    All fields are optional; only the fields present are changed. Name changes
+    require a matching skill_path change (enforced in service layer, because the
+    skill_path's final segment must equal name per SEP-2640).
+    """
+
+    name: Optional[str] = Field(None, description="Skill name")
+    skill_path: Optional[str] = Field(None, description="URI path locator")
+    description: Optional[str] = Field(None, description="Skill description")
+    content_md: Optional[str] = Field(None, description="SKILL.md body")
+    license: Optional[str] = Field(None, description="License")
+    compatibility: Optional[str] = Field(None, description="Environment requirements")
+    metadata_json: Optional[Dict[str, Any]] = Field(None, description="agentskills.io metadata dict")
+    allowed_tools: Optional[str] = Field(None, description="Space-separated allowed-tools spec string")
+    allowed_gateway_ids: Optional[List[str]] = Field(None, description="Foundry gateway IDs")
+    tags: Optional[List[str]] = Field(None, description="Tags")
+    is_active: Optional[bool] = Field(None, description="Whether the skill is active")
+
+    team_id: Optional[str] = Field(None, description="Team ID")
+    owner_email: Optional[str] = Field(None, description="Owner email")
+    visibility: Optional[str] = Field(None, description="Visibility level")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name_if_present(cls, v: Optional[str]) -> Optional[str]:
+        """Enforce agentskills.io name rules when name is being updated.
+
+        Raises:
+            ValueError: if the new name is invalid.
+        """
+        if v is None:
+            return v
+        return SkillCreate.validate_skill_name(v)
+
+    @field_validator("description")
+    @classmethod
+    def validate_description_if_present(cls, v: Optional[str]) -> Optional[str]:
+        """Enforce agentskills.io description limit when description is being updated.
+
+        Raises:
+            ValueError: if description exceeds the spec limit.
+        """
+        if v is None:
+            return v
+        return SkillCreate.validate_skill_description(v)
+
+    @field_validator("compatibility")
+    @classmethod
+    def validate_compat_if_present(cls, v: Optional[str]) -> Optional[str]:
+        """Enforce compatibility field length.
+
+        Raises:
+            ValueError: if compatibility exceeds the spec limit.
+        """
+        return SkillCreate.validate_compatibility(v)
+
+    @field_validator("visibility")
+    @classmethod
+    def validate_visibility_if_present(cls, v: Optional[str]) -> Optional[str]:
+        """Validate visibility value when set.
+
+        Raises:
+            ValueError: if visibility is not one of private/team/public.
+        """
+        if v is None:
+            return v
+        if v not in ("private", "team", "public"):
+            raise ValueError("visibility must be one of: private, team, public")
+        return v
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags_if_present(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Normalize tags if the update provides them.
+
+        Returns:
+            list[str] | None: Validated tags or None if not updated.
+        """
+        if v is None:
+            return v
+        return validate_tags_field(v)
+
+
+class SkillRead(BaseModelWithConfigDict):
+    """Schema for reading skill information.
+
+    Mirrors the Prompt read schema shape — includes the DB id, timestamps, audit
+    fields, and team scoping — plus skill-specific fields (skill_path, content_md,
+    license, compatibility, metadata_json, allowed_tools, allowed_gateway_ids) and a
+    convenience ``skill_uri`` derived from skill_path.
+    """
+
+    id: int
+    name: str
+    skill_path: str
+    description: str
+    content_md: str
+    license: Optional[str] = None
+    compatibility: Optional[str] = None
+    metadata_json: Dict[str, Any] = Field(default_factory=dict)
+    allowed_tools: Optional[str] = None
+    allowed_gateway_ids: List[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    is_active: bool
+    tags: List[str] = Field(default_factory=list)
+
+    # Audit metadata
+    created_by: Optional[str] = Field(None, description="Username who created this entity")
+    created_from_ip: Optional[str] = Field(None, description="IP address of creator")
+    created_via: Optional[str] = Field(None, description="Creation method: ui|api|import|federation")
+    created_user_agent: Optional[str] = Field(None, description="User agent of creation request")
+
+    modified_by: Optional[str] = Field(None, description="Username who last modified this entity")
+    modified_from_ip: Optional[str] = Field(None, description="IP address of last modifier")
+    modified_via: Optional[str] = Field(None, description="Modification method")
+    modified_user_agent: Optional[str] = Field(None, description="User agent of modification request")
+
+    import_batch_id: Optional[str] = Field(None, description="UUID of bulk import batch")
+    federation_source: Optional[str] = Field(None, description="Source gateway for federated entities")
+    version: Optional[int] = Field(1, description="Entity version for change tracking")
+
+    # Team scoping
+    team_id: Optional[str] = Field(None, description="Team ID that owns this resource")
+    team: Optional[str] = Field(None, description="Name of the team that owns this resource")
+    owner_email: Optional[str] = Field(None, description="Email of the owner")
+    visibility: Optional[str] = Field(default="public", description="Visibility level")
+
+    # Derived
+    skill_uri: Optional[str] = Field(None, description="Full skill:// URI of the SKILL.md resource")
+
+
+class SkillFileExport(BaseModel):
+    """Wraps a skill serialized as SKILL.md text (YAML frontmatter + markdown body).
+
+    Used by the export endpoint and returned by the import endpoint after parsing.
+    """
+
+    filename: str = Field(..., description="Suggested filename, e.g. 'code-review_SKILL.md'")
+    content: str = Field(..., description="Full SKILL.md text (frontmatter + body)")
+
+
 class PromptInvocation(BaseModelWithConfigDict):
     """Schema for prompt invocation requests.
 
@@ -3784,6 +4078,7 @@ class ServerCreate(BaseModel):
     associated_resources: Optional[List[str]] = Field(None, description="Comma-separated resource IDs")
     associated_prompts: Optional[List[str]] = Field(None, description="Comma-separated prompt IDs")
     associated_a2a_agents: Optional[List[str]] = Field(None, description="Comma-separated A2A agent IDs")
+    associated_skills: Optional[List[str]] = Field(None, description="Comma-separated skill IDs")
 
     # Team scoping fields
     team_id: Optional[str] = Field(None, description="Team ID for resource organization")
@@ -3854,7 +4149,7 @@ class ServerCreate(BaseModel):
             return v
         return SecurityValidator.validate_url(v, "Icon URL")
 
-    @field_validator("associated_tools", "associated_resources", "associated_prompts", "associated_a2a_agents", mode="before")
+    @field_validator("associated_tools", "associated_resources", "associated_prompts", "associated_a2a_agents", "associated_skills", mode="before")
     @classmethod
     def split_comma_separated(cls, v):
         """
@@ -3999,6 +4294,7 @@ class ServerUpdate(BaseModelWithConfigDict):
     associated_resources: Optional[List[str]] = Field(None, description="Comma-separated resource IDs")
     associated_prompts: Optional[List[str]] = Field(None, description="Comma-separated prompt IDs")
     associated_a2a_agents: Optional[List[str]] = Field(None, description="Comma-separated A2A agent IDs")
+    associated_skills: Optional[List[str]] = Field(None, description="Comma-separated skill IDs")
 
     @field_validator("name")
     @classmethod
@@ -4063,7 +4359,7 @@ class ServerUpdate(BaseModelWithConfigDict):
             return v
         return SecurityValidator.validate_url(v, "Icon URL")
 
-    @field_validator("associated_tools", "associated_resources", "associated_prompts", "associated_a2a_agents", mode="before")
+    @field_validator("associated_tools", "associated_resources", "associated_prompts", "associated_a2a_agents", "associated_skills", mode="before")
     @classmethod
     def split_comma_separated(cls, v):
         """
@@ -4102,6 +4398,7 @@ class ServerRead(BaseModelWithConfigDict):
     associated_resources: List[int] = []
     associated_prompts: List[int] = []
     associated_a2a_agents: List[str] = []
+    associated_skills: List[int] = []
     metrics: ServerMetrics
     tags: List[str] = Field(default_factory=list, description="Tags for categorizing the server")
     transport: str = Field(default="sse", description="Transport protocol: sse or streamable-http")
@@ -4165,6 +4462,8 @@ class ServerRead(BaseModelWithConfigDict):
             data["associated_prompts"] = [getattr(prompt, "id", prompt) for prompt in data["associated_prompts"]]
         if data.get("associated_a2a_agents"):
             data["associated_a2a_agents"] = [getattr(agent, "id", agent) for agent in data["associated_a2a_agents"]]
+        if data.get("associated_skills"):
+            data["associated_skills"] = [getattr(skill, "id", skill) for skill in data["associated_skills"]]
         return data
 
 

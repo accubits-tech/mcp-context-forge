@@ -1259,9 +1259,16 @@ class SessionRegistry(SessionBackend):
                 tools={"listChanged": True},
                 logging={},
                 completions={},  # Advertise completions capability per MCP spec
+                # SEP-2640 "Skills Extension" — signals that skills are served as
+                # resources under the `skill://` URI scheme. No settings yet.
+                extensions={"io.modelcontextprotocol/skills": {}},
             ),
             serverInfo=Implementation(name=settings.app_name, version=__version__),
-            instructions=("MCP Gateway providing federated tools, resources and prompts. Use /admin interface for configuration."),
+            instructions=(
+                "MCP Gateway providing federated tools, resources, prompts, and skills. "
+                "Skills are exposed as resources under the skill:// URI scheme; "
+                "see skill://index.json for discovery. Use /admin interface for configuration."
+            ),
         )
 
     async def store_client_capabilities(self, session_id: str, capabilities: Dict[str, Any]) -> None:

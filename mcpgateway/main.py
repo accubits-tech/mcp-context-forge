@@ -144,6 +144,7 @@ from mcpgateway.services.metrics import setup_metrics
 from mcpgateway.services.openapi_service import OpenAPIError, OpenAPIParsingError, OpenAPIService, OpenAPIValidationError
 from mcpgateway.services.prompt_service import PromptError, PromptNameConflictError, PromptNotFoundError, PromptService
 from mcpgateway.services.resource_service import ResourceError, ResourceNotFoundError, ResourceService, ResourceURIConflictError
+from mcpgateway.services.skill_service import SkillNotFoundError, SkillService, SkillValidationError
 from mcpgateway.services.root_service import RootService
 from mcpgateway.services.server_service import ServerError, ServerNameConflictError, ServerNotFoundError, ServerService
 from mcpgateway.services.tag_service import TagService
@@ -200,6 +201,7 @@ plugin_manager: PluginManager | None = PluginManager(_config_file) if _PLUGINS_E
 tool_service = ToolService()
 resource_service = ResourceService()
 prompt_service = PromptService()
+skill_service = SkillService()
 gateway_service = GatewayService()
 openapi_service = OpenAPIService()
 openapi_agent = OpenAPIAgent()
@@ -438,6 +440,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await tool_service.initialize()
         await resource_service.initialize()
         await prompt_service.initialize()
+        await skill_service.initialize()
         await gateway_service.initialize()
 
         # Initialize stdio bridge manager after gateway service
@@ -2534,7 +2537,9 @@ async def count_tools(
 
     if search:
         pattern = f"%{search}%"
-        query = query.where(or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern), DbTool.tags.cast(String).ilike(pattern)))
+        query = query.where(
+            or_(DbTool.custom_name.ilike(pattern), DbTool.display_name.ilike(pattern), DbTool.original_name.ilike(pattern), DbTool.description.ilike(pattern), DbTool.tags.cast(String).ilike(pattern))
+        )
 
     total = db.execute(query).scalar() or 0
     return {"total": total}
@@ -4312,9 +4317,17 @@ async def submit_tool_generation_job_upload(
         params["format_hint"] = format_hint
 
     return await _submit_job_common(
-        source_type, params, user, auth_type, auth_username, auth_password,
-        auth_token, auth_header_key, auth_header_value,
-        file_content=file_content, filename=file.filename,
+        source_type,
+        params,
+        user,
+        auth_type,
+        auth_username,
+        auth_password,
+        auth_token,
+        auth_header_key,
+        auth_header_value,
+        file_content=file_content,
+        filename=file.filename,
     )
 
 
@@ -4354,8 +4367,15 @@ async def submit_tool_generation_job_url(
             params["enable_crawling"] = enable_crawling
 
     return await _submit_job_common(
-        source_type, params, user, auth_type, auth_username, auth_password,
-        auth_token, auth_header_key, auth_header_value,
+        source_type,
+        params,
+        user,
+        auth_type,
+        auth_username,
+        auth_password,
+        auth_token,
+        auth_header_key,
+        auth_header_value,
     )
 
 
@@ -5534,6 +5554,21 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
                 result = {"resources": [r.model_dump(by_alias=True, exclude_none=True) for r in resources]}
                 if next_cursor:
                     result["nextCursor"] = next_cursor
+            # SEP-2640: advertise Agent Skills as `skill://` resources alongside the
+            # normal MCP resources, plus the well-known `skill://index.json` discovery
+            # doc. Scope follows the server_id split we already use for resources.
+            from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
+            from sqlalchemy import select  # pylint: disable=import-outside-toplevel
+
+            if server_id:
+                from mcpgateway.db import server_skill_association as _ssa  # pylint: disable=import-outside-toplevel
+
+                skill_rows = list(db.execute(select(DbSkill).join(_ssa, DbSkill.id == _ssa.c.skill_id).where(_ssa.c.server_id == server_id, DbSkill.is_active.is_(True))).scalars().all())
+            else:
+                skill_rows = list(db.execute(select(DbSkill).where(DbSkill.is_active.is_(True))).scalars().all())
+            if skill_rows:
+                result.setdefault("resources", []).extend(skill_service.build_resource_list_entries(skill_rows))
+                result["resources"].append(skill_service.build_index_entry())
         elif method == "resources/read":
             uri = params.get("uri")
             request_id = params.get("requestId", None)
@@ -5541,17 +5576,35 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
                 raise JSONRPCError(-32602, "Missing resource URI in parameters", params)
             # Get user email for OAuth token selection
             user_email = get_user_email(user)
-            try:
-                result = await resource_service.read_resource(db, uri, request_id=request_id, user=user_email)
-                if hasattr(result, "model_dump"):
-                    result = {"contents": [result.model_dump(by_alias=True, exclude_none=True)]}
-                else:
-                    result = {"contents": [result]}
-            except ValueError:
-                # Resource has no local content, forward to upstream MCP server
-                result = await gateway_service.forward_request(db, method, params, app_user_email=user_email)
-                if hasattr(result, "model_dump"):
-                    result = result.model_dump(by_alias=True, exclude_none=True)
+            if isinstance(uri, str) and uri.startswith("skill://"):
+                # SEP-2640 skill resource — dispatch to SkillService. Server-scoped reads
+                # are limited to skills actually composed onto this virtual server.
+                from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
+                from sqlalchemy import select  # pylint: disable=import-outside-toplevel
+
+                scope = None
+                if server_id:
+                    from mcpgateway.db import server_skill_association as _ssa  # pylint: disable=import-outside-toplevel
+
+                    scope = list(db.execute(select(DbSkill).join(_ssa, DbSkill.id == _ssa.c.skill_id).where(_ssa.c.server_id == server_id, DbSkill.is_active.is_(True))).scalars().all())
+                try:
+                    result = await skill_service.read_resource(db, uri, scope_skills=scope)
+                except SkillNotFoundError as exc:
+                    raise JSONRPCError(-32602, str(exc), params)
+                except SkillValidationError as exc:
+                    raise JSONRPCError(-32602, str(exc), params)
+            else:
+                try:
+                    result = await resource_service.read_resource(db, uri, request_id=request_id, user=user_email)
+                    if hasattr(result, "model_dump"):
+                        result = {"contents": [result.model_dump(by_alias=True, exclude_none=True)]}
+                    else:
+                        result = {"contents": [result]}
+                except ValueError:
+                    # Resource has no local content, forward to upstream MCP server
+                    result = await gateway_service.forward_request(db, method, params, app_user_email=user_email)
+                    if hasattr(result, "model_dump"):
+                        result = result.model_dump(by_alias=True, exclude_none=True)
         elif method == "resources/subscribe":
             # MCP spec-compliant resource subscription endpoint
             uri = params.get("uri")

@@ -385,6 +385,9 @@ class ServerCapabilities(BaseModel):
         logging (Optional[Dict[str, Any]]): Capability for logging support.
         completions (Optional[Dict[str, Any]]): Capability for completion support.
         experimental (Optional[Dict[str, Dict[str, Any]]]): Experimental capabilities.
+        extensions (Optional[Dict[str, Dict[str, Any]]]): Declared MCP extensions
+            keyed by extension identifier (e.g. ``io.modelcontextprotocol/skills``
+            from SEP-2640), per SEP-2133 extension negotiation.
     """
 
     prompts: Optional[Dict[str, bool]] = None
@@ -393,6 +396,7 @@ class ServerCapabilities(BaseModel):
     logging: Optional[Dict[str, Any]] = None
     completions: Optional[Dict[str, Any]] = None
     experimental: Optional[Dict[str, Dict[str, Any]]] = None
+    extensions: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 # Initialization types

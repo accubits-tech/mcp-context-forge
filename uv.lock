@@ -3271,6 +3271,9 @@ altk = [
 asyncpg = [
     { name = "asyncpg" },
 ]
+deploy = [
+    { name = "docker" },
+]
 fuzz = [
     { name = "hypothesis" },
     { name = "pytest-benchmark" },
@@ -3393,6 +3396,7 @@ requires-dist = [
     { name = "bs4", specifier = ">=0.0.2" },
     { name = "copier", specifier = ">=9.10.3" },
     { name = "cryptography", specifier = ">=46.0.3" },
+    { name = "docker", marker = "extra == 'deploy'", specifier = ">=7.1.0" },
     { name = "fastapi", specifier = ">=0.121.1" },
     { name = "filelock", specifier = ">=3.20.0" },
     { name = "firecrawl-py", specifier = ">=1.5.0" },
@@ -3450,7 +3454,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.38.0" },
     { name = "zeroconf", specifier = ">=0.148.0" },
 ]
-provides-extras = ["postgres", "mysql", "llmchat", "fuzz", "fuzz-atheris", "alembic", "observability", "aiosqlite", "asyncpg", "altk", "grpc", "playwright", "all"]
+provides-extras = ["postgres", "mysql", "llmchat", "fuzz", "fuzz-atheris", "alembic", "deploy", "observability", "aiosqlite", "asyncpg", "altk", "grpc", "playwright", "all"]
 
 [package.metadata.requires-dev]
 dev = [

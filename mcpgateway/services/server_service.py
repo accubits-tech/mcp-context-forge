@@ -162,23 +162,20 @@ class ServerService:
                 - success_rate: Success rate percentage, or None if no metrics.
                 - last_execution: Timestamp of the last execution, or None if no metrics.
         """
-        query = (
-            db.query(
-                DbServer.id,
-                DbServer.name,
-                func.count(ServerMetric.id).label("execution_count"),  # pylint: disable=not-callable
-                func.avg(ServerMetric.response_time).label("avg_response_time"),  # pylint: disable=not-callable
-                case(
-                    (
-                        func.count(ServerMetric.id) > 0,  # pylint: disable=not-callable
-                        func.sum(case((ServerMetric.is_success.is_(True), 1), else_=0)).cast(Float) / func.count(ServerMetric.id) * 100,  # pylint: disable=not-callable
-                    ),
-                    else_=None,
-                ).label("success_rate"),
-                func.max(ServerMetric.timestamp).label("last_execution"),  # pylint: disable=not-callable
-            )
-            .outerjoin(ServerMetric)
-        )
+        query = db.query(
+            DbServer.id,
+            DbServer.name,
+            func.count(ServerMetric.id).label("execution_count"),  # pylint: disable=not-callable
+            func.avg(ServerMetric.response_time).label("avg_response_time"),  # pylint: disable=not-callable
+            case(
+                (
+                    func.count(ServerMetric.id) > 0,  # pylint: disable=not-callable
+                    func.sum(case((ServerMetric.is_success.is_(True), 1), else_=0)).cast(Float) / func.count(ServerMetric.id) * 100,  # pylint: disable=not-callable
+                ),
+                else_=None,
+            ).label("success_rate"),
+            func.max(ServerMetric.timestamp).label("last_execution"),  # pylint: disable=not-callable
+        ).outerjoin(ServerMetric)
 
         if hours is not None:
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -251,6 +248,7 @@ class ServerService:
         server_dict["associated_resources"] = [res.id for res in server.resources] if server.resources else []
         server_dict["associated_prompts"] = [prompt.id for prompt in server.prompts] if server.prompts else []
         server_dict["associated_a2a_agents"] = [agent.id for agent in server.a2a_agents] if server.a2a_agents else []
+        server_dict["associated_skills"] = [skill.id for skill in server.skills] if getattr(server, "skills", None) else []
         server_dict["tags"] = server.tags or []
 
         # Include metadata fields for proper API response
@@ -473,11 +471,24 @@ class ServerService:
                     # by a separate service or background task to avoid circular imports
                     logger.info(f"A2A agent {agent_obj.name} associated with server {db_server.name}")
 
+            # Associate skills (SEP-2640 — served as resources under skill:// URIs).
+            if getattr(server_in, "associated_skills", None):
+                from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
+
+                for skill_id in server_in.associated_skills:
+                    sid_str = str(skill_id).strip()
+                    if not sid_str:
+                        continue
+                    skill_obj = db.get(DbSkill, int(sid_str)) if sid_str.isdigit() else None
+                    if not skill_obj:
+                        raise ServerError(f"Skill with id {skill_id} does not exist.")
+                    db_server.skills.append(skill_obj)
+
             # Commit the new record and refresh.
             db.commit()
             db.refresh(db_server)
             # Force load the relationship attributes.
-            _ = db_server.tools, db_server.resources, db_server.prompts, db_server.a2a_agents
+            _ = db_server.tools, db_server.resources, db_server.prompts, db_server.a2a_agents, db_server.skills
 
             # Assemble response data with associated item IDs.
             server_data = {
@@ -835,6 +846,19 @@ class ServerService:
                     prompt_obj = db.get(DbPrompt, int(prompt_id))
                     if prompt_obj:
                         server.prompts.append(prompt_obj)
+
+            # Update associated skills if provided (SEP-2640 composition).
+            if getattr(server_update, "associated_skills", None) is not None:
+                from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
+
+                server.skills = []
+                for skill_id in server_update.associated_skills:
+                    sid_str = str(skill_id).strip()
+                    if not sid_str or not sid_str.isdigit():
+                        continue
+                    skill_obj = db.get(DbSkill, int(sid_str))
+                    if skill_obj:
+                        server.skills.append(skill_obj)
 
             # Update tags if provided
             if server_update.tags is not None:

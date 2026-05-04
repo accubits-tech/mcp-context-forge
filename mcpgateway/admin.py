@@ -93,6 +93,10 @@ from mcpgateway.schemas import (
     ServerMetrics,
     ServerRead,
     ServerUpdate,
+    SkillCreate,
+    SkillFileExport,
+    SkillRead,
+    SkillUpdate,
     ToolCreate,
     ToolMetrics,
     ToolRead,
@@ -111,6 +115,7 @@ from mcpgateway.services.oauth_manager import OAuthManager
 from mcpgateway.services.plugin_service import get_plugin_service
 from mcpgateway.services.prompt_service import PromptNameConflictError, PromptNotFoundError, PromptService
 from mcpgateway.services.resource_service import ResourceNotFoundError, ResourceService, ResourceURIConflictError
+from mcpgateway.services.skill_service import SkillNameConflictError, SkillNotFoundError, SkillService, SkillValidationError
 from mcpgateway.services.root_service import RootService
 from mcpgateway.services.server_service import ServerError, ServerNameConflictError, ServerNotFoundError, ServerService
 from mcpgateway.services.tag_service import TagService
@@ -209,6 +214,7 @@ server_service: ServerService = ServerService()
 tool_service: ToolService = ToolService()
 prompt_service: PromptService = PromptService()
 gateway_service: GatewayService = GatewayService()
+skill_service: SkillService = SkillService()
 resource_service: ResourceService = ResourceService()
 root_service: RootService = RootService()
 export_service: ExportService = ExportService()
@@ -1810,6 +1816,317 @@ async def admin_list_prompts(
     user_email = get_user_email(user)
     prompts = await prompt_service.list_prompts_for_user(db, user_email, include_inactive=include_inactive)
     return [prompt.model_dump(by_alias=True) for prompt in prompts]
+
+
+# ---------------------------------------------------------------------------
+# Skills Hub — admin REST routes (JSON body).
+#
+# Targets SEP-2640 "Skills Extension" for the MCP-facing side (resources under
+# `skill://` URIs). These admin routes are internal management endpoints used
+# by the Foundry React UI and scripted tooling; they speak JSON rather than
+# HTML form POSTs like some older admin routes.
+# ---------------------------------------------------------------------------
+
+
+def _skill_error_response(ex: Exception) -> JSONResponse:
+    """Map SkillService exceptions to HTTP responses.
+
+    Keeps the route handlers free of repetitive try/except pyramids. Any
+    unrecognized exception is re-raised to let FastAPI's default handler
+    surface it as a 500 with stack trace in logs.
+
+    Args:
+        ex: The caught exception.
+
+    Returns:
+        JSONResponse: Framed error body with an appropriate status code.
+
+    Raises:
+        Exception: For errors that don't map to a known HTTP status (re-raised).
+    """
+    if isinstance(ex, SkillNotFoundError):
+        return JSONResponse(status_code=404, content={"message": str(ex), "success": False})
+    if isinstance(ex, SkillNameConflictError):
+        return JSONResponse(status_code=409, content={"message": str(ex), "success": False})
+    if isinstance(ex, SkillValidationError):
+        return JSONResponse(status_code=400, content={"message": str(ex), "success": False})
+    if isinstance(ex, PermissionError):
+        return JSONResponse(status_code=403, content={"message": str(ex), "success": False})
+    if isinstance(ex, (ValidationError, CoreValidationError)):
+        return JSONResponse(status_code=422, content={"message": str(ex), "success": False})
+    raise ex
+
+
+@admin_router.get("/skills", response_model=List[SkillRead])
+async def admin_list_skills(
+    include_inactive: bool = False,
+    visibility: Optional[str] = None,
+    team_id: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> List[Dict[str, Any]]:
+    """List skills visible to the current user.
+
+    Args:
+        include_inactive: Whether to include skills with is_active=False.
+        visibility: Optional filter (private, team, public).
+        team_id: Optional team filter; limits results to a single team the user belongs to.
+        db: DB session.
+        user: Authenticated principal.
+
+    Returns:
+        list[dict]: Skills serialized via by_alias=True for JSON responses.
+    """
+    user_email = get_user_email(user)
+    skills = await skill_service.list_skills_for_user(
+        db,
+        user_email,
+        team_id=team_id,
+        visibility=visibility,
+        include_inactive=include_inactive,
+    )
+    return [s.model_dump(by_alias=True) for s in skills]
+
+
+@admin_router.get("/skills/{skill_id}", response_model=SkillRead)
+async def admin_get_skill(
+    skill_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),  # pylint: disable=unused-argument
+) -> Union[Dict[str, Any], JSONResponse]:
+    """Fetch a single skill by id.
+
+    Args:
+        skill_id: Skill PK.
+        db: DB session.
+        user: Authenticated principal (unused, ensures auth).
+
+    Returns:
+        dict | JSONResponse: Skill body on success, error envelope on miss.
+    """
+    try:
+        skill = await skill_service.get_skill(db, skill_id)
+        return skill.model_dump(by_alias=True)
+    except Exception as ex:
+        return _skill_error_response(ex)
+
+
+@admin_router.post("/skills", response_model=SkillRead)
+async def admin_create_skill(
+    request: Request,
+    payload: SkillCreate = Body(...),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Union[Dict[str, Any], JSONResponse]:
+    """Create a new skill from a JSON body.
+
+    The FE should POST the structured fields — ``name``, ``description``,
+    ``content_md``, optional ``license``/``compatibility``/``metadata_json``/
+    ``allowed_tools``/``allowed_gateway_ids``/``tags``/``skill_path`` — and the
+    gateway will reconstruct SKILL.md deterministically on reads.
+
+    Args:
+        request: FastAPI request (used for audit metadata).
+        payload: Validated SkillCreate body.
+        db: DB session.
+        user: Authenticated principal.
+
+    Returns:
+        dict | JSONResponse: Created skill, or a framed error.
+    """
+    user_email = get_user_email(user)
+    # Default team/owner from the authenticated user if not supplied.
+    if payload.owner_email is None:
+        payload = payload.model_copy(update={"owner_email": user_email})
+    try:
+        metadata = MetadataCapture.extract_creation_metadata(request, user)
+        skill = await skill_service.register_skill(
+            db,
+            payload,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via=metadata["created_via"],
+            created_user_agent=metadata["created_user_agent"],
+            import_batch_id=metadata["import_batch_id"],
+            federation_source=metadata["federation_source"],
+        )
+        return skill.model_dump(by_alias=True)
+    except Exception as ex:
+        return _skill_error_response(ex)
+
+
+@admin_router.put("/skills/{skill_id}", response_model=SkillRead)
+async def admin_update_skill(
+    skill_id: int,
+    request: Request,
+    payload: SkillUpdate = Body(...),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Union[Dict[str, Any], JSONResponse]:
+    """Update a skill. Partial updates supported — only set fields are applied.
+
+    Args:
+        skill_id: Skill PK.
+        request: FastAPI request (for audit).
+        payload: Validated SkillUpdate body.
+        db: DB session.
+        user: Authenticated principal.
+
+    Returns:
+        dict | JSONResponse: Updated skill, or framed error.
+    """
+    user_email = get_user_email(user)
+    try:
+        metadata = MetadataCapture.extract_modification_metadata(request, user)
+        skill = await skill_service.update_skill(
+            db,
+            skill_id,
+            payload,
+            user_email=user_email,
+            modified_from_ip=metadata.get("modified_from_ip"),
+            modified_via=metadata.get("modified_via"),
+            modified_user_agent=metadata.get("modified_user_agent"),
+        )
+        return skill.model_dump(by_alias=True)
+    except Exception as ex:
+        return _skill_error_response(ex)
+
+
+@admin_router.delete("/skills/{skill_id}")
+async def admin_delete_skill(
+    skill_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Delete a skill by id.
+
+    Args:
+        skill_id: Skill PK.
+        db: DB session.
+        user: Authenticated principal.
+
+    Returns:
+        JSONResponse: Success envelope or framed error.
+    """
+    user_email = get_user_email(user)
+    try:
+        await skill_service.delete_skill(db, skill_id, user_email=user_email)
+        return JSONResponse(status_code=200, content={"message": "Skill deleted", "success": True})
+    except Exception as ex:
+        return _skill_error_response(ex)
+
+
+@admin_router.post("/skills/{skill_id}/toggle", response_model=SkillRead)
+async def admin_toggle_skill(
+    skill_id: int,
+    activate: bool = Query(...),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Union[Dict[str, Any], JSONResponse]:
+    """Activate or deactivate a skill.
+
+    Args:
+        skill_id: Skill PK.
+        activate: Target is_active state.
+        db: DB session.
+        user: Authenticated principal.
+
+    Returns:
+        dict | JSONResponse: Updated skill or framed error.
+    """
+    user_email = get_user_email(user)
+    try:
+        skill = await skill_service.toggle_skill_status(db, skill_id, activate=activate, user_email=user_email)
+        return skill.model_dump(by_alias=True)
+    except Exception as ex:
+        return _skill_error_response(ex)
+
+
+@admin_router.post("/skills/import", response_model=SkillRead)
+async def admin_import_skill(
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Union[Dict[str, Any], JSONResponse]:
+    """Upload a SKILL.md file and register it as a new skill.
+
+    Accepts either multipart ``file`` upload or a JSON body with ``content`` (string).
+    The parsed frontmatter populates the create payload; the owner and team default
+    to the authenticated user.
+
+    Args:
+        request: FastAPI request containing the upload.
+        db: DB session.
+        user: Authenticated principal.
+
+    Returns:
+        dict | JSONResponse: Newly registered skill or framed error.
+    """
+    user_email = get_user_email(user)
+    try:
+        content_type = (request.headers.get("content-type") or "").lower()
+        file_text: str
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            upload = form.get("file")
+            if isinstance(upload, (StarletteUploadFile,)):
+                file_text = (await upload.read()).decode("utf-8")
+            else:
+                return JSONResponse(status_code=400, content={"message": "Expected 'file' multipart field", "success": False})
+        else:
+            data = await request.json()
+            file_text = str(data.get("content") or "")
+            if not file_text:
+                return JSONResponse(status_code=400, content={"message": "Missing 'content' field in JSON body", "success": False})
+
+        metadata = MetadataCapture.extract_creation_metadata(request, user)
+        # Pre-parse so we can inject owner_email before registering.
+        # skill_service.import_skill will re-parse + validate, but we want the owner default.
+        from mcpgateway.services.skill_service import parse_skill_md  # pylint: disable=import-outside-toplevel
+
+        parsed = parse_skill_md(file_text)
+        parsed["owner_email"] = user_email
+        payload = SkillCreate(**parsed)
+        skill = await skill_service.register_skill(
+            db,
+            payload,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via="import",
+            created_user_agent=metadata["created_user_agent"],
+            import_batch_id=metadata["import_batch_id"],
+            federation_source=metadata["federation_source"],
+        )
+        return skill.model_dump(by_alias=True)
+    except Exception as ex:
+        return _skill_error_response(ex)
+
+
+@admin_router.get("/skills/{skill_id}/export", response_model=SkillFileExport)
+async def admin_export_skill(
+    skill_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),  # pylint: disable=unused-argument
+) -> Union[Dict[str, Any], JSONResponse]:
+    """Return a skill serialized as a downloadable SKILL.md payload.
+
+    Args:
+        skill_id: Skill PK.
+        db: DB session.
+        user: Authenticated principal (unused, ensures auth).
+
+    Returns:
+        dict | JSONResponse: ``{filename, content}`` pair or framed error.
+    """
+    from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
+
+    try:
+        db_skill = db.get(DbSkill, skill_id)
+        if not db_skill:
+            raise SkillNotFoundError(f"Skill not found: {skill_id}")
+        return skill_service.export_skill(db_skill).model_dump(by_alias=True)
+    except Exception as ex:
+        return _skill_error_response(ex)
 
 
 @admin_router.get("/gateways", response_model=List[GatewayRead])

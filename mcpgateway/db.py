@@ -1399,6 +1399,14 @@ server_a2a_association = Table(
     Column("a2a_agent_id", String(36), ForeignKey("a2a_agents.id"), primary_key=True),
 )
 
+# Association table for servers and skills
+server_skill_association = Table(
+    "server_skill_association",
+    Base.metadata,
+    Column("server_id", String(36), ForeignKey("servers.id"), primary_key=True),
+    Column("skill_id", Integer, ForeignKey("skills.id"), primary_key=True),
+)
+
 
 class GlobalConfig(Base):
     """Global configuration settings.
@@ -2576,6 +2584,72 @@ class Prompt(Base):
         return max(m.timestamp for m in self.metrics)
 
 
+class Skill(Base):
+    """ORM model for an Agent Skill served over MCP as a resource.
+
+    A skill is an agentskills.io-format SKILL.md document that MCP clients consume
+    under a ``skill://<skill_path>/SKILL.md`` URI per the Skills Extension
+    (``io.modelcontextprotocol/skills``). Spec-core frontmatter fields live in
+    their own columns so the on-wire SKILL.md stays portable; Foundry-specific
+    metadata (visibility, tags, allowed gateways, ownership) stays on the server
+    and surfaces via MCP resource ``_meta`` under the
+    ``io.hybrid360.foundry/`` namespace.
+    """
+
+    __tablename__ = "skills"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # URI locator — `<skill_path>` portion of `skill://<skill_path>/SKILL.md`.
+    # Final segment must equal `name` per SEP-2640.
+    skill_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    # agentskills.io frontmatter: name must match `^[a-z0-9]+(-[a-z0-9]+)*$`, max 64.
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    # SKILL.md body *without* frontmatter. Frontmatter is reconstructed on serve.
+    content_md: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    license: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    compatibility: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # agentskills.io `metadata` frontmatter dict (str -> str).
+    metadata_json: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # Space-separated spec string, e.g. "Read Bash(git:*)". Round-tripped verbatim.
+    allowed_tools: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Foundry-only — not emitted in SKILL.md; emitted in resource `_meta`.
+    allowed_gateway_ids: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # Audit metadata
+    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_from_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    created_via: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    modified_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    modified_from_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    modified_via: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    modified_user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    import_batch_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    federation_source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    gateway_id: Mapped[Optional[str]] = mapped_column(ForeignKey("gateways.id"), nullable=True)
+    gateway: Mapped[Optional["Gateway"]] = relationship("Gateway", back_populates="skills")
+
+    # Many-to-many with Servers (for virtual-server composition).
+    servers: Mapped[List["Server"]] = relationship("Server", secondary=server_skill_association, back_populates="skills")
+
+    # Team scoping — follows the Prompt/Tool/Resource pattern exactly.
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
+    owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="public")
+
+    __table_args__ = (UniqueConstraint("team_id", "owner_email", "skill_path", name="uq_team_owner_path_skill"),)
+
+
 class Server(Base):
     """
     ORM model for MCP Servers Catalog.
@@ -2627,6 +2701,7 @@ class Server(Base):
     resources: Mapped[List["Resource"]] = relationship("Resource", secondary=server_resource_association, back_populates="servers")
     prompts: Mapped[List["Prompt"]] = relationship("Prompt", secondary=server_prompt_association, back_populates="servers")
     a2a_agents: Mapped[List["A2AAgent"]] = relationship("A2AAgent", secondary=server_a2a_association, back_populates="servers")
+    skills: Mapped[List["Skill"]] = relationship("Skill", secondary=server_skill_association, back_populates="servers")
 
     # API token relationships
     scoped_tokens: Mapped[List["EmailApiToken"]] = relationship("EmailApiToken", back_populates="server")
@@ -2868,6 +2943,9 @@ class Gateway(Base):
 
     # Relationship with local resources this gateway provides
     resources: Mapped[List["Resource"]] = relationship(back_populates="gateway", cascade="all, delete-orphan")
+
+    # Relationship with local skills this gateway provides
+    skills: Mapped[List["Skill"]] = relationship(back_populates="gateway", cascade="all, delete-orphan")
 
     # # Tools federated from this gateway
     # federated_tools: Mapped[List["Tool"]] = relationship(secondary=tool_gateway_table, back_populates="federated_with")
