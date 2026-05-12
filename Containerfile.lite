@@ -194,6 +194,7 @@ RUN set -euo pipefail \
          python${PYTHON_VERSION} \
          ca-certificates \
          procps-ng \
+         git \
     && dnf clean all --installroot="${ROOTFS_PATH:?}"
 
 # ----------------------------------------------------------------------------

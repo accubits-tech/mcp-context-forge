@@ -1498,6 +1498,36 @@ Disallow: /
     mcpgateway_deploy_log_retention_days: int = Field(default=14, ge=1, le=365, description="Retention window for build/runtime logs")
     mcpgateway_deploy_health_check_interval: int = Field(default=30, ge=5, le=300, description="Health check interval in seconds for deployed containers")
     mcpgateway_deploy_restart_max_retries: int = Field(default=3, ge=0, le=10, description="Maximum restart attempts for crashed deployed containers")
+    # Host the deployed container's port is published on. 127.0.0.1 (default) is safest
+    # when the gateway runs on the host directly. Set to 0.0.0.0 when the gateway runs
+    # in a container and needs to reach the deployed port via the docker bridge — the
+    # host firewall MUST then block the deploy port range from the public internet.
+    mcpgateway_deploy_bind_host: str = Field(default="127.0.0.1", description="Host interface to publish deployed container ports on (127.0.0.1 for host-installed gateway, 0.0.0.0 for containerized gateway)")
+    # Hostname the gateway uses to reach the deployed container's published port.
+    # 127.0.0.1 (default) works when the gateway runs on the host. Set to
+    # host.docker.internal when the gateway runs in a container; on Linux Docker also
+    # add `extra_hosts: ["host.docker.internal:host-gateway"]` to the gateway service.
+    mcpgateway_deploy_bridge_host: str = Field(default="127.0.0.1", description="Hostname the gateway uses to reach the deployed container's host-published port")
+
+    # Vulnerability-scan gate for source-uploaded MCP deployments.
+    # Each scan stage runs as an ephemeral container with --read-only --network=none
+    # --cap-drop=ALL --user 10001 via the same RuntimeDriver used at runtime.
+    mcpgateway_security_scan_enabled: bool = Field(default=True, description="Enable vulnerability scanning of uploaded MCP source before build/deploy")
+    mcpgateway_security_scan_total_timeout_s: int = Field(default=300, ge=30, le=1800, description="Hard cap (seconds) on the entire scan run")
+    mcpgateway_security_scan_secrets_timeout_s: int = Field(default=60, ge=5, le=600, description="Per-stage timeout for secrets scanning")
+    mcpgateway_security_scan_sast_timeout_s: int = Field(default=180, ge=10, le=900, description="Per-stage timeout for SAST + MCP-rule scanning")
+    mcpgateway_security_scan_sca_timeout_s: int = Field(default=60, ge=5, le=600, description="Per-stage timeout for SCA dependency scanning")
+    mcpgateway_security_scan_malicious_timeout_s: int = Field(default=30, ge=5, le=300, description="Per-stage timeout for malicious-package scanning")
+    mcpgateway_security_scan_image_vuln_timeout_s: int = Field(default=120, ge=10, le=900, description="Per-stage timeout for built-image vulnerability scanning")
+    mcpgateway_security_scan_image_hygiene_timeout_s: int = Field(default=30, ge=5, le=300, description="Per-stage timeout for image hygiene linting")
+    mcpgateway_security_scan_image_gitleaks: str = Field(default="zricethezav/gitleaks:latest", description="Gitleaks container image (pin by @sha256 in production)")
+    mcpgateway_security_scan_image_semgrep: str = Field(default="returntocorp/semgrep:latest", description="Semgrep container image (pin by @sha256 in production)")
+    mcpgateway_security_scan_image_osv: str = Field(default="ghcr.io/google/osv-scanner:latest", description="osv-scanner container image (pin by @sha256 in production)")
+    mcpgateway_security_scan_image_trivy: str = Field(default="aquasec/trivy:latest", description="Trivy container image (pin by @sha256 in production)")
+    mcpgateway_security_scan_image_hadolint: str = Field(default="hadolint/hadolint:latest", description="Hadolint container image (pin by @sha256 in production)")
+    mcpgateway_security_scan_image_dockle: str = Field(default="goodwithtech/dockle:latest", description="Dockle container image (pin by @sha256 in production)")
+    mcpgateway_security_scan_ignore_rules: list[str] = Field(default_factory=list, description="Per-rule allowlist; findings whose rule_id is in this list are dropped")
+    mcpgateway_security_scan_block_warnings: bool = Field(default=False, description="When true, warning-level findings also block deploys")
 
     # Ed25519 keys for signing
     enable_ed25519_signing: bool = Field(default=False, description="Enable Ed25519 signing for certificates")

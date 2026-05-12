@@ -1,0 +1,17 @@
+{
+  "name": "sample-mcp-server",
+  "version": "0.1.0",
+  "description": "Sample MCP server for the MCP Foundry deploy flow.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "license": "Apache-2.0"
+}

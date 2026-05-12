@@ -15,7 +15,11 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict
 
+# Standard
+from typing import List, Optional
+
 # First-Party
+from mcpgateway.config import settings
 from mcpgateway.services.deployment.drivers.base import (
     BuildFailedError,
     BuildResult,
@@ -23,6 +27,8 @@ from mcpgateway.services.deployment.drivers.base import (
     ContainerStatus,
     DriverUnavailableError,
     EgressPolicy,
+    OneshotMount,
+    OneshotResult,
     ResourceLimits,
     RuntimeDriver,
 )
@@ -138,7 +144,7 @@ class DockerDriver(RuntimeDriver):
                 name=container_name,
                 detach=True,
                 environment=env,
-                ports={f"{_CONTAINER_PORT}/tcp": ("127.0.0.1", host_port)},
+                ports={f"{_CONTAINER_PORT}/tcp": (settings.mcpgateway_deploy_bind_host, host_port)},
                 read_only=True,
                 tmpfs={"/tmp": "size=64m,mode=1777,noexec,nosuid,nodev"},
                 cap_drop=["ALL"],
@@ -254,3 +260,87 @@ class DockerDriver(RuntimeDriver):
                 logger.info("prune: image remove raised (likely already gone): %s", e)
 
         await asyncio.to_thread(_do_prune)
+
+    async def run_oneshot(
+        self,
+        image: str,
+        args: List[str],
+        mounts: List[OneshotMount],
+        *,
+        timeout_s: int,
+        network_none: bool = True,
+        workdir: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+    ) -> OneshotResult:
+        """Run a one-shot container with the same sandbox defaults as runtime containers.
+
+        Used by the security-scan pipeline to run scanners (gitleaks, semgrep, osv-scanner,
+        trivy, hadolint, dockle) against an extracted source tree or a built image. Stdout
+        and stderr are captured in full; the container is removed after exit.
+        """
+        client = self._get_client()
+
+        # Pull the image if not present locally. We don't fail hard on a transient pull
+        # error; the create() call below will surface a clearer error if the image is
+        # truly missing.
+        def _ensure_image() -> None:
+            try:
+                client.images.get(image)
+            except Exception:  # noqa: BLE001 - many SDK exceptions, all mean "not present"
+                try:
+                    client.images.pull(image)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("run_oneshot: image pull failed for %s: %s", image, e)
+
+        await asyncio.to_thread(_ensure_image)
+
+        volumes = {}
+        for m in mounts:
+            volumes[str(m.host_path)] = {"bind": m.container_path, "mode": "ro" if m.read_only else "rw"}
+
+        def _do_run() -> OneshotResult:
+            container = None
+            timed_out = False
+            try:
+                container = client.containers.create(
+                    image=image,
+                    command=args,
+                    detach=True,
+                    network_mode="none" if network_none else "bridge",
+                    read_only=True,
+                    cap_drop=["ALL"],
+                    user=10001,
+                    tmpfs={"/tmp": "rw,size=128m"},
+                    security_opt=["no-new-privileges"],
+                    volumes=volumes or None,
+                    working_dir=workdir,
+                    environment=env or None,
+                    labels={"mcpgateway.role": "security-scan"},
+                )
+                container.start()
+                try:
+                    result = container.wait(timeout=timeout_s)
+                    exit_code = int(result.get("StatusCode", -1))
+                except Exception:  # noqa: BLE001 - SDK raises ReadTimeout on the requests session
+                    timed_out = True
+                    exit_code = -1
+                    try:
+                        container.kill()
+                    except Exception:  # noqa: BLE001
+                        pass
+                stdout_bytes = container.logs(stdout=True, stderr=False) or b""
+                stderr_bytes = container.logs(stdout=False, stderr=True) or b""
+                return OneshotResult(
+                    exit_code=exit_code,
+                    stdout=stdout_bytes.decode("utf-8", errors="replace"),
+                    stderr=stderr_bytes.decode("utf-8", errors="replace"),
+                    timed_out=timed_out,
+                )
+            finally:
+                if container is not None:
+                    try:
+                        container.remove(force=True)
+                    except Exception as e:  # noqa: BLE001
+                        logger.info("run_oneshot: container remove raised: %s", e)
+
+        return await asyncio.to_thread(_do_run)

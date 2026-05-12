@@ -321,6 +321,83 @@ class GatewayConnectionError(GatewayError):
     """
 
 
+def _security_scan_fields_for_gateway(report: Optional[Any]) -> Dict[str, Any]:
+    """Return the gateway-row columns derived from a security-scan report.
+
+    Maps the runner's overall_status to the gateway column vocabulary. When
+    ``report`` is None (scanning disabled or never ran), returns an empty dict.
+    """
+    if report is None:
+        return {}
+    summary = report.summary
+    return {
+        "deployment_security_scan_status": summary.overall_status,
+        "deployment_security_scan_run_id": summary.scan_run_id,
+        "deployment_security_scan_summary": {
+            "scan_run_id": summary.scan_run_id,
+            "overall_status": summary.overall_status,
+            "gate_outcome": summary.gate_outcome,
+            "blocking_findings_count": summary.blocking_findings_count,
+            "counts_by_severity": summary.counts_by_severity,
+            "stages": [
+                {
+                    "name": s.name,
+                    "label": s.label,
+                    "scanner": s.scanner,
+                    "status": s.status,
+                    "started_at": s.started_at.isoformat() if s.started_at else None,
+                    "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+                    "error": s.error,
+                    "findings_count_by_severity": s.findings_count_by_severity,
+                }
+                for s in summary.stages
+            ],
+        },
+        "deployment_security_scan_started_at": report.started_at,
+        "deployment_security_scan_completed_at": report.completed_at,
+        "deployment_security_scan_report_ref": "scan-report.json",
+    }
+
+
+def _persist_security_scan_findings(db: Session, gateway_id: str, report: Optional[Any]) -> None:
+    """Insert the report's findings into ``gateway_security_scan_findings``.
+
+    Idempotent on retry: callers must not assume rows are deduped within a
+    single ``scan_run_id`` - this is a best-effort persistence and will silently
+    swallow integrity errors after logging.
+    """
+    if report is None:
+        return
+    # Local import to avoid circulars (db.py imports schemas which imports services in some flows).
+    from mcpgateway.db import GatewaySecurityScanFinding  # pylint: disable=import-outside-toplevel
+
+    rows = []
+    for f in report.findings:
+        rows.append(
+            GatewaySecurityScanFinding(
+                id=f.id,
+                gateway_id=gateway_id,
+                scan_run_id=report.summary.scan_run_id,
+                scanner=f.scanner,
+                stage=f.stage,
+                severity=f.severity,
+                rule_id=f.rule_id,
+                file=f.file,
+                line=f.line,
+                message=f.message,
+                cwe=f.cwe,
+                raw_excerpt=f.raw_excerpt,
+            )
+        )
+    if not rows:
+        return
+    try:
+        db.add_all(rows)
+        db.flush()
+    except Exception as e:  # noqa: BLE001 - best effort; errors logged for ops to inspect
+        logger.warning("could not persist %d security-scan findings for gateway %s: %s", len(rows), gateway_id, e)
+
+
 class GatewayService:  # pylint: disable=too-many-instance-attributes
     """Service for managing federated gateways.
 
@@ -842,10 +919,16 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             stdio_env_encrypted = None
             is_stdio = gateway.transport == "STDIO"
             is_deploy = getattr(gateway, "deployment", None) is not None
-            # Pre-generate gateway ID so we can use it as bridge/deployment key
+            # Pre-generate gateway ID so we can use it as bridge/deployment key.
+            # When the deployment spec carries a client_gateway_id, honor it - this lets
+            # the FE poll vulnerability-scan progress while the deploy request is in
+            # flight (the id is the tracker key on the backend).
             import uuid as _uuid  # pylint: disable=import-outside-toplevel
 
-            pre_generated_id = _uuid.uuid4().hex
+            client_id = None
+            if is_deploy:
+                client_id = getattr(gateway.deployment, "client_gateway_id", None)
+            pre_generated_id = client_id or _uuid.uuid4().hex
 
             # Deployed-server fields captured here for the DbGateway below.
             deployment_fields: Dict[str, Any] = {}
@@ -870,23 +953,47 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                         )
                 # Archive ingress happens out-of-band via upload endpoint; the spec carries a token
                 # resolved to a local archive path by the admin route before register_gateway is called.
-                image_tag, host_port, source_sha, source_ref, build_log_path = await deployment_runtime_service.deploy(
-                    gateway_id=pre_generated_id,
-                    source=spec.source,
-                    git_url=spec.git_url,
-                    git_ref=spec.git_ref,
-                    subpath=spec.subpath,
-                    archive_bytes=getattr(spec, "_archive_bytes", None),
-                    archive_filename=getattr(spec, "_archive_filename", None),
-                    runtime=spec.runtime,
-                    entry_mode=spec.entry_mode,
-                    entry_command=spec.entry_command,
-                    env=spec.env,
-                    resource_limits=spec.resource_limits,
-                    egress_allowlist=spec.egress_allowlist,
-                )
-                normalized_url = f"http://127.0.0.1:{host_port}/mcp"
+                from mcpgateway.services.security.errors import SecurityGateError  # pylint: disable=import-outside-toplevel
+
+                try:
+                    image_tag, host_port, source_sha, source_ref, build_log_path = await deployment_runtime_service.deploy(
+                        gateway_id=pre_generated_id,
+                        source=spec.source,
+                        git_url=spec.git_url,
+                        git_ref=spec.git_ref,
+                        subpath=spec.subpath,
+                        archive_bytes=getattr(spec, "_archive_bytes", None),
+                        archive_filename=getattr(spec, "_archive_filename", None),
+                        runtime=spec.runtime,
+                        entry_mode=spec.entry_mode,
+                        entry_command=spec.entry_command,
+                        env=spec.env,
+                        resource_limits=spec.resource_limits,
+                        egress_allowlist=spec.egress_allowlist,
+                    )
+                except SecurityGateError as gate_err:
+                    # The vulnerability-scan gate blocked deploy. Persist the partial
+                    # report (so the FE can show findings) and surface a clear error.
+                    # _persist_security_scan_findings only flushes; we MUST commit on
+                    # this path because the RuntimeError below will propagate to the
+                    # admin endpoint, which returns a 500 without committing — and the
+                    # request-scoped session's close() rolls back any pending state,
+                    # discarding the findings we just inserted. Up to this point in
+                    # register_gateway only read queries have run, so commit is safe.
+                    _persist_security_scan_findings(db, pre_generated_id, gate_err.report)
+                    try:
+                        db.commit()
+                    except Exception as commit_err:  # noqa: BLE001 - best effort, log and continue
+                        db.rollback()
+                        logger.warning("could not commit security-scan findings for gateway %s: %s", pre_generated_id, commit_err)
+                    raise RuntimeError(
+                        f"security gate blocked deploy at {gate_err.stage}: "
+                        f"{gate_err.report.summary.blocking_findings_count} blocking finding(s)"
+                    ) from gate_err
+                normalized_url = f"http://{settings.mcpgateway_deploy_bridge_host}:{host_port}/mcp"
                 effective_transport = "STREAMABLEHTTP"
+                scan_report = deployment_runtime_service.consume_scan_report(pre_generated_id)
+                scan_fields = _security_scan_fields_for_gateway(scan_report)
                 deployment_fields = {
                     "deployment_source": spec.source,
                     "deployment_source_ref": source_ref,
@@ -904,7 +1011,10 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     "deployment_env_encrypted": encode_auth(spec.env) if spec.env else None,
                     "deployment_last_built_at": datetime.now(timezone.utc),
                     "deployment_last_started_at": datetime.now(timezone.utc),
+                    **scan_fields,
                 }
+                if scan_report is not None:
+                    _persist_security_scan_findings(db, pre_generated_id, scan_report)
             elif is_stdio:
                 from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
 

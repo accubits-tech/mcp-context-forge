@@ -236,6 +236,66 @@ class TestListTokens:
                 offset=10,
             )
 
+    @pytest.mark.asyncio
+    async def test_list_tokens_admin_sees_all_users_tokens(self, mock_db, mock_admin_user, mock_token_record):
+        """Admin calling GET /tokens sees tokens owned by every user, not just their own."""
+        other_user_token = MagicMock()
+        other_user_token.id = "token-other"
+        other_user_token.name = "Other User Token"
+        other_user_token.description = None
+        other_user_token.user_email = "other@example.com"
+        other_user_token.team_id = None
+        other_user_token.server_id = None
+        other_user_token.resource_scopes = []
+        other_user_token.ip_restrictions = []
+        other_user_token.time_restrictions = {}
+        other_user_token.usage_limits = {}
+        other_user_token.created_at = datetime.now(timezone.utc)
+        other_user_token.expires_at = None
+        other_user_token.last_used = None
+        other_user_token.is_active = True
+        other_user_token.tags = []
+        other_user_token.jti = "jti-other"
+
+        with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
+            mock_service = mock_service_class.return_value
+            mock_service.list_all_tokens = AsyncMock(return_value=[mock_token_record, other_user_token])
+            mock_service.list_user_tokens = AsyncMock(return_value=[mock_token_record])
+            mock_service.get_token_revocation = AsyncMock(return_value=None)
+
+            response = await list_tokens(include_inactive=False, limit=50, offset=0, db=mock_db, current_user=mock_admin_user)
+
+            assert isinstance(response, TokenListResponse)
+            assert len(response.tokens) == 2
+            owners = {token.user_email for token in response.tokens}
+            assert owners == {"test@example.com", "other@example.com"}
+            mock_service.list_all_tokens.assert_called_once_with(
+                include_inactive=False,
+                limit=50,
+                offset=0,
+            )
+            mock_service.list_user_tokens.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_tokens_non_admin_sees_only_own_tokens(self, mock_db, mock_current_user, mock_token_record):
+        """Non-admin calling GET /tokens still gets only their own tokens."""
+        with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
+            mock_service = mock_service_class.return_value
+            mock_service.list_user_tokens = AsyncMock(return_value=[mock_token_record])
+            mock_service.list_all_tokens = AsyncMock(return_value=[])
+            mock_service.get_token_revocation = AsyncMock(return_value=None)
+
+            response = await list_tokens(include_inactive=False, limit=50, offset=0, db=mock_db, current_user=mock_current_user)
+
+            assert len(response.tokens) == 1
+            mock_service.list_user_tokens.assert_called_once_with(
+                user_email="test@example.com",
+                include_inactive=False,
+                limit=50,
+                offset=0,
+            )
+            mock_service.list_all_tokens.assert_not_called()
+
 
 class TestGetToken:
     """Test cases for get_token endpoint."""
@@ -600,16 +660,21 @@ class TestEdgeCases:
             assert response.offset == 50
 
     @pytest.mark.asyncio
-    async def test_admin_list_all_tokens_no_email(self, mock_db, mock_admin_user):
-        """Test admin listing all tokens without email filter."""
+    async def test_admin_list_all_tokens_no_email(self, mock_db, mock_admin_user, mock_token_record):
+        """Admin listing all tokens without email filter returns tokens for every user."""
         with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
-            mock_service_class.return_value
+            mock_service = mock_service_class.return_value
+            mock_service.list_all_tokens = AsyncMock(return_value=[mock_token_record])
+            mock_service.get_token_revocation = AsyncMock(return_value=None)
 
             response = await list_all_tokens(user_email=None, include_inactive=False, limit=100, offset=0, current_user=mock_admin_user, db=mock_db)
 
-            # Currently returns empty list when no email provided
-            assert response.tokens == []
-            assert response.total == 0
+            assert response.total == 1
+            mock_service.list_all_tokens.assert_called_once_with(
+                include_inactive=False,
+                limit=100,
+                offset=0,
+            )
 
     @pytest.mark.asyncio
     async def test_create_token_with_complex_scope(self, mock_db, mock_current_user, mock_token_record):

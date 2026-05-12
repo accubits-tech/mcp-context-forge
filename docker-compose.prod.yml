@@ -165,6 +165,13 @@ services:
       - MCPGATEWAY_DEPLOY_LOG_RETENTION_DAYS=${MCPGATEWAY_DEPLOY_LOG_RETENTION_DAYS:-14}
       - MCPGATEWAY_DEPLOY_HEALTH_CHECK_INTERVAL=${MCPGATEWAY_DEPLOY_HEALTH_CHECK_INTERVAL:-30}
       - MCPGATEWAY_DEPLOY_RESTART_MAX_RETRIES=${MCPGATEWAY_DEPLOY_RESTART_MAX_RETRIES:-3}
+      # Containerized gateway can't reach the host's loopback via 127.0.0.1.
+      # Publish on 0.0.0.0 so the bridge gateway IP is reachable, and dial
+      # host.docker.internal (added below via extra_hosts on Linux).
+      # SECURITY: ensure host firewall blocks the deploy port range from
+      # the public internet — these ports are now reachable on all host IFs.
+      - MCPGATEWAY_DEPLOY_BIND_HOST=${MCPGATEWAY_DEPLOY_BIND_HOST:-0.0.0.0}
+      - MCPGATEWAY_DEPLOY_BRIDGE_HOST=${MCPGATEWAY_DEPLOY_BRIDGE_HOST:-host.docker.internal}
     # Mounts required for the Deploy MCP Server feature. Mounting
     # docker.sock grants host-root-equivalent access via the Docker daemon
     # to anyone who can reach this container — see the security warning on
@@ -179,6 +186,12 @@ services:
     # and set DOCKER_GID=<value> in .env. Common defaults: 999, 998, 100.
     group_add:
       - "${DOCKER_GID:-999}"
+    # Linux Docker doesn't ship host.docker.internal by default. The
+    # `host-gateway` magic value resolves to the host's bridge IP, which is
+    # reachable from inside the container — used by MCPGATEWAY_DEPLOY_BRIDGE_HOST
+    # to dial the deployed container's host-published port from this container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

@@ -122,7 +122,7 @@ async def list_tokens(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_with_permissions),
 ) -> TokenListResponse:
-    """List API tokens for the current user.
+    """List API tokens for the current user, or every user when called by an admin.
 
     Args:
         include_inactive: Include inactive/expired tokens
@@ -132,7 +132,8 @@ async def list_tokens(
         db: Database session
 
     Returns:
-        TokenListResponse: List of user's API tokens
+        TokenListResponse: List of API tokens. Admins see tokens owned by every user;
+            non-admins see only their own.
 
     Examples:
         >>> import asyncio
@@ -140,12 +141,19 @@ async def list_tokens(
         True
     """
     service = TokenCatalogService(db)
-    tokens = await service.list_user_tokens(
-        user_email=current_user["email"],
-        include_inactive=include_inactive,
-        limit=limit,
-        offset=offset,
-    )
+    if current_user.get("is_admin"):
+        tokens = await service.list_all_tokens(
+            include_inactive=include_inactive,
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        tokens = await service.list_user_tokens(
+            user_email=current_user["email"],
+            include_inactive=include_inactive,
+            limit=limit,
+            offset=offset,
+        )
 
     token_responses = []
     for token in tokens:
@@ -396,9 +404,11 @@ async def list_all_tokens(
             offset=offset,
         )
     else:
-        # This would need a new method in service for all tokens
-        # For now, return empty list - can implement later if needed
-        tokens = []
+        tokens = await service.list_all_tokens(
+            include_inactive=include_inactive,
+            limit=limit,
+            offset=offset,
+        )
 
     token_responses = []
     for token in tokens:

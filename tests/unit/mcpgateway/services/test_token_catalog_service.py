@@ -467,6 +467,36 @@ class TestTokenCatalogService:
         # Should use default limit of 50
 
     @pytest.mark.asyncio
+    async def test_list_all_tokens_returns_tokens_for_every_user(self, token_service, mock_db, mock_api_token):
+        """list_all_tokens returns tokens regardless of user_email (admin oversight)."""
+        other_token = MagicMock(spec=EmailApiToken)
+        other_token.id = "token-other"
+        other_token.user_email = "other@example.com"
+        other_token.is_active = True
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [mock_api_token, other_token]
+        mock_db.execute.return_value = mock_result
+
+        tokens = await token_service.list_all_tokens()
+
+        assert len(tokens) == 2
+        owners = {token.user_email for token in tokens}
+        assert owners == {"test@example.com", "other@example.com"}
+        mock_db.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_list_all_tokens_invalid_limit_uses_default(self, token_service, mock_db):
+        """list_all_tokens normalizes invalid limit values like list_user_tokens."""
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db.execute.return_value = mock_result
+
+        await token_service.list_all_tokens(limit=2000)
+        await token_service.list_all_tokens(limit=-5)
+        # No exception means the method handled out-of-range values
+
+    @pytest.mark.asyncio
     async def test_list_team_tokens_success(self, token_service, mock_db, mock_team_member, mock_api_token):
         """Test list_team_tokens method - successful."""
         mock_db.execute.return_value.scalar_one_or_none.return_value = mock_team_member

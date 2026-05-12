@@ -2767,6 +2767,14 @@ class DeploymentSpec(BaseModel):
     env: Optional[Dict[str, str]] = Field(None, description="Environment variables passed to the container (encrypted at rest)")
     resource_limits: Optional[Dict[str, Any]] = Field(None, description="Per-deployment override of CPU/memory/pids/disk/timeout limits; gateway-configured defaults apply otherwise")
     egress_allowlist: Optional[List[str]] = Field(None, description="List of hosts the container may reach; empty/None means --network=none")
+    # When the FE wants to render a live security-scan stepper while the deploy is in flight,
+    # it can generate a UUID-hex up front and pass it here. The gateway accepts only canonical
+    # 32-char hex strings (no dashes) to avoid a malicious caller injecting an arbitrary id.
+    client_gateway_id: Optional[str] = Field(
+        None,
+        description="Optional client-generated gateway id (32 hex chars); enables FE-side scan-progress polling",
+        pattern=r"^[a-f0-9]{32}$",
+    )
 
     @field_validator("git_url")
     @classmethod
@@ -2837,6 +2845,65 @@ class DeploymentStatus(BaseModel):
     last_started_at: Optional[datetime] = Field(None, description="Timestamp of the last container start")
     health: Optional[str] = Field(None, description="healthy|unhealthy|unknown")
     error: Optional[str] = Field(None, description="Short error summary if build_status is 'failed'")
+
+
+# ---------------------------------------------------------------------------
+# Vulnerability-scan gate schemas
+# ---------------------------------------------------------------------------
+
+SecuritySeverity = Literal["critical", "high", "medium", "low", "info"]
+SecurityGateOutcome = Literal["pass", "warn", "block", "error"]
+SecurityStageStatus = Literal["pending", "running", "passed", "warned", "failed", "skipped", "error"]
+
+
+class SecurityScanFinding(BaseModel):
+    """One finding produced by a security scanner."""
+
+    id: str = Field(..., description="Stable identifier for this finding (uuid)")
+    scanner: str = Field(..., description="Scanner that produced this finding (gitleaks|semgrep|osv|trivy|hadolint|dockle|mcp-rules|malicious-pkg)")
+    stage: str = Field(..., description="Pipeline stage: secrets|sast|sca|malicious|mcp_rules|image_vuln|image_hygiene")
+    severity: SecuritySeverity = Field(..., description="Normalized severity")
+    rule_id: str = Field(..., description="Scanner-native rule identifier")
+    file: Optional[str] = Field(None, description="Path within the source tree (relative)")
+    line: Optional[int] = Field(None, description="Line number where the finding was detected")
+    message: str = Field(..., description="Human-readable description of the finding")
+    cwe: Optional[str] = Field(None, description="CWE identifier when known (e.g. CWE-78)")
+    raw_excerpt: Optional[str] = Field(None, description="Truncated source excerpt or scanner output (capped at 2 KB)")
+
+
+class SecurityScanStageStatus(BaseModel):
+    """Per-stage status entry for the live progress view."""
+
+    name: str = Field(..., description="Stage name (machine-readable)")
+    label: str = Field(..., description="Human-readable label rendered in the FE stepper")
+    scanner: Optional[str] = Field(None, description="Scanner backing this stage, if any")
+    status: SecurityStageStatus = Field(..., description="pending|running|passed|warned|failed|skipped|error")
+    started_at: Optional[datetime] = Field(None, description="When the stage started")
+    finished_at: Optional[datetime] = Field(None, description="When the stage finished")
+    findings_count_by_severity: Dict[str, int] = Field(default_factory=dict, description="Severity counts for this stage")
+    error: Optional[str] = Field(None, description="Error message if status='error'")
+
+
+class SecurityScanSummary(BaseModel):
+    """Compact summary persisted on the gateway row for quick display."""
+
+    scan_run_id: str = Field(..., description="Identifier for this scan run")
+    overall_status: SecurityStageStatus = Field(..., description="Aggregate status across all stages")
+    gate_outcome: SecurityGateOutcome = Field(..., description="Whether the gate allows deploy")
+    blocking_findings_count: int = Field(0, description="Number of findings that would block deploy")
+    counts_by_severity: Dict[str, int] = Field(default_factory=dict, description="Total counts by severity across all stages")
+    stages: List[SecurityScanStageStatus] = Field(default_factory=list, description="Per-stage status snapshot")
+
+
+class SecurityScanReport(BaseModel):
+    """Full security-scan report including findings."""
+
+    summary: SecurityScanSummary
+    findings: List[SecurityScanFinding] = Field(default_factory=list, description="All findings produced by the run")
+    source_sha256: Optional[str] = Field(None, description="Source-archive SHA-256 the scan ran against")
+    image_tag: Optional[str] = Field(None, description="Image tag scanned in post-build stages")
+    started_at: Optional[datetime] = Field(None, description="When the scan started")
+    completed_at: Optional[datetime] = Field(None, description="When the scan completed")
 
 
 class GatewayCreate(BaseModel):

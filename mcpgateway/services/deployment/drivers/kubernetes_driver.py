@@ -13,7 +13,7 @@ node with a Docker-compatible socket (e.g. Podman) and use the Docker driver.
 
 # Standard
 from pathlib import Path
-from typing import AsyncIterator, Dict
+from typing import AsyncIterator, Dict, List, Optional
 
 # First-Party
 from mcpgateway.services.deployment.drivers.base import (
@@ -22,6 +22,8 @@ from mcpgateway.services.deployment.drivers.base import (
     ContainerStatus,
     DriverUnavailableError,
     EgressPolicy,
+    OneshotMount,
+    OneshotResult,
     ResourceLimits,
     RuntimeDriver,
 )
@@ -58,4 +60,17 @@ class KubernetesDriver(RuntimeDriver):
         raise DriverUnavailableError(_NOT_IMPLEMENTED_MSG)
 
     async def prune(self, image_tag: str) -> None:
+        raise DriverUnavailableError(_NOT_IMPLEMENTED_MSG)
+
+    async def run_oneshot(
+        self,
+        image: str,
+        args: List[str],
+        mounts: List[OneshotMount],
+        *,
+        timeout_s: int,
+        network_none: bool = True,
+        workdir: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+    ) -> OneshotResult:
         raise DriverUnavailableError(_NOT_IMPLEMENTED_MSG)

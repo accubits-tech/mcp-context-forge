@@ -2927,6 +2927,14 @@ class Gateway(Base):
     deployment_last_built_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     deployment_last_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Vulnerability-scan gate state (populated when source is built via the deployment pipeline)
+    deployment_security_scan_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # pending|running|passed|warned|blocked|error|skipped
+    deployment_security_scan_run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    deployment_security_scan_report_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    deployment_security_scan_summary: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    deployment_security_scan_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deployment_security_scan_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Header passthrough configuration
     passthrough_headers: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)  # Store list of strings as JSON array
 
@@ -3015,6 +3023,36 @@ def update_tool_names_on_gateway_update(_mapper, connection, target):
 
     # 5. Execute the statement using the connection from the ongoing transaction.
     connection.execute(stmt)
+
+
+class GatewaySecurityScanFinding(Base):
+    """A single vulnerability-scan finding produced for a deployed gateway.
+
+    Findings are grouped by ``scan_run_id``; the parent ``Gateway`` row carries the
+    summary status, while detailed records live here so the UI can paginate and
+    filter without inflating the gateway row.
+    """
+
+    __tablename__ = "gateway_security_scan_findings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    gateway_id: Mapped[str] = mapped_column(String(36), ForeignKey("gateways.id", ondelete="CASCADE"), index=True, nullable=False)
+    scan_run_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    scanner: Mapped[str] = mapped_column(String(32), nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    file: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    line: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    cwe: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    raw_excerpt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        Index("ix_security_findings_gw_sev", "gateway_id", "severity"),
+        Index("ix_security_findings_gw_run", "gateway_id", "scan_run_id"),
+    )
 
 
 class A2AAgent(Base):

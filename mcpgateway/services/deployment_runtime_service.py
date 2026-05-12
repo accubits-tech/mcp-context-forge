@@ -40,6 +40,8 @@ from mcpgateway.services.deployment.drivers.base import (
     RuntimeDriver,
 )
 from mcpgateway.services.deployment.templates import render_containerfile
+from mcpgateway.services.security.errors import SecurityGateError
+from mcpgateway.services.security.runner import SecurityScanRunner
 from mcpgateway.utils.services_auth import decode_auth
 
 logger = logging.getLogger("mcpgateway.deployment_runtime_service")
@@ -83,6 +85,10 @@ class DeploymentRuntimeService:
         self._health_check_task: Optional[asyncio.Task[None]] = None
         self._initialized = False
         self._driver: Optional[RuntimeDriver] = None
+        # Cached scan reports keyed by gateway_id, populated by the security
+        # runner during deploy(). Survives a SecurityGateError raise so the
+        # caller can still persist the partial report + findings to the DB.
+        self._scan_reports: Dict[str, Any] = {}
 
     def driver(self) -> RuntimeDriver:
         if self._driver is None:
@@ -171,12 +177,47 @@ class DeploymentRuntimeService:
             build_ctx = build_ctx / subpath
         render_containerfile(runtime=runtime, entry_mode=entry_mode, entry_command=entry_command, build_ctx=build_ctx)
 
+        # 2.5) Pre-build vulnerability-scan gate (secrets, SAST, SCA, malicious-package, MCP rules).
+        # Runs only when the feature flag is enabled. Each scanner runs as an ephemeral
+        # sandboxed container via the same RuntimeDriver used at runtime; no user code
+        # executes on the host. A blocking outcome short-circuits the build entirely.
+        artifact_dir = ingest_result.src_dir.parent
+        scan_runner = None
+        if settings.mcpgateway_security_scan_enabled:
+            scan_runner = SecurityScanRunner(driver=self.driver, semaphore=self._build_semaphore)
+            pre_report = await scan_runner.run_pre_build(
+                gateway_id=gateway_id,
+                src_dir=build_ctx,
+                source_sha256=ingest_result.source_sha256,
+                artifact_dir=artifact_dir,
+            )
+            self._scan_reports[gateway_id] = pre_report
+            if pre_report.summary.gate_outcome == "block":
+                raise SecurityGateError(stage="pre_build", report=pre_report)
+
         # 3) Build the image.
         limits = self._limits(resource_limits)
         image_tag = f"mcpgateway-deploy/{gateway_id}:{ingest_result.source_sha256[:12]}"
         assert self._build_semaphore is not None
         async with self._build_semaphore:
             build_result = await self.driver().build(build_ctx, image_tag, limits)
+
+        # 3.5) Post-build image scans (image vuln + image hygiene).
+        if scan_runner is not None:
+            post_report = await scan_runner.run_post_build(
+                gateway_id=gateway_id,
+                image_tag=image_tag,
+                pre_report=self._scan_reports[gateway_id],
+                artifact_dir=artifact_dir,
+            )
+            self._scan_reports[gateway_id] = post_report
+            if post_report.summary.gate_outcome == "block":
+                # Tear down the just-built image so it never reaches the runtime.
+                try:
+                    await self.driver().prune(image_tag)
+                except Exception as e:  # noqa: BLE001 - best effort
+                    logger.warning("post-build gate: image prune of %s failed: %s", image_tag, e)
+                raise SecurityGateError(stage="post_build", report=post_report)
 
         # 4) Allocate a 127.0.0.1 host port and start the container.
         port = self._allocate_port()
@@ -206,7 +247,7 @@ class DeploymentRuntimeService:
         # by this point the image is built and the container has been started; we're
         # only waiting for the in-container server to bind its port. Capping at 60s
         # means a misconfigured deployment fails fast instead of blocking for 10min.
-        bridge_url = f"http://127.0.0.1:{port}"
+        bridge_url = f"http://{settings.mcpgateway_deploy_bridge_host}:{port}"
         try:
             await self._wait_for_health(bridge_url, timeout=60)
         except Exception:
@@ -300,6 +341,19 @@ class DeploymentRuntimeService:
             "restart_count": record.restart_count,
             "container_id": record.handle.container_id,
         }
+
+    def get_scan_report(self, gateway_id: str) -> Optional[Any]:
+        """Return the most-recent in-memory ScanReport for a deploy attempt.
+
+        Populated by SecurityScanRunner during deploy(); survives a
+        SecurityGateError raise so the caller can persist the partial report.
+        Returns None when scanning was disabled or the gateway hasn't been built yet.
+        """
+        return self._scan_reports.get(gateway_id)
+
+    def consume_scan_report(self, gateway_id: str) -> Optional[Any]:
+        """Pop the cached scan report. Use after the caller has persisted it."""
+        return self._scan_reports.pop(gateway_id, None)
 
     async def logs(self, gateway_id: str, tail: int = 500) -> str:
         """Return recent container logs as a single string (SSE wrapper converts this)."""

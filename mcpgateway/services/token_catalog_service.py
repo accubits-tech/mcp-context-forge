@@ -454,6 +454,35 @@ class TokenCatalogService:
         result = self.db.execute(query)
         return result.scalars().all()
 
+    async def list_all_tokens(self, include_inactive: bool = False, limit: int = 100, offset: int = 0) -> List[EmailApiToken]:
+        """List API tokens across all users (admin oversight).
+
+        Args:
+            include_inactive: Include inactive/expired tokens
+            limit: Maximum tokens to return
+            offset: Number of tokens to skip
+
+        Returns:
+            List[EmailApiToken]: Tokens owned by every user in the system
+
+        Examples:
+            >>> service = TokenCatalogService(None)  # Would use real DB session
+            >>> # Returns List[EmailApiToken] for all users
+        """
+        if limit <= 0 or limit > 1000:
+            limit = 50
+        offset = max(offset, 0)
+
+        query = select(EmailApiToken)
+
+        if not include_inactive:
+            query = query.where(and_(EmailApiToken.is_active.is_(True), or_(EmailApiToken.expires_at.is_(None), EmailApiToken.expires_at > utc_now())))
+
+        query = query.order_by(EmailApiToken.created_at.desc()).limit(limit).offset(offset)
+
+        result = self.db.execute(query)
+        return result.scalars().all()
+
     async def list_team_tokens(self, team_id: str, user_email: str, include_inactive: bool = False, limit: int = 100, offset: int = 0) -> List[EmailApiToken]:
         """List API tokens for a team (only accessible by team owners).
 

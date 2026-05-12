@@ -1,0 +1,67 @@
+# Curated denylist of known-malicious / typosquat package names.
+# Sources to refresh from periodically:
+#   - https://github.com/lincolnloop/pypi-malregistry
+#   - https://github.com/safetycli/safetydb (advisories with type=malware)
+#   - https://github.com/snyk/security-advisories (npm)
+# Format:
+#   <ecosystem>:
+#     - name: <package_name>
+#       reason: <short_explanation>
+pypi:
+  - name: requets
+    reason: typosquat of 'requests'
+  - name: reqests
+    reason: typosquat of 'requests'
+  - name: python-dateutils
+    reason: typosquat of 'python-dateutil'
+  - name: urllib
+    reason: confused-package; the correct stdlib is 'urllib' (built-in) - PyPI 'urllib' is unmaintained typosquat
+  - name: beautfulsoup4
+    reason: typosquat of 'beautifulsoup4'
+  - name: cryptograpy
+    reason: typosquat of 'cryptography'
+  - name: djangorestfraemwork
+    reason: typosquat of 'djangorestframework'
+  - name: pip-trusted
+    reason: typosquat exploiting --trusted-host wording
+  - name: pythorch
+    reason: typosquat of 'torch'/'pytorch'
+  - name: tensorflo
+    reason: typosquat of 'tensorflow'
+  - name: psycopg2-binary-mac
+    reason: bogus package masquerading as psycopg2
+  - name: setup-tools
+    reason: typosquat of 'setuptools'
+  - name: setuptools-rust-extension
+    reason: previously flagged for malicious build script
+  - name: types-mock-extra
+    reason: previously flagged for credential exfil
+  - name: nodejs-utils
+    reason: previously flagged for postinstall backdoor
+npm:
+  - name: colorsama
+    reason: typosquat of 'chalk'/'colors'
+  - name: discord-fix
+    reason: previously flagged credential stealer
+  - name: discord-selfbot-v14
+    reason: previously flagged credential stealer
+  - name: noblox.js-proxy
+    reason: previously flagged token stealer
+  - name: lodahs
+    reason: typosquat of 'lodash'
+  - name: lodash-utils
+    reason: typosquat of 'lodash'
+  - name: js-cookies
+    reason: typosquat of 'js-cookie'
+  - name: ua-parser-js-fix
+    reason: previously flagged miner
+  - name: rc-cli
+    reason: previously flagged supply-chain attack
+  - name: coa-rc
+    reason: previously flagged supply-chain attack
+  - name: eslint-scope-fix
+    reason: previously flagged supply-chain attack
+  - name: eslint-config-airbnb-extra
+    reason: previously flagged credential exfil
+  - name: bb-builder
+    reason: previously flagged credential exfil

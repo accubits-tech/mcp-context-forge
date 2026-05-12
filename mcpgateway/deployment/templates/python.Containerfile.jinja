@@ -8,6 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
+# System packages required by common MCP servers and our runtime bridge:
+#   - git: GitPython does an eager refresh on import; without it servers like
+#     mcp-server-git crash before producing any output.
+RUN apt-get update && apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/*
+
 # Non-root user UID:GID 10001:10001; the container also runs with --user 10001:10001.
 RUN groupadd --system --gid 10001 app && \
     useradd  --system --uid 10001 --gid 10001 --home-dir /app --shell /usr/sbin/nologin app && \
@@ -33,7 +39,10 @@ RUN set -eu; \
 
 {% if entry_mode == "stdio" %}
 # Stdio entry mode: install the gateway's translate module so we can bridge stdio <-> HTTP.
-RUN pip install mcp-contextforge-gateway
+# cryptography is constrained below 47 because the 47.x/48.x prebuilt wheels SIGILL on
+# import under some virtualized arm64 hosts (e.g. Docker Desktop on Apple Silicon).
+# 46.x satisfies mcp-contextforge-gateway's >=46.0.3 requirement.
+RUN pip install 'cryptography>=46.0.3,<47' mcp-contextforge-gateway
 {% endif %}
 
 ENV PORT=8080 \

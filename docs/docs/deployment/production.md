@@ -74,6 +74,8 @@ cd ../mcp-foundry-fe
 docker build -t ghcr.io/accubits-tech/mcp-foundry-fe:latest .
 # x86_64 (linux/amd64)
 docker buildx build --platform linux/amd64 -t ghcr.io/accubits-tech/mcp-foundry-fe:latest .
+docker buildx build --platform linux/amd64 -t ghcr.io/accubits-tech/mcp-foundry-bud-fe:latest .
+
 
 # Nginx
 cd ../mcp-foundry-be
@@ -94,6 +96,7 @@ docker build --build-arg VITE_API_BASE_URL=https://api.yourdomain.com \
 ```bash
 docker push ghcr.io/accubits-tech/mcp-foundry:latest
 docker push ghcr.io/accubits-tech/mcp-foundry-fe:latest
+docker push ghcr.io/accubits-tech/mcp-foundry-bud-fe:latest
 docker push ghcr.io/accubits-tech/mcp-foundry-nginx:latest
 ```
 

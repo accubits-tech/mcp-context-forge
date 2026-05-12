@@ -65,6 +65,25 @@ class ContainerStatus:
     extra: Dict[str, str] = field(default_factory=dict)
 
 
+@dataclass
+class OneshotMount:
+    """Read-only host-path mount for a one-shot container."""
+
+    host_path: Path
+    container_path: str
+    read_only: bool = True
+
+
+@dataclass
+class OneshotResult:
+    """Outcome of a one-shot container run (e.g. a vulnerability scanner)."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+
 class RuntimeDriver(Protocol):
     """Protocol every container runtime driver must implement.
 
@@ -101,6 +120,25 @@ class RuntimeDriver(Protocol):
 
     async def prune(self, image_tag: str) -> None:
         """Remove the image. Idempotent. Called after the last container is stopped."""
+        ...
+
+    async def run_oneshot(
+        self,
+        image: str,
+        args: List[str],
+        mounts: List[OneshotMount],
+        *,
+        timeout_s: int,
+        network_none: bool = True,
+        workdir: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+    ) -> OneshotResult:
+        """Run a one-shot container (e.g. a vulnerability scanner) with sandbox defaults.
+
+        Implementations MUST enforce: --read-only --cap-drop=ALL --user 10001
+        --tmpfs /tmp:rw,size=128m and (when network_none=True) --network=none. The
+        container is removed when done. Captured stdout/stderr is returned in full.
+        """
         ...
 
 

@@ -7476,6 +7476,64 @@ async def admin_deploy_upload(
     return JSONResponse(content={"upload_token": token, "filename": archive.filename, "size_bytes": len(data), "success": True}, status_code=200)
 
 
+# Sample templates that ship as ready-to-deploy MCP servers. Users download
+# one as a zip, modify it, and upload it back through /gateways/deploy/upload.
+# Source dirs live at <repo>/mcp-servers/sample-templates/{python,node}/.
+_DEPLOY_SAMPLE_TEMPLATE_RUNTIMES = ("python", "node")
+
+
+@admin_router.get("/gateways/deploy/sample-template")
+async def admin_deploy_sample_template(
+    runtime: str,
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),  # pylint: disable=unused-argument
+):
+    """Stream a ready-to-deploy sample MCP server zip for the requested runtime.
+
+    Args:
+        runtime: One of "python" or "node".
+        user: Authenticated user (auth-gates the download).
+
+    Returns:
+        StreamingResponse with application/zip body, or JSONResponse on error.
+    """
+    # First-Party
+    from mcpgateway.config import settings  # pylint: disable=import-outside-toplevel
+
+    # Standard
+    import zipfile  # pylint: disable=import-outside-toplevel
+
+    if not settings.mcpgateway_deploy_enabled:
+        return JSONResponse(content={"message": "Deploy feature is disabled", "success": False}, status_code=403)
+
+    if runtime not in _DEPLOY_SAMPLE_TEMPLATE_RUNTIMES:
+        return JSONResponse(
+            content={
+                "message": f"unknown runtime: {runtime!r} (expected one of {', '.join(_DEPLOY_SAMPLE_TEMPLATE_RUNTIMES)})",
+                "success": False,
+            },
+            status_code=400,
+        )
+
+    # Resolve <repo>/mcp-servers/sample-templates/<runtime>. admin.py lives at
+    # <repo>/mcpgateway/admin.py, so parent.parent is the repo root.
+    template_dir = Path(__file__).resolve().parent.parent / "mcp-servers" / "sample-templates" / runtime
+    if not template_dir.is_dir():
+        return JSONResponse(content={"message": f"sample template for {runtime} is missing on this server", "success": False}, status_code=500)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(template_dir.rglob("*")):
+            if path.is_file():
+                archive.write(path, arcname=path.relative_to(template_dir).as_posix())
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="mcp-sample-template-{runtime}.zip"'},
+    )
+
+
 @admin_router.post("/gateways/deploy")
 async def admin_deploy_gateway(
     request: Request,
@@ -7589,16 +7647,16 @@ async def admin_deployment_status(
 @admin_router.get("/gateways/{gateway_id}/deployment/logs")
 async def admin_deployment_logs(
     gateway_id: str,
-    kind: str = Query("runtime", pattern="^(build|runtime)$"),
+    kind: str = Query("runtime", pattern="^(build|runtime|scan)$"),
     tail: int = Query(500, ge=1, le=5000),
     db: Session = Depends(get_db),
     user: dict[str, Any] = Depends(get_current_user_with_permissions),
 ) -> Response:
-    """Return build or runtime logs for a deployed gateway.
+    """Return build / runtime / scan logs for a deployed gateway.
 
     Args:
         gateway_id: Gateway ID.
-        kind: 'build' or 'runtime'.
+        kind: 'build', 'runtime', or 'scan'.
         tail: Number of lines / bytes to return (runtime uses lines; build uses KiB).
         db: Database session.
         user: Authenticated user.
@@ -7611,9 +7669,152 @@ async def admin_deployment_logs(
 
     if kind == "build":
         body = await deployment_runtime_service.build_log(gateway_id, tail_bytes=tail * 128)  # ~128 bytes per 'line'
+    elif kind == "scan":
+        # Scan log is colocated with build.log under the same artifact dir.
+        try:
+            from pathlib import Path  # pylint: disable=import-outside-toplevel
+            from mcpgateway.config import settings as _settings  # pylint: disable=import-outside-toplevel
+
+            log_path = Path(_settings.mcpgateway_deploy_artifact_dir).resolve() / gateway_id / "scan.log"
+            body = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        except OSError:
+            body = ""
     else:
         body = await deployment_runtime_service.logs(gateway_id, tail=tail)
     return Response(content=body, media_type="text/plain", status_code=200)
+
+
+@admin_router.get("/gateways/{gateway_id}/deployment/security-scan/status")
+async def admin_security_scan_status(
+    gateway_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Return live (or persisted) per-stage status of the vulnerability-scan run.
+
+    The FE polls this endpoint every 2s starting the moment it clicks submit -
+    long before the gateway row is written to the DB (the row is only created
+    at the end of register_gateway, AFTER scan + build + container start). So
+    we check the in-memory ProgressTracker first and only fall back to the DB
+    row's persisted summary once the deploy has finalized.
+    """
+    # First-Party
+    from mcpgateway.db import Gateway as DbGw  # pylint: disable=import-outside-toplevel
+    from mcpgateway.services.security.progress import TRACKER  # pylint: disable=import-outside-toplevel
+
+    snapshot = TRACKER.snapshot(gateway_id)
+    if snapshot is not None:
+        body = {
+            "scan_run_id": snapshot.scan_run_id,
+            "overall_status": snapshot.overall_status,
+            "gate_outcome": snapshot.gate_outcome,
+            "blocking_findings_count": snapshot.blocking_findings_count,
+            "counts_by_severity": snapshot.counts_by_severity,
+            "stages": [
+                {
+                    "name": s.name,
+                    "label": s.label,
+                    "scanner": s.scanner,
+                    "status": s.status,
+                    "started_at": s.started_at.isoformat() if s.started_at else None,
+                    "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+                    "error": s.error,
+                    "findings_count_by_severity": s.findings_count_by_severity,
+                }
+                for s in snapshot.stages
+            ],
+            "live": True,
+        }
+        return JSONResponse(content={"status": body, "success": True}, status_code=200)
+
+    # No live scan in memory - try the persisted row.
+    gw = db.get(DbGw, gateway_id)
+    if gw is None:
+        # Two valid reasons we can land here: (a) the deploy was just submitted
+        # and the BE hasn't yet reached the point where the runner initializes
+        # the tracker; (b) the gateway_id is bogus. Either way the FE should
+        # keep polling - returning 200 with status=None lets it render the
+        # "Starting security checks" placeholder without hitting a 404 spinner.
+        return JSONResponse(
+            content={"status": None, "message": "No scan recorded yet for this gateway", "success": True},
+            status_code=200,
+        )
+
+    persisted = gw.deployment_security_scan_summary or None
+    if persisted is None:
+        return JSONResponse(
+            content={"status": None, "message": "No scan recorded for this gateway", "success": True},
+            status_code=200,
+        )
+    body = dict(persisted)
+    body["live"] = False
+    return JSONResponse(content={"status": body, "success": True}, status_code=200)
+
+
+@admin_router.get("/gateways/{gateway_id}/deployment/security-scan/findings")
+async def admin_security_scan_findings(
+    gateway_id: str,
+    stage: Optional[str] = Query(None),
+    severity: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """Return paginated security-scan findings for a gateway."""
+    # First-Party
+    from mcpgateway.db import GatewaySecurityScanFinding  # pylint: disable=import-outside-toplevel
+
+    q = db.query(GatewaySecurityScanFinding).filter(GatewaySecurityScanFinding.gateway_id == gateway_id)
+    if stage:
+        q = q.filter(GatewaySecurityScanFinding.stage == stage)
+    if severity:
+        q = q.filter(GatewaySecurityScanFinding.severity == severity)
+    total = q.count()
+    rows = (
+        q.order_by(GatewaySecurityScanFinding.severity.desc(), GatewaySecurityScanFinding.scanner)
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
+    items = [
+        {
+            "id": r.id,
+            "scan_run_id": r.scan_run_id,
+            "scanner": r.scanner,
+            "stage": r.stage,
+            "severity": r.severity,
+            "rule_id": r.rule_id,
+            "file": r.file,
+            "line": r.line,
+            "message": r.message,
+            "cwe": r.cwe,
+            "raw_excerpt": r.raw_excerpt,
+        }
+        for r in rows
+    ]
+    return JSONResponse(content={"items": items, "total": total, "page": page, "size": size, "success": True}, status_code=200)
+
+
+@admin_router.get("/gateways/{gateway_id}/deployment/security-scan/report.json")
+async def admin_security_scan_report(
+    gateway_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user_with_permissions),
+) -> Response:
+    """Stream the full scan-report.json artifact written by the runner."""
+    # First-Party
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+    from mcpgateway.config import settings as _settings  # pylint: disable=import-outside-toplevel
+
+    path = Path(_settings.mcpgateway_deploy_artifact_dir).resolve() / gateway_id / "scan-report.json"
+    if not path.exists():
+        return JSONResponse(content={"message": "No scan report on disk for this gateway", "success": False}, status_code=404)
+    try:
+        body = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return JSONResponse(content={"message": f"Could not read scan report: {e}", "success": False}, status_code=500)
+    return Response(content=body, media_type="application/json", status_code=200)
 
 
 @admin_router.post("/gateways/{gateway_id}/deployment/restart")
@@ -7645,7 +7846,7 @@ async def admin_deployment_restart(
         if new_port is None:
             return JSONResponse(content={"message": "No active container to restart", "success": False}, status_code=409)
         gw.deployment_host_port = new_port
-        gw.url = f"http://127.0.0.1:{new_port}/mcp"
+        gw.url = f"http://{settings.mcpgateway_deploy_bridge_host}:{new_port}/mcp"
         gw.deployment_last_started_at = datetime.now(timezone.utc)
         db.commit()
         return JSONResponse(content={"message": "restarted", "host_port": new_port, "success": True}, status_code=200)
@@ -7726,7 +7927,7 @@ async def admin_deployment_rebuild(
         gw.deployment_build_status = "ready"
         gw.deployment_last_built_at = datetime.now(timezone.utc)
         gw.deployment_last_started_at = datetime.now(timezone.utc)
-        gw.url = f"http://127.0.0.1:{host_port}/mcp"
+        gw.url = f"http://{settings.mcpgateway_deploy_bridge_host}:{host_port}/mcp"
         db.commit()
         return JSONResponse(content={"message": "rebuilt", "host_port": host_port, "image_tag": image_tag, "success": True}, status_code=200)
     except Exception as e:  # noqa: BLE001

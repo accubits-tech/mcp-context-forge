@@ -1,0 +1,106 @@
+rules:
+  - id: mcp-tool-eval-on-input
+    severity: ERROR
+    languages: [python]
+    message: "MCP tool handler evaluates user-controlled input via eval/exec"
+    metadata:
+      category: security
+      cwe: CWE-95
+      mcp-risk: tool-poisoning
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @$DECO.tool(...)
+              def $F(..., $ARG, ...):
+                ...
+                eval($ARG, ...)
+          - pattern: |
+              @$DECO.tool(...)
+              def $F(..., $ARG, ...):
+                ...
+                exec($ARG, ...)
+
+  - id: mcp-tool-shell-on-input
+    severity: ERROR
+    languages: [python]
+    message: "MCP tool spawns a shell with user-controlled args (subprocess shell=True)"
+    metadata:
+      category: security
+      cwe: CWE-78
+      mcp-risk: command-injection
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @$DECO.tool(...)
+              def $F(..., $ARG, ...):
+                ...
+                subprocess.$M(..., shell=True, ...)
+          - pattern: |
+              @$DECO.tool(...)
+              def $F(..., $ARG, ...):
+                ...
+                os.system(...)
+
+  - id: mcp-tool-shell-on-input-js
+    severity: ERROR
+    languages: [javascript, typescript]
+    message: "MCP tool spawns a shell via child_process.exec/execSync with concatenated args"
+    metadata:
+      category: security
+      cwe: CWE-78
+      mcp-risk: command-injection
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec($X, ...)
+          - pattern: child_process.execSync($X, ...)
+          - pattern: require('child_process').exec($X, ...)
+
+  - id: mcp-tool-outbound-exfil
+    severity: WARNING
+    languages: [python]
+    message: "MCP tool issues outbound HTTP using user-controlled values - possible exfiltration channel"
+    metadata:
+      category: security
+      cwe: CWE-918
+      mcp-risk: data-exfiltration
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @$DECO.tool(...)
+              def $F(..., $ARG, ...):
+                ...
+                requests.$M($ARG, ...)
+          - pattern: |
+              @$DECO.tool(...)
+              def $F(..., $ARG, ...):
+                ...
+                httpx.$M($ARG, ...)
+
+  - id: mcp-env-fs-exfil
+    severity: WARNING
+    languages: [python]
+    message: "MCP tool reads os.environ inside its body - potential env-var exfiltration"
+    metadata:
+      category: security
+      cwe: CWE-200
+      mcp-risk: data-exfiltration
+    pattern: |
+      @$DECO.tool(...)
+      def $F(...):
+        ...
+        os.environ[...]
+
+  - id: mcp-dynamic-tool-mutation
+    severity: ERROR
+    languages: [python]
+    message: "MCP server mutates a tool's input schema or description after start - tool-poisoning pattern"
+    metadata:
+      category: security
+      cwe: CWE-913
+      mcp-risk: tool-poisoning
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $TOOL.inputSchema = ...
+          - pattern: |
+              $TOOL.description = ...
