@@ -56,6 +56,7 @@ import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
+from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -396,6 +397,28 @@ def _persist_security_scan_findings(db: Session, gateway_id: str, report: Option
         db.flush()
     except Exception as e:  # noqa: BLE001 - best effort; errors logged for ops to inspect
         logger.warning("could not persist %d security-scan findings for gateway %s: %s", len(rows), gateway_id, e)
+
+
+def _validate_federated_tools(raw_tools: List[Dict[str, Any]], server_url: str) -> List["ToolCreate"]:
+    """Validate tools fetched from a federated MCP server, skipping individual failures.
+
+    An upstream MCP server is outside our control: a single tool whose description
+    trips our SecurityValidator (or any other ToolCreate field validator) must not
+    drop the entire batch. We log a warning per skipped tool so operators can see
+    which one was rejected and why, and return only the tools that validated.
+    """
+    validated: List[ToolCreate] = []
+    for tool in raw_tools:
+        try:
+            validated.append(ToolCreate.model_validate(tool))
+        except ValidationError as exc:
+            logger.warning(
+                "Skipping tool %r from gateway %s: %s",
+                tool.get("name") if isinstance(tool, dict) else tool,
+                server_url,
+                exc,
+            )
+    return validated
 
 
 class GatewayService:  # pylint: disable=too-many-instance-attributes
@@ -3715,7 +3738,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     tools = response.tools
                     tools = [tool.model_dump(by_alias=True, exclude_none=True) for tool in tools]
 
-                    tools = [ToolCreate.model_validate(tool) for tool in tools]
+                    tools = _validate_federated_tools(tools, server_url)
                     if tools:
                         logger.info(f"Fetched {len(tools)} tools from gateway")
                     # Fetch resources if supported
@@ -3837,7 +3860,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     tools = response.tools
                     tools = [tool.model_dump(by_alias=True, exclude_none=True) for tool in tools]
 
-                    tools = [ToolCreate.model_validate(tool) for tool in tools]
+                    tools = _validate_federated_tools(tools, server_url)
                     if tools:
                         logger.info(f"Fetched {len(tools)} tools from gateway")
                     # Fetch resources if supported
@@ -3976,7 +3999,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                         tools = response.tools
                         tools = [tool.model_dump(by_alias=True, exclude_none=True) for tool in tools]
 
-                        tools = [ToolCreate.model_validate(tool) for tool in tools]
+                        tools = _validate_federated_tools(tools, server_url)
                         for tool in tools:
                             tool.request_type = "STREAMABLEHTTP"
                         logger.info(f"[STREAMABLEHTTP] Fetched {len(tools)} tools from gateway")
