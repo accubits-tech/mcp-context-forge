@@ -32,6 +32,7 @@ from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.schemas import GatewayCreate, GatewayUpdate
 from mcpgateway.services.gateway_service import (
+    _validate_federated_tools,
     GatewayConnectionError,
     GatewayError,
     GatewayNameConflictError,
@@ -1826,3 +1827,65 @@ class TestGatewayService:
 
                     mock_model_validate.assert_called_once()
                     assert result == ["masked_result"]
+
+
+# ---------------------------------------------------------------------------
+# _validate_federated_tools - federated tool import resilience
+# ---------------------------------------------------------------------------
+
+
+class TestValidateFederatedTools:
+    """A single malformed tool from an upstream MCP server must not abort the
+    entire batch. Verify that ValidationError on one item is logged and skipped
+    while valid items still come through.
+    """
+
+    def _good_tool_dict(self, name: str = "good_tool") -> dict:
+        return {
+            "name": name,
+            "url": "http://upstream.example.com/tool",
+            "description": "A well-behaved tool",
+            "integrationType": "REST",
+            "requestType": "GET",
+        }
+
+    def test_all_valid_tools_pass_through(self):
+        raw = [self._good_tool_dict("a"), self._good_tool_dict("b")]
+        result = _validate_federated_tools(raw, "http://upstream.example.com")
+        assert len(result) == 2
+        assert {t.name for t in result} == {"a", "b"}
+
+    def test_invalid_tool_is_skipped_and_others_persist(self, caplog):
+        from pydantic import ValidationError
+
+        good = self._good_tool_dict("good")
+        bad = self._good_tool_dict("bad")
+
+        original = __import__(
+            "mcpgateway.schemas", fromlist=["ToolCreate"]
+        ).ToolCreate.model_validate
+
+        def fake_validate(data):
+            if isinstance(data, dict) and data.get("name") == "bad":
+                # Build a real ValidationError without triggering field validators ourselves
+                try:
+                    original({"name": "bad", "url": "not-a-url"})
+                except ValidationError as exc:
+                    raise exc
+                raise AssertionError("expected ValidationError")
+            return original(data)
+
+        with patch(
+            "mcpgateway.services.gateway_service.ToolCreate.model_validate",
+            side_effect=fake_validate,
+        ):
+            with caplog.at_level("WARNING", logger="mcpgateway.services.gateway_service"):
+                result = _validate_federated_tools([good, bad], "http://upstream.example.com")
+
+        assert len(result) == 1
+        assert result[0].name == "good"
+        assert any("Skipping tool 'bad'" in rec.message for rec in caplog.records)
+        assert any("http://upstream.example.com" in rec.message for rec in caplog.records)
+
+    def test_empty_input_returns_empty_list(self):
+        assert _validate_federated_tools([], "http://upstream.example.com") == []
