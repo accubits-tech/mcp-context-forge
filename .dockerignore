@@ -15,6 +15,11 @@ deployment/
 docs/
 deployment/k8s/
 mcp-servers/
+# Re-include deploy sample templates - admin endpoint
+# /admin/gateways/deploy/sample-template streams these from
+# /app/mcp-servers/sample-templates/{python,node} at runtime.
+!mcp-servers/sample-templates/
+!mcp-servers/sample-templates/**
 tests/
 test/
 attic/
