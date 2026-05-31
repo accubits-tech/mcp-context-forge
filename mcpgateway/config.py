@@ -363,6 +363,16 @@ class Settings(BaseSettings):
     mcpgateway_a2a_max_retries: int = 3
     mcpgateway_a2a_metrics_enabled: bool = True
 
+    # Triggers & Events Feature Flags (FRD §11.3 - disabled by default)
+    mcpgateway_events_enabled: bool = Field(default=False, description="Master switch for MCP triggers/events; all events functionality is gated on this flag")
+    mcpgateway_events_redis_stream_prefix: str = Field(default="mcpgw:events", description="Key prefix for the L2 Redis Streams used to durably buffer events")
+    mcpgateway_events_dedup_ttl_seconds: int = Field(default=86400, description="Deduplication window in seconds; must be >= the longest upstream provider retry window")
+    mcpgateway_events_max_delivery_attempts: int = Field(default=8, description="Maximum egress delivery attempts before an event is routed to the dead-letter queue")
+    mcpgateway_events_max_body_bytes: int = Field(default=26214400, description="Hard cap (25 MiB) on the size of an inbound webhook request body")
+    mcpgateway_events_signature_tolerance_seconds: int = Field(default=300, description="Replay window in seconds for hmac_timestamped signature verification recipes")
+    mcpgateway_events_correlation_sweep_enabled: bool = Field(default=False, description="Enable the periodic TTL sweep that expires abandoned correlate waiters (off by default)")
+    mcpgateway_events_correlation_sweep_interval_seconds: int = Field(default=60, description="Seconds between correlate-waiter TTL sweeps when the sweep is enabled")
+
     # gRPC Support Configuration (EXPERIMENTAL - disabled by default)
     mcpgateway_grpc_enabled: bool = Field(default=False, description="Enable gRPC to MCP translation support (experimental feature)")
     mcpgateway_grpc_reflection_enabled: bool = Field(default=True, description="Enable gRPC server reflection by default")

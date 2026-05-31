@@ -919,6 +919,12 @@ catalog_servers:
         5. Add required User Token Scopes
         6. Install the app to your workspace to get tokens
         7. Copy the Client ID and Client Secret from Basic Information
+    events:
+      webhooksSupported: true
+      ingress:
+        mode: webhook
+        descriptor_ref: slack
+      eventTypes: ["com.slack.*"]
 
   # Analytics & Data
   - id: thoughtspot

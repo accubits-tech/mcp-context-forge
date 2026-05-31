@@ -2906,6 +2906,305 @@ class SecurityScanReport(BaseModel):
     completed_at: Optional[datetime] = Field(None, description="When the scan completed")
 
 
+class WebhookVerifyRecipe(BaseModel):
+    """Recipe describing how to verify an inbound webhook's signature.
+
+    Attributes:
+        strategy (Literal): Verification strategy to apply.
+        header (Optional[str]): Header carrying the signature.
+        algo (Optional[str]): HMAC digest algorithm.
+        encoding (Optional[Literal]): Encoding of the signature value.
+        prefix (Optional[str]): Optional prefix prepended to the signature.
+        signed_payload (Optional[str]): Template describing the signed payload.
+
+    Examples:
+        >>> recipe = WebhookVerifyRecipe()
+        >>> recipe.strategy
+        'hmac'
+        >>> recipe.algo
+        'sha256'
+        >>> recipe.encoding
+        'hex'
+    """
+
+    strategy: Literal["hmac", "hmac_timestamped", "none", "plugin"] = "hmac"
+    header: Optional[str] = None
+    algo: Optional[str] = "sha256"
+    encoding: Optional[Literal["hex", "base64"]] = "hex"
+    prefix: Optional[str] = None
+    signed_payload: Optional[str] = None
+
+
+class EventsCapability(BaseModel):
+    """Optional events/webhooks capability declaration for a gateway.
+
+    Attributes:
+        webhooks_supported (bool): Whether the gateway supports webhooks.
+        ingress_mode (Literal): How events are ingested.
+        descriptor_ref (Optional[str]): Reference to an events descriptor.
+        event_types (List[str]): Supported event types.
+        extra_oauth_scopes (List[str]): Additional OAuth scopes required for events.
+
+    Examples:
+        >>> cap = EventsCapability(**{"webhooksSupported": True, "eventTypes": ["com.github.*"]})
+        >>> cap.webhooks_supported
+        True
+        >>> cap.event_types
+        ['com.github.*']
+        >>> EventsCapability(webhooks_supported=True).webhooks_supported
+        True
+    """
+
+    webhooks_supported: bool = Field(False, alias="webhooksSupported")
+    ingress_mode: Literal["webhook", "mcp_native", "none"] = "none"
+    descriptor_ref: Optional[str] = None
+    event_types: List[str] = Field(default_factory=list, alias="eventTypes")
+    extra_oauth_scopes: List[str] = Field(default_factory=list, alias="extraOAuthScopes")
+    model_config = ConfigDict(populate_by_name=True)  # accept both snake_case and the camelCase aliases
+
+
+class TargetRef(BaseModel):
+    """Reference to an agent target for event delivery.
+
+    Attributes:
+        agent_id (str): Identifier of the target agent.
+        version (Optional[str]): Optional target version.
+        params (Dict[str, Any]): Additional invocation parameters.
+    """
+
+    agent_id: str
+    version: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SubscriberRef(BaseModel):
+    """Reference to a subscriber endpoint for event delivery.
+
+    Attributes:
+        kind (Literal): Type of subscriber endpoint.
+        callback_url (Optional[str]): Callback URL for HTTP delivery.
+        target_ref (Optional[str]): Reference to a target identifier.
+    """
+
+    kind: Literal["http_callback", "sse", "ws"]
+    callback_url: Optional[str] = None
+    target_ref: Optional[str] = None
+
+
+class SubscriptionCreate(BaseModel):
+    """Schema for creating an event subscription.
+
+    Attributes:
+        gateway_id (Optional[str]): Gateway the subscription belongs to.
+        subscriber (SubscriberRef): The subscriber endpoint.
+        target (Optional[TargetRef]): Optional agent target.
+        source (Optional[str]): Optional event source filter.
+        event_types (List[str]): Event types to subscribe to.
+        filter (Optional[str]): Optional event filter expression.
+        mode (Literal): Delivery mode (fanout or correlate).
+        correlation_key (Optional[str]): Correlation key for correlate mode.
+        correlation_value (Optional[str]): Correlation value for correlate mode.
+        delivery (Dict[str, Any]): Delivery configuration.
+
+    Examples:
+        >>> sub = SubscriptionCreate(
+        ...     subscriber=SubscriberRef(kind="sse"),
+        ...     event_types=["com.github.push"],
+        ... )
+        >>> sub.mode
+        'fanout'
+    """
+
+    gateway_id: Optional[str] = None
+    subscriber: SubscriberRef
+    target: Optional[TargetRef] = None
+    source: Optional[str] = None
+    event_types: List[str]
+    filter: Optional[str] = None
+    mode: Literal["fanout", "correlate"] = "fanout"
+    correlation_key: Optional[str] = None
+    correlation_value: Optional[str] = None
+    delivery: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _corr(self):
+        """Require correlation fields when mode is 'correlate'.
+
+        Returns:
+            SubscriptionCreate: The validated model instance.
+
+        Raises:
+            ValueError: If mode='correlate' and correlation_key/value are missing.
+        """
+        if self.mode == "correlate" and not (self.correlation_key and self.correlation_value):
+            raise ValueError("correlation_key and correlation_value required when mode='correlate'")
+        return self
+
+    @model_validator(mode="after")
+    def _callback(self):
+        """Require callback_url when subscriber.kind is 'http_callback'.
+
+        Returns:
+            SubscriptionCreate: The validated model instance.
+
+        Raises:
+            ValueError: If subscriber.kind='http_callback' and callback_url is missing.
+        """
+        if self.subscriber.kind == "http_callback" and not self.subscriber.callback_url:
+            raise ValueError("callback_url required when subscriber.kind='http_callback'")
+        return self
+
+
+class EventEnvelope(BaseModelWithConfigDict):
+    """CloudEvents-style envelope describing a single event.
+
+    Attributes:
+        id (str): Unique event identifier.
+        source (str): Event source.
+        type (str): Event type.
+        subject (Optional[str]): Optional event subject.
+        time (Optional[datetime]): Optional event timestamp.
+        data (Any): Event payload.
+    """
+
+    id: str
+    source: str
+    type: str
+    subject: Optional[str] = None
+    time: Optional[datetime] = None
+    data: Any = None
+
+
+class DeliveryEnvelope(BaseModelWithConfigDict):
+    """Envelope wrapping an event alongside its subscription context.
+
+    Attributes:
+        event (EventEnvelope): The event being delivered.
+        subscription (Dict[str, Any]): Subscription context for the delivery.
+    """
+
+    event: EventEnvelope
+    subscription: Dict[str, Any]
+
+
+class SubscriptionRead(BaseModelWithConfigDict):
+    """Schema for reading an event subscription.
+
+    Attributes:
+        id (str): Unique subscription identifier.
+        gateway_id (Optional[str]): Gateway the subscription belongs to.
+        subscriber (SubscriberRef): The subscriber endpoint.
+        target (Optional[TargetRef]): Optional agent target.
+        source (Optional[str]): Optional event source filter.
+        event_types (List[str]): Event types subscribed to.
+        filter (Optional[str]): Optional event filter expression.
+        mode (str): Delivery mode.
+        correlation_key (Optional[str]): Correlation key for correlate mode.
+        correlation_value (Optional[str]): Correlation value for correlate mode.
+        active (bool): Whether the subscription is active.
+        expires_at (Optional[datetime]): Optional expiry timestamp.
+        created_at (datetime): Creation timestamp.
+    """
+
+    id: str
+    gateway_id: Optional[str] = None
+    subscriber: SubscriberRef
+    target: Optional[TargetRef] = None
+    source: Optional[str] = None
+    event_types: List[str]
+    filter: Optional[str] = None
+    mode: str
+    correlation_key: Optional[str] = None
+    correlation_value: Optional[str] = None
+    active: bool
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+    # NOTE: the ``delivery`` block (and its ``auth`` credential) is deliberately
+    # NOT exposed here — it is write-only on create/update and never echoed back
+    # (SC-SEC-039 read-layer redaction). The per-subscription egress secret is
+    # additionally encrypted at rest as ``auth.secret_encrypted`` /
+    # ``auth.token_encrypted`` (SC-SEC-015; see subscription_service
+    # ._encrypt_delivery_secrets). If ``delivery`` is ever added to this read
+    # model, strip every ``secret*`` / ``token*`` field before serialization.
+
+
+class SubscriptionUpdate(BaseModel):
+    """Schema for partially updating an event subscription.
+
+    Every field is optional; only the keys present in the request body are
+    applied (PATCH semantics). A supplied ``filter`` is recompiled before it is
+    written, so a malformed expression is rejected with the prior filter left
+    intact (atomic cut-over, FRD section 7.7).
+
+    A changed ``callback_url`` is SSRF-validated by the service before it is
+    written (PG-FR-A / TC-SEC-055 update arm): a private/obfuscated target is
+    rejected with ``422`` and the prior URL is left intact.
+
+    Attributes:
+        filter (Optional[str]): New CEL filter expression (``None`` clears it).
+        callback_url (Optional[str]): New HTTP-callback URL (SSRF-validated).
+        delivery (Optional[Dict[str, Any]]): Replacement delivery configuration.
+        active (Optional[bool]): Pause (``False``) or resume (``True``).
+        correlation_value (Optional[str]): New correlation value (correlate mode).
+        target (Optional[TargetRef]): Replacement agent target.
+
+    Examples:
+        >>> SubscriptionUpdate(active=False).active
+        False
+        >>> SubscriptionUpdate().filter is None
+        True
+    """
+
+    filter: Optional[str] = None
+    callback_url: Optional[str] = None
+    delivery: Optional[Dict[str, Any]] = None
+    active: Optional[bool] = None
+    correlation_value: Optional[str] = None
+    target: Optional[TargetRef] = None
+
+
+class SubscriptionListResponse(BaseModelWithConfigDict):
+    """Paginated list of event subscriptions for a tenant.
+
+    Mirrors the limit/offset list shape used by the ``/tokens`` router
+    (:class:`TokenListResponse`) since ``/subscriptions`` is likewise a
+    top-level REST router.
+
+    Attributes:
+        subscriptions (List[SubscriptionRead]): The page of subscriptions.
+        total (int): Total number of subscriptions for the tenant.
+        limit (int): Page size used for this response.
+        offset (int): Offset used for this response.
+    """
+
+    subscriptions: List[SubscriptionRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class DeliveryAttemptRead(BaseModelWithConfigDict):
+    """Schema for reading a single delivery attempt.
+
+    Attributes:
+        id (str): Unique delivery attempt identifier.
+        event_id (str): Identifier of the delivered event.
+        subscription_id (str): Identifier of the subscription.
+        attempt_no (int): Attempt sequence number.
+        status (str): Delivery status.
+        http_status (Optional[int]): HTTP status returned by the subscriber.
+        next_retry_at (Optional[datetime]): When the next retry is scheduled.
+    """
+
+    id: str
+    event_id: str
+    subscription_id: str
+    attempt_no: int
+    status: str
+    http_status: Optional[int] = None
+    next_retry_at: Optional[datetime] = None
+
+
 class GatewayCreate(BaseModel):
     """
     Schema for creating a new gateway.
@@ -2944,6 +3243,9 @@ class GatewayCreate(BaseModel):
 
     # Deployment configuration (user-supplied MCP server built and run in an isolated container)
     deployment: Optional[DeploymentSpec] = Field(None, description="Spec to build and host a user-supplied Python/Node MCP server")
+
+    # Events/webhooks capability declaration
+    events: Optional[EventsCapability] = Field(default=None, description="Optional events/webhooks capability declaration")
 
     # Authorizations
     auth_type: Optional[str] = Field(None, description="Type of authentication: basic, bearer, headers, oauth, or none")
@@ -7246,6 +7548,7 @@ class CatalogServerRegisterRequest(BaseModel):
     team_id: Optional[str] = Field(None, description="Team ID when visibility='team'")
     api_key: Optional[str] = Field(None, description="API key if required")
     oauth_credentials: Optional[Dict[str, Any]] = Field(None, description="OAuth credentials if required")
+    webhook_signing_secret: Optional[str] = Field(None, description="Inbound webhook signing secret (write-only; stored encrypted, never returned)")
 
 
 class CatalogServerRegisterResponse(BaseModel):
