@@ -108,7 +108,7 @@ def test_enable_events_sets_row_fields(session):
     assert dumped.get("webhook_signing_secret") in (None, "")
 
 
-def test_enable_events_idempotent_rotates_secret(session):
+def test_enable_events_idempotent_rotates_secret_with_grace_window(session):
     gw = _make_gateway(session)
     svc = _svc()
 
@@ -116,8 +116,25 @@ def test_enable_events_idempotent_rotates_secret(session):
     asyncio.run(svc.enable_events(session, gw.id, descriptor_ref="slack", webhook_signing_secret="new", user_email=None))
 
     row = session.get(Gateway, gw.id)
-    assert decode_auth(row.webhook_signing_secret) == {"secret": "new"}
+    # Graceful rotation: the new secret is current and the prior secret is retained
+    # as secret_prev so in-flight webhooks signed with the old secret still verify.
+    decoded = decode_auth(row.webhook_signing_secret)
+    assert decoded["secret"] == "new"
+    assert decoded["secret_prev"] == "old"
     assert row.events_enabled is True
+
+
+def test_enable_events_same_secret_no_prev(session):
+    """Re-affirming with the SAME secret does not create a spurious secret_prev."""
+    gw = _make_gateway(session)
+    svc = _svc()
+
+    asyncio.run(svc.enable_events(session, gw.id, descriptor_ref="slack", webhook_signing_secret="same", user_email=None))
+    asyncio.run(svc.enable_events(session, gw.id, descriptor_ref="slack", webhook_signing_secret="same", user_email=None))
+
+    row = session.get(Gateway, gw.id)
+    decoded = decode_auth(row.webhook_signing_secret)
+    assert decoded == {"secret": "same"}
 
 
 def test_enable_events_unknown_descriptor_raises(session):

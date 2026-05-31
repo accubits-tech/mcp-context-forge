@@ -2172,15 +2172,35 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
         from mcpgateway.services.catalog_service import _build_events_capability  # pylint: disable=import-outside-toplevel
 
         events_capability = _build_events_capability({"ingress": {"descriptor_ref": descriptor_ref}, "webhooksSupported": True})
-        existing_caps = dict(gateway.capabilities or {})
-        existing_caps["events"] = events_capability
-        gateway.capabilities = existing_caps
-        gateway.webhook_signing_secret = encode_auth({"secret": webhook_signing_secret})
-        gateway.webhook_secret_algo = descriptor.verify.get("strategy")
-        gateway.events_enabled = True
-        gateway.updated_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(gateway)
+
+        # Build the secret blob. On rotation, carry the prior secret into
+        # ``secret_prev`` so the ingress verifier (which decodes both current and
+        # previous) keeps accepting in-flight webhooks signed with the old secret
+        # — a graceful rotation window rather than a hard fail-closed cutover.
+        secret_blob: Dict[str, Any] = {"secret": webhook_signing_secret}
+        existing_secret_blob = gateway.webhook_signing_secret
+        if existing_secret_blob:
+            try:
+                decoded = decode_auth(existing_secret_blob)
+                prev_secret = decoded.get("secret") if isinstance(decoded, dict) else None
+                if prev_secret and prev_secret != webhook_signing_secret:
+                    secret_blob["secret_prev"] = prev_secret
+            except Exception:  # pragma: no cover - defensive; a bad/legacy blob just means no grace window
+                logger.warning(f"Could not decode prior signing secret for gateway {gateway_id}; rotating without a grace window")
+
+        try:
+            existing_caps = dict(gateway.capabilities or {})
+            existing_caps["events"] = events_capability
+            gateway.capabilities = existing_caps
+            gateway.webhook_signing_secret = encode_auth(secret_blob)
+            gateway.webhook_secret_algo = descriptor.verify.get("strategy")
+            gateway.events_enabled = True
+            gateway.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(gateway)
+        except Exception as exc:
+            db.rollback()
+            raise GatewayError(f"Failed to enable events on gateway {gateway_id}: {exc}") from exc
 
         logger.info(f"Enabled events on gateway {gateway_id} (descriptor_ref={descriptor_ref})")
         gateway.team = self._get_team_name(db, getattr(gateway, "team_id", None))
