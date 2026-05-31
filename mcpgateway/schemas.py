@@ -2963,6 +2963,27 @@ class EventsCapability(BaseModel):
     model_config = ConfigDict(populate_by_name=True)  # accept both snake_case and the camelCase aliases
 
 
+class GatewayEnableEventsRequest(BaseModel):
+    """Request body for ``POST /gateways/{id}/enable-events`` (make a gateway events-ready).
+
+    Lets a client (e.g. budapp provisioning a trigger) attach an events descriptor
+    and the inbound webhook signing secret to an existing gateway without a direct
+    DB write. The signing secret is write-only: stored encrypted, never returned.
+
+    Attributes:
+        descriptor_ref (str): Events provider descriptor ref (e.g. ``"slack"``).
+        webhook_signing_secret (str): Inbound webhook signing secret (write-only).
+
+    Examples:
+        >>> r = GatewayEnableEventsRequest(descriptor_ref="slack", webhook_signing_secret="s3cr3t")
+        >>> r.descriptor_ref
+        'slack'
+    """
+
+    descriptor_ref: str = Field(..., description="Events provider descriptor ref (e.g. 'slack', 'github', 'stripe')")
+    webhook_signing_secret: str = Field(..., description="Inbound webhook signing secret (write-only; stored encrypted, never returned)")
+
+
 class TargetRef(BaseModel):
     """Reference to an agent target for event delivery.
 

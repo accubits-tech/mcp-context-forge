@@ -107,6 +107,7 @@ from mcpgateway.schemas import (
     BulkAuthConfigResponse,
     BulkAuthConfigResult,
     GatewayCreate,
+    GatewayEnableEventsRequest,
     GatewayRead,
     GatewayUpdate,
     JsonPathModifier,
@@ -5238,6 +5239,55 @@ async def toggle_gateway_status(
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@gateway_router.post("/{gateway_id}/enable-events", response_model=GatewayRead)
+@require_permission("gateways.update")
+async def enable_gateway_events(
+    gateway_id: str,
+    request_body: GatewayEnableEventsRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Union[GatewayRead, JSONResponse]:
+    """Make an existing gateway events-ready (attach descriptor + inbound signing secret).
+
+    Required so a client (e.g. budapp provisioning an agent event trigger) can flip
+    an OAuth/tools gateway to events-ready over the API instead of a direct DB
+    write. The signing secret is write-only (stored encrypted, never returned).
+    Gated on the events master flag and per-resource ownership; idempotent
+    (re-invoking rotates the secret).
+
+    Args:
+        gateway_id: ID of the gateway to make events-ready.
+        request_body: The descriptor ref + inbound webhook signing secret.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        The updated, masked gateway (never exposes the signing secret).
+    """
+    if not settings.mcpgateway_events_enabled:
+        # Opaque 404 when events are off — indistinguishable from an unmounted surface
+        # (mirrors the webhooks/subscriptions routers).
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    logger.debug(f"User '{user}' requested enable-events on gateway {gateway_id} (descriptor_ref={request_body.descriptor_ref})")
+    try:
+        user_email = user.get("email") if isinstance(user, dict) else str(user)
+        return await gateway_service.enable_events(
+            db,
+            gateway_id,
+            descriptor_ref=request_body.descriptor_ref,
+            webhook_signing_secret=request_body.webhook_signing_secret,
+            user_email=user_email,
+        )
+    except PermissionError as ex:
+        return JSONResponse(content={"message": str(ex)}, status_code=403)
+    except GatewayNotFoundError:
+        return JSONResponse(content={"message": "Gateway not found"}, status_code=status.HTTP_404_NOT_FOUND)
+    except GatewayError as ex:
+        return JSONResponse(content={"message": str(ex)}, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
+    except Exception:
+        return JSONResponse(content={"message": "Unexpected error"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @gateway_router.get("", response_model=List[GatewayRead])
