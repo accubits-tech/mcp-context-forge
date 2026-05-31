@@ -96,6 +96,7 @@ class HttpCallbackEgressAdapter(EgressAdapter):
         https_only: bool = True,
         allow_loopback: bool = False,
         allowed_ports: Optional[Set[int]] = None,
+        allow_hosts: Optional[Set[str]] = None,
         connect_timeout: float = 5.0,
         read_timeout: float = 30.0,
         total_timeout: float = 30.0,
@@ -114,6 +115,14 @@ class HttpCallbackEgressAdapter(EgressAdapter):
                 range.
             allowed_ports: Optional destination-port allowlist enforced by the
                 SSRF guard.
+            allow_hosts: Optional set of hostnames (exact, case-insensitive) that
+                are trusted in-cluster receivers - e.g. a ClusterIP service like
+                ``bud-budprompt``. For a matched host the SSRF guard skips the
+                private-IP denial and permits ``http`` even under ``https_only``,
+                while still resolving + pinning a concrete IP and keeping every
+                other protection (userinfo, metadata-by-name, dangerous schemes).
+                Sourced from ``settings.mcpgateway_events_egress_allow_hosts`` at
+                the adapter construction site.
             connect_timeout: TCP connect timeout (seconds).
             read_timeout: Socket read timeout (seconds) - bounds a slow drip.
             total_timeout: Overall request deadline (seconds) - aborts a hang.
@@ -129,6 +138,7 @@ class HttpCallbackEgressAdapter(EgressAdapter):
         self._https_only = https_only
         self._allow_loopback = allow_loopback
         self._allowed_ports = allowed_ports
+        self._allow_hosts = allow_hosts
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._total_timeout = total_timeout
@@ -167,7 +177,7 @@ class HttpCallbackEgressAdapter(EgressAdapter):
                 disallowed or not the reason for the failure).
         """
         try:
-            return validate_and_pin(url, https_only=self._https_only, allowed_ports=self._allowed_ports)
+            return validate_and_pin(url, https_only=self._https_only, allowed_ports=self._allowed_ports, allow_hosts=self._allow_hosts)
         except SsrfError:
             if not self._allow_loopback:
                 raise
@@ -195,18 +205,32 @@ class HttpCallbackEgressAdapter(EgressAdapter):
         import socket  # pylint: disable=import-outside-toplevel
         from urllib.parse import urlparse  # pylint: disable=import-outside-toplevel
 
+        # First-Party
+        from mcpgateway.services.events.egress.ssrf import _DENIED_HOSTNAMES  # pylint: disable=import-outside-toplevel
+
         parsed = urlparse(url)
         if parsed.username is not None or parsed.password is not None or "@" in (parsed.netloc or ""):
             raise SsrfError("callback URL must not contain userinfo")
+        host = (parsed.hostname or "").lower()
+        if not host:
+            raise SsrfError("callback URL has no host")
+        # Denied-by-name (cloud-metadata aliases) - independent of the allow-list,
+        # mirroring validate_and_pin so the loopback fallback cannot launder IMDS
+        # by name even when the alias is itself allow-listed.
+        if host in _DENIED_HOSTNAMES:
+            raise SsrfError(f"host '{host}' is denied")
+        # An allow-listed host is a trusted in-cluster receiver: permit http and
+        # skip the non-loopback denial, but still resolve + pin a concrete IP.
+        is_allowed = bool(self._allow_hosts) and host in {h.lower() for h in self._allow_hosts}
         scheme = (parsed.scheme or "").lower()
-        if self._https_only:
+        if is_allowed:
+            if scheme not in ("http", "https"):
+                raise SsrfError(f"scheme '{parsed.scheme}' not allowed; only http/https")
+        elif self._https_only:
             if scheme != "https":
                 raise SsrfError(f"scheme '{parsed.scheme}' not allowed; https only")
         elif scheme not in ("http", "https"):
             raise SsrfError(f"scheme '{parsed.scheme}' not allowed; only http/https")
-        host = (parsed.hostname or "").lower()
-        if not host:
-            raise SsrfError("callback URL has no host")
         try:
             port = parsed.port or (443 if scheme == "https" else 80)
         except ValueError as exc:
@@ -225,7 +249,7 @@ class HttpCallbackEgressAdapter(EgressAdapter):
             ip_obj = ipaddress.ip_address(ip_text)
             mapped = getattr(ip_obj, "ipv4_mapped", None)
             classify = mapped if mapped is not None else ip_obj
-            if classify.is_loopback:
+            if is_allowed or classify.is_loopback:
                 if pinned_ip is None:
                     pinned_ip = ip_text
                 continue

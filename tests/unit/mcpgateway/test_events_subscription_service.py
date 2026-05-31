@@ -550,3 +550,35 @@ def test_get_missing_is_not_found(session):
     svc = _svc(session)
     with pytest.raises(NotFoundError):
         asyncio.run(svc.get(session, "no-such-id", team_id=TEAM_A))
+
+
+# --- WS1: create-time callback allow-list bypass -------------------------------
+# A subscription whose http_callback points at an in-cluster ClusterIP (private,
+# http) is rejected by the shared internal-URL guard unless the operator opts the
+# host into ``mcpgateway_events_egress_allow_hosts`` (the same list the egress
+# adapter honors at send time). These lock that bypass to an EXACT host match.
+from mcpgateway.services.events import subscription_service as _ss  # noqa: E402
+
+
+def test_allow_listed_internal_callback_bypasses_create_check(monkeypatch):
+    """An allow-listed private callback host passes create-time validation."""
+    monkeypatch.setattr(_ss.settings, "ssrf_protection_enabled", True, raising=False)
+    monkeypatch.setattr(_ss.settings, "mcpgateway_events_egress_allow_hosts", ["10.43.0.9"], raising=False)
+    # No raise: the allow-listed host short-circuits the internal-URL denial.
+    _ss._validate_callback_url("http://10.43.0.9:3015/v1/events")
+
+
+def test_non_listed_internal_callback_rejected_at_create(monkeypatch):
+    """A private callback host that is NOT allow-listed is still rejected."""
+    monkeypatch.setattr(_ss.settings, "ssrf_protection_enabled", True, raising=False)
+    monkeypatch.setattr(_ss.settings, "mcpgateway_events_egress_allow_hosts", [], raising=False)
+    with pytest.raises(_ss.SubscriptionValidationError):
+        _ss._validate_callback_url("http://10.43.0.9:3015/v1/events")
+
+
+def test_create_allow_list_is_exact_host_not_suffix(monkeypatch):
+    """The allow-list matches the exact host, not a prefix/suffix lookalike."""
+    monkeypatch.setattr(_ss.settings, "ssrf_protection_enabled", True, raising=False)
+    monkeypatch.setattr(_ss.settings, "mcpgateway_events_egress_allow_hosts", ["10.43.0.9"], raising=False)
+    with pytest.raises(_ss.SubscriptionValidationError):
+        _ss._validate_callback_url("http://10.43.0.99:3015/v1/events")

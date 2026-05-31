@@ -225,6 +225,41 @@ def test_factory_unknown_kind_falls_back_to_http_callback():
 
 
 # --------------------------------------------------------------------------- #
+# WS1 - the factory threads the egress allow-list from settings               #
+# --------------------------------------------------------------------------- #
+
+
+def test_factory_threads_allow_hosts_from_settings(monkeypatch):
+    """The HTTP-callback adapter is built with ``mcpgateway_events_egress_allow_hosts``.
+
+    The factory caches a single adapter in a module global, so the cache is
+    cleared and the setting is patched before resolution to assert the configured
+    in-cluster allow-list (e.g. ``bud-budprompt``) reaches the adapter.
+    """
+    # First-Party
+    from mcpgateway.services.events.egress import inprocess  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(settings, "mcpgateway_events_egress_allow_hosts", ["bud-budprompt"], raising=False)
+    monkeypatch.setattr(inprocess, "_http_callback_adapter", None, raising=False)
+
+    adapter = get_egress_adapter("http_callback")
+    assert isinstance(adapter, HttpCallbackEgressAdapter)
+    assert adapter._allow_hosts == {"bud-budprompt"}  # pylint: disable=protected-access
+
+
+def test_factory_allow_hosts_defaults_to_none_when_unset(monkeypatch):
+    """With no configured allow-list the adapter gets ``allow_hosts=None`` (unchanged)."""
+    # First-Party
+    from mcpgateway.services.events.egress import inprocess  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(settings, "mcpgateway_events_egress_allow_hosts", [], raising=False)
+    monkeypatch.setattr(inprocess, "_http_callback_adapter", None, raising=False)
+
+    adapter = get_egress_adapter("http_callback")
+    assert adapter._allow_hosts is None  # pylint: disable=protected-access
+
+
+# --------------------------------------------------------------------------- #
 # Worker adapter selection per kind                                            #
 # --------------------------------------------------------------------------- #
 

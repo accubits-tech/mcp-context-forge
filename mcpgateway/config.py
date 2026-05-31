@@ -372,6 +372,10 @@ class Settings(BaseSettings):
     mcpgateway_events_signature_tolerance_seconds: int = Field(default=300, description="Replay window in seconds for hmac_timestamped signature verification recipes")
     mcpgateway_events_correlation_sweep_enabled: bool = Field(default=False, description="Enable the periodic TTL sweep that expires abandoned correlate waiters (off by default)")
     mcpgateway_events_correlation_sweep_interval_seconds: int = Field(default=60, description="Seconds between correlate-waiter TTL sweeps when the sweep is enabled")
+    mcpgateway_events_egress_allow_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="Hostnames whose egress callbacks bypass the private-IP SSRF denial and may use http (e.g. in-cluster ClusterIP receivers like bud-budprompt). Exact hostname match, case-insensitive. CSV or JSON list.",
+    )
 
     # gRPC Support Configuration (EXPERIMENTAL - disabled by default)
     mcpgateway_grpc_enabled: bool = Field(default=False, description="Enable gRPC to MCP translation support (experimental feature)")
@@ -643,10 +647,10 @@ class Settings(BaseSettings):
             if violations:
                 for name in violations:
                     logger.error(
-                        "FATAL: Default credential detected for %s in production environment. " "You MUST set a strong, unique value before running in production.",
+                        "FATAL: Default credential detected for %s in production environment. You MUST set a strong, unique value before running in production.",
                         name,
                     )
-                logger.error("FATAL: Refusing to start with default credentials in production. " "Set the above environment variables to secure values and restart.")
+                logger.error("FATAL: Refusing to start with default credentials in production. Set the above environment variables to secure values and restart.")
                 raise SystemExit(1)
 
         # Check for dangerous combinations - only log warnings, don't raise errors
@@ -1165,6 +1169,7 @@ Disallow: /
         "sso_auto_admin_domains",
         "sso_github_admin_orgs",
         "sso_google_admin_domains",
+        "mcpgateway_events_egress_allow_hosts",
         mode="before",
     )
     @classmethod
@@ -1512,7 +1517,9 @@ Disallow: /
     # when the gateway runs on the host directly. Set to 0.0.0.0 when the gateway runs
     # in a container and needs to reach the deployed port via the docker bridge — the
     # host firewall MUST then block the deploy port range from the public internet.
-    mcpgateway_deploy_bind_host: str = Field(default="127.0.0.1", description="Host interface to publish deployed container ports on (127.0.0.1 for host-installed gateway, 0.0.0.0 for containerized gateway)")
+    mcpgateway_deploy_bind_host: str = Field(
+        default="127.0.0.1", description="Host interface to publish deployed container ports on (127.0.0.1 for host-installed gateway, 0.0.0.0 for containerized gateway)"
+    )
     # Hostname the gateway uses to reach the deployed container's published port.
     # 127.0.0.1 (default) works when the gateway runs on the host. Set to
     # host.docker.internal when the gateway runs in a container; on Linux Docker also

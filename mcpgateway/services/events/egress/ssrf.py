@@ -171,7 +171,13 @@ def _canonicalize_ip_literal(host: str) -> Optional[ipaddress._BaseAddress]:  # 
     return ipaddress.ip_address(socket.inet_ntoa(packed))
 
 
-def validate_and_pin(url: str, *, https_only: bool = True, allowed_ports: Optional[Set[int]] = None) -> PinnedTarget:
+def validate_and_pin(
+    url: str,
+    *,
+    https_only: bool = True,
+    allowed_ports: Optional[Set[int]] = None,
+    allow_hosts: Optional[Set[str]] = None,
+) -> PinnedTarget:
     """Validate an egress callback URL and pin it to a validated resolved IP.
 
     Args:
@@ -182,6 +188,16 @@ def validate_and_pin(url: str, *, https_only: bool = True, allowed_ports: Option
         allowed_ports: When given, the destination port MUST be in this set
             (else rejected). When ``None`` the default scheme port is used and
             any explicit port is accepted (subject to IP classification).
+        allow_hosts: An optional set of hostnames (matched exactly,
+            case-insensitively) that are trusted in-cluster receivers - e.g. a
+            ClusterIP service like ``bud-budprompt``. For a matched host the
+            private-IP denial in :func:`_classify_reject` is **skipped** and
+            ``http`` is permitted even under ``https_only``. Every other guard
+            still applies: userinfo is still refused, the ``_DENIED_HOSTNAMES``
+            metadata aliases are still denied by name, non-http(s) schemes are
+            still rejected, and the host is **still resolved and pinned to a
+            concrete IP** so DNS-rebinding protection is preserved. When ``None``
+            or empty, behavior is byte-identical to the unparameterized guard.
 
     Returns:
         A :class:`PinnedTarget` whose ``ip`` is the validated address the
@@ -190,29 +206,41 @@ def validate_and_pin(url: str, *, https_only: bool = True, allowed_ports: Option
     Raises:
         SsrfError: For userinfo, a disallowed scheme, a missing/denied host, a
             private/loopback/link-local/reserved/multicast/unspecified or
-            cloud-metadata resolution, an unresolvable host, or a port outside
-            ``allowed_ports``.
+            cloud-metadata resolution (unless the host is allow-listed), an
+            unresolvable host, or a port outside ``allowed_ports``.
     """
     parsed = urlparse(url)
 
     # 1) userinfo - refuse outright (defeats user@evil@127.0.0.1 confusion).
+    #    UNCONDITIONAL and FIRST: allow-listing never bypasses this.
     if parsed.username is not None or parsed.password is not None or "@" in (parsed.netloc or ""):
         raise SsrfError("callback URL must not contain userinfo")
 
-    # 2) scheme allowlist.
-    scheme = (parsed.scheme or "").lower()
-    if https_only:
-        if scheme != "https":
-            raise SsrfError(f"scheme '{parsed.scheme}' not allowed; https only")
-    elif scheme not in ("http", "https"):
-        raise SsrfError(f"scheme '{parsed.scheme}' not allowed; only http/https")
-
+    # Parse the host EARLY so the allow-list decision can gate the scheme and
+    # IP-classification steps below.
     host = parsed.hostname
     if not host:
         raise SsrfError("callback URL has no host")
     host = host.lower()
 
-    # Denied-by-name hosts (cloud-metadata aliases) - independent of resolution.
+    # Is this host explicitly trusted as an in-cluster receiver? Exact match,
+    # case-insensitive. Empty/None allow_hosts -> never allowed (unchanged).
+    is_allowed = bool(allow_hosts) and host in {h.lower() for h in allow_hosts}
+
+    # 2) scheme allowlist. ``http`` is permitted for an allow-listed host even
+    #    under https_only; every other (non-http(s)) scheme is still rejected.
+    scheme = (parsed.scheme or "").lower()
+    if is_allowed:
+        if scheme not in ("http", "https"):
+            raise SsrfError(f"scheme '{parsed.scheme}' not allowed; only http/https")
+    elif https_only:
+        if scheme != "https":
+            raise SsrfError(f"scheme '{parsed.scheme}' not allowed; https only")
+    elif scheme not in ("http", "https"):
+        raise SsrfError(f"scheme '{parsed.scheme}' not allowed; only http/https")
+
+    # Denied-by-name hosts (cloud-metadata aliases) - independent of resolution
+    # AND of the allow-list, so allow-listing can never launder the IMDS alias.
     if host in _DENIED_HOSTNAMES:
         raise SsrfError(f"host '{host}' is denied")
 
@@ -229,13 +257,19 @@ def validate_and_pin(url: str, *, https_only: bool = True, allowed_ports: Option
     # 3) IP-literal hosts: canonicalize obfuscated forms BEFORE classifying.
     literal = _canonicalize_ip_literal(host)
     if literal is not None:
-        reason = _classify_reject(literal)
-        if reason is not None:
-            raise SsrfError(f"callback resolves to {reason} ({literal})")
+        # An allow-listed host skips the private/loopback/etc denial but is still
+        # pinned to its canonical IP (rebinding defence still holds).
+        if not is_allowed:
+            reason = _classify_reject(literal)
+            if reason is not None:
+                raise SsrfError(f"callback resolves to {reason} ({literal})")
         # A bare public IP literal: pin to the canonical IP; SNI/cert will use it.
         return PinnedTarget(scheme=scheme, host=str(literal), ip=str(literal), port=port)
 
     # 4) DNS name: resolve, classify EVERY address, pin the first acceptable one.
+    #    An allow-listed host STILL resolves + pins (so a concrete validated IP is
+    #    returned for pinned_getaddrinfo), but its IP classification denial is
+    #    skipped - the only relaxation.
     try:
         addr_infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
@@ -248,9 +282,10 @@ def validate_and_pin(url: str, *, https_only: bool = True, allowed_ports: Option
             ip_obj = ipaddress.ip_address(ip_text)
         except ValueError:
             raise SsrfError(f"resolver returned non-IP address for '{host}'")
-        reason = _classify_reject(ip_obj)
-        if reason is not None:
-            raise SsrfError(f"callback resolves to {reason} ({ip_obj})")
+        if not is_allowed:
+            reason = _classify_reject(ip_obj)
+            if reason is not None:
+                raise SsrfError(f"callback resolves to {reason} ({ip_obj})")
         if pinned_ip is None:
             pinned_ip = ip_text
 

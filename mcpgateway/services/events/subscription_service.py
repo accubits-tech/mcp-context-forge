@@ -49,6 +49,7 @@ from __future__ import annotations
 
 # Standard
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 # Third-Party
 from sqlalchemy.orm import Session
@@ -148,6 +149,17 @@ def _validate_callback_url(callback_url: Optional[str]) -> None:
         return
     if not getattr(settings, "ssrf_protection_enabled", True):
         return
+    # In-cluster receivers (e.g. a ClusterIP like bud-budprompt) are private by
+    # design; an operator opts them in via mcpgateway_events_egress_allow_hosts,
+    # which the delivery-time egress guard (validate_and_pin) also honors. Skip
+    # the internal-URL denial for an exact (case-insensitive) allow-listed host
+    # so a subscription to such a receiver can be created; the egress adapter
+    # still re-validates and IP-pins immediately before each send.
+    allow_hosts = getattr(settings, "mcpgateway_events_egress_allow_hosts", None) or []
+    if allow_hosts:
+        host = (urlparse(callback_url).hostname or "").lower()
+        if host and host in {h.lower() for h in allow_hosts}:
+            return
     try:
         validate_url_not_internal(callback_url)
     except ValueError as exc:

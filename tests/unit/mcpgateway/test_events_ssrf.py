@@ -279,3 +279,138 @@ class TestDnsRebindingPin:
             other = socket.getaddrinfo("other.example", 443, proto=socket.IPPROTO_TCP)
         assert {i[4][0] for i in pinned} == {"93.184.216.34"}
         assert {i[4][0] for i in other} == {"8.8.8.8"}
+
+
+# --------------------------------------------------------------------------- #
+# WS1 - egress allow-list: an in-cluster ClusterIP receiver may be reached     #
+# --------------------------------------------------------------------------- #
+class TestAllowHosts:
+    """WS1: ``allow_hosts`` lets a named in-cluster host (e.g. ``bud-budprompt``)
+    bypass the private-IP denial and use ``http``, while every other SSRF guard
+    (userinfo, denied-by-name metadata, non-listed private hosts, dangerous
+    schemes) stays fully intact and DNS-rebinding pinning is preserved.
+    """
+
+    def test_allow_listed_private_host_passes_and_pins(self, monkeypatch):
+        """(a) An allow-listed host resolving to a private IP passes and pins it.
+
+        ``bud-budprompt`` is a ClusterIP receiver that resolves to a 10.42.x.x
+        pod/service address. Without the allowlist this would be a ``private
+        address`` rejection; with it, the IP is still resolved and pinned (so
+        rebinding protection is unchanged), but the denial is skipped.
+        """
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"bud-budprompt": "10.42.0.17"}))
+        target = validate_and_pin(
+            "https://bud-budprompt/cb",
+            allow_hosts={"bud-budprompt"},
+        )
+        assert isinstance(target, PinnedTarget)
+        assert target.host == "bud-budprompt"
+        assert target.ip == "10.42.0.17"
+        assert target.port == 443
+
+    def test_allow_listed_host_is_case_insensitive(self, monkeypatch):
+        """The allow-list match is case-insensitive on the hostname."""
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"bud-budprompt": "10.42.0.17"}))
+        target = validate_and_pin(
+            "https://BUD-BudPrompt/cb",
+            allow_hosts={"Bud-BudPrompt"},
+        )
+        assert target.ip == "10.42.0.17"
+
+    def test_http_permitted_only_for_allow_listed_host(self, monkeypatch):
+        """(b) ``http`` is permitted for an allow-listed host even under https_only.
+
+        The adapter still runs https-only by default, so the only way an http
+        ClusterIP target is reachable is via the allowlist.
+        """
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"bud-budprompt": "10.42.0.17"}))
+        target = validate_and_pin(
+            "http://bud-budprompt/cb",
+            allow_hosts={"bud-budprompt"},
+        )
+        assert target.scheme == "http"
+        assert target.ip == "10.42.0.17"
+        assert target.port == 80
+
+    def test_http_rejected_for_non_allow_listed_host(self, monkeypatch):
+        """(b) ``http`` to a NON-listed host is still rejected under https_only.
+
+        The allow-list relaxes the scheme only for its own hosts; another host
+        on the same allow_hosts set must not borrow the http relaxation.
+        """
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"other.svc": "10.42.0.99"}))
+        with pytest.raises(SsrfError):
+            validate_and_pin("http://other.svc/cb", allow_hosts={"bud-budprompt"})
+
+    def test_non_listed_private_host_still_rejected(self, monkeypatch):
+        """(c) A NON-listed host resolving to a private IP still raises SsrfError."""
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"intranet.svc": "10.42.0.50"}))
+        with pytest.raises(SsrfError):
+            validate_and_pin("https://intranet.svc/cb", allow_hosts={"bud-budprompt"})
+
+    def test_userinfo_still_rejected_for_allow_listed_host(self, monkeypatch):
+        """(d) Userinfo is rejected even when the host is allow-listed."""
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"bud-budprompt": "10.42.0.17"}))
+        with pytest.raises(SsrfError):
+            validate_and_pin("https://user@bud-budprompt/cb", allow_hosts={"bud-budprompt"})
+
+    def test_metadata_google_internal_still_denied_when_allow_listed(self, monkeypatch):
+        """(e) ``metadata.google.internal`` stays denied-by-name even if allow-listed.
+
+        Allow-listing must never be able to launder the cloud-metadata alias.
+        """
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            _fake_getaddrinfo({"metadata.google.internal": "10.42.0.17"}),
+        )
+        with pytest.raises(SsrfError):
+            validate_and_pin(
+                "https://metadata.google.internal/computeMetadata/v1/",
+                allow_hosts={"metadata.google.internal"},
+            )
+
+    def test_dangerous_scheme_still_rejected_when_allow_listed(self, monkeypatch):
+        """A non-http(s) scheme (file/gopher) is rejected even for an allow-listed host."""
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"bud-budprompt": "10.42.0.17"}))
+        with pytest.raises(SsrfError):
+            validate_and_pin("gopher://bud-budprompt/x", allow_hosts={"bud-budprompt"})
+        with pytest.raises(SsrfError):
+            validate_and_pin("file:///etc/passwd", allow_hosts={"bud-budprompt"})
+
+    def test_allow_listed_ip_literal_private_passes_and_pins(self, monkeypatch):
+        """An allow-listed *IP-literal* private host is pinned (literal path)."""
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({}))
+        target = validate_and_pin(
+            "http://10.42.0.17/cb",
+            allow_hosts={"10.42.0.17"},
+        )
+        assert target.ip == "10.42.0.17"
+        assert target.scheme == "http"
+
+    def test_allow_listed_host_rebinding_pin_holds(self, monkeypatch):
+        """An allow-listed host still resolves+pins a concrete IP (rebinding defence).
+
+        Even though the private-IP denial is skipped, ``validate_and_pin`` must
+        still resolve once and return a concrete pinned IP so the delivery socket
+        connects to exactly that address, not whatever a flipped resolver returns.
+        """
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"bud-budprompt": "10.42.0.17"}))
+        target = validate_and_pin("http://bud-budprompt/cb", allow_hosts={"bud-budprompt"})
+        # The pin must be a concrete address (not the hostname) so pinned_getaddrinfo
+        # can force the connect to it.
+        assert target.ip == "10.42.0.17"
+        socket.inet_aton(target.ip)  # raises if not a valid IPv4 literal
+
+    def test_empty_allow_hosts_is_unchanged_behavior(self, monkeypatch):
+        """(f) An empty/None allow_hosts keeps the original denial behavior."""
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"bud-budprompt": "10.42.0.17"}))
+        with pytest.raises(SsrfError):
+            validate_and_pin("https://bud-budprompt/cb", allow_hosts=set())
+        with pytest.raises(SsrfError):
+            validate_and_pin("https://bud-budprompt/cb", allow_hosts=None)
+        # And http stays rejected when not allow-listed.
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({"pub.example": "93.184.216.34"}))
+        with pytest.raises(SsrfError):
+            validate_and_pin("http://pub.example/cb")

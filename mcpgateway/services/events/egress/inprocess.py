@@ -205,7 +205,9 @@ def get_egress_adapter(subscriber_kind: str) -> EgressAdapter:
 
     if _http_callback_adapter is None:
         # First-Party
+        from mcpgateway.config import settings  # pylint: disable=import-outside-toplevel
         from mcpgateway.services.events.egress.http_callback import HttpCallbackEgressAdapter  # pylint: disable=import-outside-toplevel
 
-        _http_callback_adapter = HttpCallbackEgressAdapter()
+        allow_hosts = set(getattr(settings, "mcpgateway_events_egress_allow_hosts", None) or [])
+        _http_callback_adapter = HttpCallbackEgressAdapter(allow_hosts=allow_hosts or None)
     return _http_callback_adapter

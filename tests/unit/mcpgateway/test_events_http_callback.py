@@ -56,7 +56,6 @@ import httpx
 import pytest
 
 # First-Party
-from mcpgateway.services.events.egress.base import DeliveryOutcome
 from mcpgateway.services.events.egress.http_callback import HttpCallbackEgressAdapter
 from mcpgateway.services.events.egress.ssrf import SsrfError
 
@@ -496,6 +495,113 @@ class TestSsrfBlockedAtDelivery:
         assert out.ok is False
         if targets:
             assert all(t[0] == public_ip for t in targets), targets
+
+
+# --------------------------------------------------------------------------- #
+# WS1 - egress allow-list: an in-cluster ClusterIP receiver is reachable        #
+# --------------------------------------------------------------------------- #
+class TestEgressAllowHosts:
+    """The adapter threads ``allow_hosts`` into the SSRF guard so a named
+    in-cluster receiver (e.g. ``bud-budprompt``) can be reached over http on a
+    private ClusterIP, while every other host stays fully guarded.
+    """
+
+    def test_pin_allow_listed_private_http_host(self, monkeypatch):
+        """``_pin`` pins an allow-listed private http host (https_only default)."""
+        monkeypatch.setattr(
+            "mcpgateway.services.events.egress.ssrf.socket.getaddrinfo",
+            _gai_mapping({"bud-budprompt": "10.42.0.17"}),
+            raising=False,
+        )
+        adapter = HttpCallbackEgressAdapter(allow_hosts={"bud-budprompt"})
+        target = adapter._pin("http://bud-budprompt/cb")  # pylint: disable=protected-access
+        assert target.ip == "10.42.0.17"
+        assert target.scheme == "http"
+        assert target.port == 80
+
+    def test_pin_non_listed_private_host_blocked(self, monkeypatch):
+        """A NON-listed private host is still rejected by ``_pin``."""
+        monkeypatch.setattr(
+            "mcpgateway.services.events.egress.ssrf.socket.getaddrinfo",
+            _gai_mapping({"intranet.svc": "10.42.0.50"}),
+            raising=False,
+        )
+        adapter = HttpCallbackEgressAdapter(allow_hosts={"bud-budprompt"})
+        with pytest.raises(SsrfError):
+            adapter._pin("https://intranet.svc/cb")  # pylint: disable=protected-access
+
+    def test_pin_userinfo_blocked_even_when_allow_listed(self, monkeypatch):
+        """Userinfo is still refused for an allow-listed host."""
+        monkeypatch.setattr(
+            "mcpgateway.services.events.egress.ssrf.socket.getaddrinfo",
+            _gai_mapping({"bud-budprompt": "10.42.0.17"}),
+            raising=False,
+        )
+        adapter = HttpCallbackEgressAdapter(allow_hosts={"bud-budprompt"})
+        with pytest.raises(SsrfError):
+            adapter._pin("https://user@bud-budprompt/cb")  # pylint: disable=protected-access
+
+    @pytest.mark.asyncio
+    async def test_allow_listed_host_no_ssrf_block_on_delivery(self, monkeypatch):
+        """An allow-listed private http host is NOT ssrf_blocked at delivery time.
+
+        The connect is spied to fail (transient) so no real socket is needed; the
+        point is the outcome is NOT the permanent ``ssrf_blocked`` the guard
+        would otherwise produce for a 10.42.x.x http target.
+        """
+        monkeypatch.setattr(
+            "mcpgateway.services.events.egress.ssrf.socket.getaddrinfo",
+            _gai_mapping({"bud-budprompt": "10.42.0.17"}),
+            raising=False,
+        )
+
+        targets = []
+
+        def _spy_connect(self, addr):  # pragma: no cover - connection fails by design.
+            targets.append(addr)
+            raise ConnectionRefusedError("blocked in test")
+
+        monkeypatch.setattr(socket.socket, "connect", _spy_connect)
+
+        adapter = HttpCallbackEgressAdapter(
+            allow_hosts={"bud-budprompt"},
+            total_timeout=1.0,
+            connect_timeout=1.0,
+            read_timeout=1.0,
+        )
+        out = await adapter.deliver(
+            delivery_envelope=_envelope(),
+            subscription=_Sub("http://bud-budprompt/cb"),
+        )
+        # Guard passed (no permanent ssrf_blocked); the failure is transient.
+        assert out.error != "ssrf_blocked"
+        assert out.ok is False
+        if targets:
+            assert all(t[0] == "10.42.0.17" for t in targets), targets
+
+    @pytest.mark.asyncio
+    async def test_non_listed_private_http_still_ssrf_blocked(self):
+        """Without the allow-list a private http target is permanent ssrf_blocked."""
+        adapter = HttpCallbackEgressAdapter()  # no allow_hosts; production default.
+        out = await adapter.deliver(
+            delivery_envelope=_envelope(),
+            subscription=_Sub("http://bud-budprompt/cb"),
+        )
+        assert out.ok is False
+        assert out.permanent is True
+        assert out.error == "ssrf_blocked"
+
+
+def _gai_mapping(mapping):
+    """Build a fake getaddrinfo mapping host -> a single IPv4 string."""
+
+    def _inner(host, port, *args, **kwargs):
+        ip = mapping.get(host)
+        if ip is None:
+            raise socket.gaierror(f"no fake record for {host}")
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip, port if isinstance(port, int) else 0))]
+
+    return _inner
 
 
 # --------------------------------------------------------------------------- #
