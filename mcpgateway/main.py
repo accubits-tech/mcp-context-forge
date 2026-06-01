@@ -94,6 +94,8 @@ from mcpgateway.middleware.security_headers import SecurityHeadersMiddleware
 from mcpgateway.middleware.token_scoping import token_scoping_middleware
 from mcpgateway.observability import init_telemetry
 from mcpgateway.plugins.framework import PluginError, PluginManager, PluginViolationError
+from mcpgateway.routers.subscriptions import router as subscriptions_router
+from mcpgateway.routers.webhooks import router as webhooks_router
 from mcpgateway.routers.well_known import router as well_known_router
 from mcpgateway.schemas import (
     A2AAgentCreate,
@@ -105,6 +107,7 @@ from mcpgateway.schemas import (
     BulkAuthConfigResponse,
     BulkAuthConfigResult,
     GatewayCreate,
+    GatewayEnableEventsRequest,
     GatewayRead,
     GatewayUpdate,
     JsonPathModifier,
@@ -144,22 +147,22 @@ from mcpgateway.services.metrics import setup_metrics
 from mcpgateway.services.openapi_service import OpenAPIError, OpenAPIParsingError, OpenAPIService, OpenAPIValidationError
 from mcpgateway.services.prompt_service import PromptError, PromptNameConflictError, PromptNotFoundError, PromptService
 from mcpgateway.services.resource_service import ResourceError, ResourceNotFoundError, ResourceService, ResourceURIConflictError
-from mcpgateway.services.skill_service import SkillNotFoundError, SkillService, SkillValidationError
 from mcpgateway.services.root_service import RootService
 from mcpgateway.services.server_service import ServerError, ServerNameConflictError, ServerNotFoundError, ServerService
+from mcpgateway.services.skill_service import SkillNotFoundError, SkillService, SkillValidationError
 from mcpgateway.services.tag_service import TagService
 from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, ToolNotFoundError, ToolService
 from mcpgateway.transports.sse_transport import SSETransport
 from mcpgateway.transports.streamablehttp_transport import SessionManagerWrapper, streamable_http_auth
 from mcpgateway.utils.db_isready import wait_for_db_ready
-from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
-from mcpgateway.utils.services_auth import encode_auth
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.metadata_capture import MetadataCapture
 from mcpgateway.utils.orjson_response import ORJSONResponse
 from mcpgateway.utils.passthrough_headers import set_global_passthrough_headers
 from mcpgateway.utils.redis_isready import wait_for_redis_ready
 from mcpgateway.utils.retry_manager import ResilientHttpClient
+from mcpgateway.utils.services_auth import encode_auth
+from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
 from mcpgateway.utils.verify_credentials import require_auth, require_docs_auth_override, verify_jwt_token
 from mcpgateway.validation.jsonrpc import JSONRPCError
 
@@ -445,8 +448,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         # Initialize stdio bridge manager after gateway service
         if settings.mcpgateway_stdio_enabled:
-            from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
+            # First-Party
             from mcpgateway.db import get_db as _get_db_stdio  # pylint: disable=import-outside-toplevel
+            from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
 
             try:
                 _db_gen = _get_db_stdio()
@@ -461,8 +465,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         # Initialize deployment runtime service (gateway-hosted MCP server builds)
         if settings.mcpgateway_deploy_enabled:
-            from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
+            # First-Party
             from mcpgateway.db import get_db as _get_db_deploy  # pylint: disable=import-outside-toplevel
+            from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
 
             try:
                 _db_gen = _get_db_deploy()
@@ -515,6 +520,57 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Reconfigure uvicorn loggers after startup to capture access logs in dual output
         logging_service.configure_uvicorn_after_startup()
 
+        # Flag-gated L3 event delivery worker (FRD §8.7). Default (flag off) is a
+        # no-op so app startup is unaffected; any failure to start is swallowed
+        # so it can never block the gateway from coming up.
+        if settings.mcpgateway_events_enabled:
+            try:
+                # First-Party
+                from mcpgateway.services.events.delivery_worker import DeliveryWorker  # pylint: disable=import-outside-toplevel
+
+                _events_delivery_stop = asyncio.Event()
+                _events_delivery_worker = DeliveryWorker()
+                _events_delivery_task = asyncio.create_task(_events_delivery_worker.run(_events_delivery_stop))
+                _app.state.events_delivery_stop = _events_delivery_stop
+                _app.state.events_delivery_task = _events_delivery_task
+                logger.info("Event delivery worker started")
+            except Exception as e:  # noqa: BLE001 - never block startup on the optional worker.
+                logger.warning(f"Failed to start event delivery worker: {e}")
+
+        # Flag-gated MCP-native ingress (FRD §4.7 / FR-32). For every connector
+        # whose negotiated capabilities mark it ``ingress_mode == "mcp_native"``,
+        # hold a PERSISTENT upstream session open and relay its
+        # ``notifications/resources/updated`` as canonical events (fixing the
+        # one-shot drop). Default (flag off) is a no-op; any failure to start a
+        # manager is swallowed so it can never block the gateway from coming up.
+        if settings.mcpgateway_events_enabled:
+            try:
+                # First-Party
+                from mcpgateway.db import Gateway as _DbGateway  # pylint: disable=import-outside-toplevel
+                from mcpgateway.services.events.mcp_native import McpNativeSessionManager  # pylint: disable=import-outside-toplevel
+
+                _mcp_native_managers: List[Any] = []
+                with SessionLocal() as _db:
+                    _connectors = _db.query(_DbGateway).filter(_DbGateway.enabled.is_(True)).all()
+                    for _conn in _connectors:
+                        if not getattr(_conn, "events_enabled", False):
+                            continue
+                        _caps = getattr(_conn, "capabilities", None) or {}
+                        _events = _caps.get("events") if isinstance(_caps, dict) else None
+                        if not isinstance(_events, dict) or _events.get("ingress_mode") != "mcp_native":
+                            continue
+                        try:
+                            _mgr = McpNativeSessionManager(gateway=_conn)
+                            await _mgr.start()
+                            _mcp_native_managers.append(_mgr)
+                        except Exception as e:  # noqa: BLE001 - one connector must not block the others.
+                            logger.warning(f"Failed to start MCP-native session for connector {_conn.id}: {e}")
+                _app.state.mcp_native_managers = _mcp_native_managers
+                if _mcp_native_managers:
+                    logger.info(f"Started {len(_mcp_native_managers)} MCP-native ingress session(s)")
+            except Exception as e:  # noqa: BLE001 - never block startup on the optional adapter.
+                logger.warning(f"Failed to start MCP-native ingress sessions: {e}")
+
         yield
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
@@ -538,6 +594,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Shutdown stdio bridge manager before other services
         if settings.mcpgateway_stdio_enabled:
             try:
+                # First-Party
                 from mcpgateway.services.stdio_bridge_manager import stdio_bridge_manager  # pylint: disable=import-outside-toplevel
 
                 await stdio_bridge_manager.shutdown()
@@ -547,11 +604,39 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Shutdown deployment runtime service
         if settings.mcpgateway_deploy_enabled:
             try:
+                # First-Party
                 from mcpgateway.services.deployment_runtime_service import deployment_runtime_service  # pylint: disable=import-outside-toplevel
 
                 await deployment_runtime_service.shutdown()
             except Exception as e:
                 logger.error(f"Error shutting down deployment runtime service: {str(e)}")
+
+        # Stop the flag-gated event delivery worker, if it was started.
+        if settings.mcpgateway_events_enabled:
+            try:
+                stop_event = getattr(_app.state, "events_delivery_stop", None)
+                task = getattr(_app.state, "events_delivery_task", None)
+                if stop_event is not None:
+                    stop_event.set()
+                if task is not None:
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001 - best-effort drain.
+                        pass
+            except Exception as e:  # noqa: BLE001 - never block shutdown on the optional worker.
+                logger.error(f"Error shutting down event delivery worker: {str(e)}")
+
+        # Stop the flag-gated MCP-native ingress sessions, if any were started.
+        if settings.mcpgateway_events_enabled:
+            try:
+                for _mgr in getattr(_app.state, "mcp_native_managers", []) or []:
+                    try:
+                        await _mgr.stop()
+                    except Exception:  # noqa: BLE001 - best-effort per-session teardown.
+                        pass
+            except Exception as e:  # noqa: BLE001 - never block shutdown on the optional adapter.
+                logger.error(f"Error shutting down MCP-native ingress sessions: {str(e)}")
 
         logger.info("Shutting down MCP Gateway services")
         # await stop_streamablehttp()
@@ -5156,6 +5241,55 @@ async def toggle_gateway_status(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@gateway_router.post("/{gateway_id}/enable-events", response_model=GatewayRead)
+@require_permission("gateways.update")
+async def enable_gateway_events(
+    gateway_id: str,
+    request_body: GatewayEnableEventsRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Union[GatewayRead, JSONResponse]:
+    """Make an existing gateway events-ready (attach descriptor + inbound signing secret).
+
+    Required so a client (e.g. budapp provisioning an agent event trigger) can flip
+    an OAuth/tools gateway to events-ready over the API instead of a direct DB
+    write. The signing secret is write-only (stored encrypted, never returned).
+    Gated on the events master flag and per-resource ownership; idempotent
+    (re-invoking rotates the secret).
+
+    Args:
+        gateway_id: ID of the gateway to make events-ready.
+        request_body: The descriptor ref + inbound webhook signing secret.
+        db: Database session.
+        user: Authenticated user.
+
+    Returns:
+        The updated, masked gateway (never exposes the signing secret).
+    """
+    if not settings.mcpgateway_events_enabled:
+        # Opaque 404 when events are off — indistinguishable from an unmounted surface
+        # (mirrors the webhooks/subscriptions routers).
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    logger.debug(f"User '{user}' requested enable-events on gateway {gateway_id} (descriptor_ref={request_body.descriptor_ref})")
+    try:
+        user_email = user.get("email") if isinstance(user, dict) else str(user)
+        return await gateway_service.enable_events(
+            db,
+            gateway_id,
+            descriptor_ref=request_body.descriptor_ref,
+            webhook_signing_secret=request_body.webhook_signing_secret,
+            user_email=user_email,
+        )
+    except PermissionError as ex:
+        return JSONResponse(content={"message": str(ex)}, status_code=403)
+    except GatewayNotFoundError:
+        return JSONResponse(content={"message": "Gateway not found"}, status_code=status.HTTP_404_NOT_FOUND)
+    except GatewayError as ex:
+        return JSONResponse(content={"message": str(ex)}, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
+    except Exception:
+        return JSONResponse(content={"message": "Unexpected error"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @gateway_router.get("", response_model=List[GatewayRead])
 @gateway_router.get("/", response_model=List[GatewayRead])
 @require_permission("gateways.read")
@@ -5557,10 +5691,14 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
             # SEP-2640: advertise Agent Skills as `skill://` resources alongside the
             # normal MCP resources, plus the well-known `skill://index.json` discovery
             # doc. Scope follows the server_id split we already use for resources.
-            from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
+            # Third-Party
             from sqlalchemy import select  # pylint: disable=import-outside-toplevel
 
+            # First-Party
+            from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
+
             if server_id:
+                # First-Party
                 from mcpgateway.db import server_skill_association as _ssa  # pylint: disable=import-outside-toplevel
 
                 skill_rows = list(db.execute(select(DbSkill).join(_ssa, DbSkill.id == _ssa.c.skill_id).where(_ssa.c.server_id == server_id, DbSkill.is_active.is_(True))).scalars().all())
@@ -5579,11 +5717,15 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
             if isinstance(uri, str) and uri.startswith("skill://"):
                 # SEP-2640 skill resource — dispatch to SkillService. Server-scoped reads
                 # are limited to skills actually composed onto this virtual server.
-                from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
+                # Third-Party
                 from sqlalchemy import select  # pylint: disable=import-outside-toplevel
+
+                # First-Party
+                from mcpgateway.db import Skill as DbSkill  # pylint: disable=import-outside-toplevel
 
                 scope = None
                 if server_id:
+                    # First-Party
                     from mcpgateway.db import server_skill_association as _ssa  # pylint: disable=import-outside-toplevel
 
                     scope = list(db.execute(select(DbSkill).join(_ssa, DbSkill.id == _ssa.c.skill_id).where(_ssa.c.server_id == server_id, DbSkill.is_active.is_(True))).scalars().all())
@@ -6646,6 +6788,18 @@ app.include_router(registry_router)
 app.include_router(metrics_router)
 app.include_router(tag_router)
 app.include_router(export_import_router)
+
+# Generic webhook ingress route for server-initiated events. The route is always
+# mounted; the handler itself returns 404 when settings.mcpgateway_events_enabled
+# is False so it is indistinguishable from an unmounted path.
+app.include_router(webhooks_router)
+
+# Conditionally include the event-subscriptions router when events are enabled.
+if settings.mcpgateway_events_enabled:
+    app.include_router(subscriptions_router)
+    logger.info("Subscriptions router included - events features enabled")
+else:
+    logger.info("Subscriptions router not included - events features disabled")
 
 # Conditionally include observability router if enabled
 if settings.observability_enabled:

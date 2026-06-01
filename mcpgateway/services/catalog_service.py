@@ -36,6 +36,39 @@ from mcpgateway.utils.create_slug import slugify
 logger = logging.getLogger(__name__)
 
 
+def _build_events_capability(events_block: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the non-secret ``capabilities.events`` block (FRD §5.2) from a catalog entry.
+
+    The catalog YAML declares only non-secret event metadata. This normalizes it
+    into the exact shape persisted under ``Gateway.capabilities["events"]`` and read
+    back by the ingress pipeline and ``GatewayRead``. Secrets are never included here
+    (the signing secret lives only in the encrypted ``webhook_signing_secret`` column).
+
+    Args:
+        events_block: The ``events`` mapping from a catalog server entry.
+
+    Returns:
+        The normalized ``capabilities.events`` sub-object using camelCase aliases.
+    """
+    ingress_in = events_block.get("ingress") or {}
+    descriptor_ref = ingress_in.get("descriptor_ref")
+    ingress = {
+        "mode": ingress_in.get("mode", "webhook"),
+        "descriptor_ref": descriptor_ref,
+        "path": ingress_in.get("path", "/webhooks/{conn-id}"),
+    }
+    capability: Dict[str, Any] = {
+        "webhooksSupported": bool(events_block.get("webhooksSupported", True)),
+        "ingress": ingress,
+        "eventTypes": list(events_block.get("eventTypes", []) or []),
+        "extraOAuthScopes": list(events_block.get("extraOAuthScopes", []) or []),
+    }
+    delivery = events_block.get("delivery")
+    if isinstance(delivery, dict):
+        capability["delivery"] = dict(delivery)
+    return capability
+
+
 class CatalogService:
     """Service for managing MCP server catalog."""
 
@@ -44,6 +77,69 @@ class CatalogService:
         self._catalog_cache: Optional[Dict[str, Any]] = None
         self._cache_timestamp: float = 0
         self._gateway_service = GatewayService()
+
+    @staticmethod
+    def _events_persistence_fields(server_data: Dict[str, Any], request: Optional["CatalogServerRegisterRequest"]) -> Optional[Dict[str, Any]]:
+        """Compute the Gateway row fields needed to persist a catalog ``events`` block.
+
+        Returns ``None`` (no-op) when the catalog entry declares no ``events`` block,
+        leaving the non-events registration path completely unchanged.
+
+        When an events block is present, the returned dict carries:
+
+        * ``events_capability`` - the non-secret ``capabilities.events`` sub-object
+          (FRD §5.2) to merge into ``Gateway.capabilities``.
+        * ``events_enabled`` - ``True`` only when an inbound webhook signing secret was
+          supplied (verification requires it); otherwise ``False`` (advertised, not active).
+        * ``webhook_signing_secret`` - the encrypted secret blob (or ``None``); never plaintext,
+          never placed under ``capabilities``.
+        * ``webhook_secret_algo`` - the descriptor verify strategy (e.g. ``hmac_timestamped``).
+
+        Args:
+            server_data: The catalog server entry.
+            request: The registration request (may carry ``webhook_signing_secret``).
+
+        Returns:
+            The persistence-fields mapping, or ``None`` if there is no events block.
+        """
+        events_block = server_data.get("events")
+        if not isinstance(events_block, dict):
+            return None
+
+        events_capability = _build_events_capability(events_block)
+        descriptor_ref = events_capability["ingress"].get("descriptor_ref")
+
+        supplied_secret = getattr(request, "webhook_signing_secret", None) if request else None
+
+        webhook_signing_secret = None
+        webhook_secret_algo = None
+        events_enabled = False
+
+        if supplied_secret:
+            try:
+                # First-Party
+                from mcpgateway.services.events.descriptors import get_descriptor  # pylint: disable=import-outside-toplevel
+                from mcpgateway.utils.services_auth import encode_auth  # pylint: disable=import-outside-toplevel
+
+                webhook_signing_secret = encode_auth({"secret": supplied_secret})
+                descriptor = get_descriptor(descriptor_ref) if descriptor_ref else None
+                if descriptor is not None:
+                    webhook_secret_algo = descriptor.verify.get("strategy")
+                events_enabled = True
+            except Exception as exc:  # pragma: no cover - defensive; keep registration robust
+                logger.warning(f"Failed to prepare events signing secret for catalog server {server_data.get('id')}: {exc}")
+                webhook_signing_secret = None
+                webhook_secret_algo = None
+                events_enabled = False
+        else:
+            logger.info(f"Catalog server {server_data.get('id')} declares events but no webhook signing secret was supplied; advertising capability with events disabled.")
+
+        return {
+            "events_capability": events_capability,
+            "events_enabled": events_enabled,
+            "webhook_signing_secret": webhook_signing_secret,
+            "webhook_secret_algo": webhook_secret_algo,
+        }
 
     async def load_catalog(self, force_reload: bool = False) -> Dict[str, Any]:
         """Load catalog from YAML file.
@@ -419,6 +515,14 @@ class CatalogService:
                         error="name_conflict",
                     )
 
+                # Fold any declared (non-secret) events capability into the row, and
+                # store the inbound webhook signing secret (if supplied) ONLY in the
+                # dedicated encrypted column. See _apply_events_to_row for the rules.
+                initial_capabilities: Dict[str, Any] = {}
+                events_fields = self._events_persistence_fields(server_data, request)
+                if events_fields:
+                    initial_capabilities = {"events": events_fields["events_capability"]}
+
                 db_gateway = DbGateway(
                     name=gateway_data["name"],
                     slug=slug_name,
@@ -426,7 +530,7 @@ class CatalogService:
                     description=gateway_data["description"],
                     tags=gateway_data.get("tags", []),
                     transport=gateway_data["transport"],
-                    capabilities={},
+                    capabilities=initial_capabilities,
                     auth_type="oauth" if oauth_config_for_gateway else None,
                     oauth_config=oauth_config_for_gateway,
                     enabled=False,  # Disabled until OAuth credentials are configured
@@ -436,6 +540,10 @@ class CatalogService:
                     owner_email=owner_email,
                     version=1,
                 )
+                if events_fields:
+                    db_gateway.events_enabled = events_fields["events_enabled"]
+                    db_gateway.webhook_signing_secret = events_fields["webhook_signing_secret"]
+                    db_gateway.webhook_secret_algo = events_fields["webhook_secret_algo"]
 
                 db.add(db_gateway)
                 db.commit()
@@ -469,6 +577,25 @@ class CatalogService:
             )
 
             logger.info(f"Registered catalog server: {gateway_read.name} ({catalog_id})")
+
+            # Fold any declared (non-secret) events capability onto the persisted row.
+            # register_gateway overwrites capabilities with the discovered set, so the
+            # events block MUST be applied AFTER it returns. register_gateway returns a
+            # masked GatewayRead, so reload the live ORM row by id to mutate + commit.
+            events_fields = self._events_persistence_fields(server_data, request)
+            if events_fields and gateway_read.id:
+                # First-Party
+                from mcpgateway.db import Gateway as DbGateway  # pylint: disable=import-outside-toplevel
+
+                row = db.get(DbGateway, gateway_read.id)
+                if row is not None:
+                    existing_caps = dict(row.capabilities or {})
+                    existing_caps["events"] = events_fields["events_capability"]
+                    row.capabilities = existing_caps
+                    row.events_enabled = events_fields["events_enabled"]
+                    row.webhook_signing_secret = events_fields["webhook_signing_secret"]
+                    row.webhook_secret_algo = events_fields["webhook_secret_algo"]
+                    db.commit()
 
             # Query for tools discovered from this gateway
             # First-Party

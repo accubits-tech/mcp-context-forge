@@ -29,7 +29,7 @@ import uuid
 
 # Third-Party
 import jsonschema
-from sqlalchemy import Boolean, Column, create_engine, DateTime, event, Float, ForeignKey, func, Index, Integer, JSON, make_url, select, String, Table, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, create_engine, DateTime, event, Float, ForeignKey, func, Index, Integer, JSON, make_url, select, String, Table, Text, text, UniqueConstraint
 from sqlalchemy.event import listen
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -2971,6 +2971,12 @@ class Gateway(Base):
     # OAuth configuration
     oauth_config: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True, comment="OAuth 2.0 configuration including grant_type, client_id, encrypted client_secret, URLs, and scopes")
 
+    # Events / triggers configuration
+    webhook_signing_secret: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # encrypted at rest via encode_auth/decode_auth; ONLY storage location for the inbound signing secret
+    webhook_secret_algo: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    hook_state: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # {event_type: {external_hook_id, refcount, registered_at, scopes_granted}}
+    events_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # Team scoping fields for resource organization
     team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), nullable=True)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -3053,6 +3059,125 @@ class GatewaySecurityScanFinding(Base):
         Index("ix_security_findings_gw_sev", "gateway_id", "severity"),
         Index("ix_security_findings_gw_run", "gateway_id", "scan_run_id"),
     )
+
+
+class EventSubscription(Base):
+    """A subscription that delivers matched gateway events to a subscriber.
+
+    FK-only model: relationships deferred to the milestone that needs them.
+    """
+
+    __tablename__ = "event_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    gateway_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("gateways.id", ondelete="CASCADE"), index=True, nullable=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_teams.id", ondelete="SET NULL"), index=True, nullable=True)
+    owner_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    subscriber_kind: Mapped[str] = mapped_column(String(20), nullable=False)  # "http_callback" | "sse" | "ws"
+    callback_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    subscriber_target_ref: Mapped[Optional[str]] = mapped_column(String(767), nullable=True)
+    target: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)  # {agent_id, version, params}
+    source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    event_types: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)  # reverse-DNS glob list
+    filter_expr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # CEL
+    mode: Mapped[str] = mapped_column(String(12), nullable=False, default="fanout")  # "fanout" | "correlate"
+    correlation_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    correlation_value: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    delivery: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_event_subs_tenant_source_active", "team_id", "source", "active"
+        ),  # tenant-leading candidate scan (FRD §5.4.1/§10.1.7); event_types is a JSON glob list matched in the app/CEL stage, so it is not a btree key
+        Index("ix_event_subscriptions_gw_mode", "gateway_id", "mode"),
+        Index("ix_event_subscriptions_corr_value", "correlation_value"),
+        # Partial unique backstop: at most one live correlate waiter per
+        # (team_id, correlation_value). The WHERE clause keeps fanout rows
+        # (NULL correlation_value) exempt; SQLite >=3.8.0 and PostgreSQL both
+        # honor partial UNIQUE indexes. App-level active/expiry checks remain
+        # the primary guard (see correlate.open_correlation); this index is the
+        # race backstop.
+        Index(
+            "uq_event_sub_active_corr_value",
+            "team_id",
+            "correlation_value",
+            unique=True,
+            sqlite_where=text("correlation_value IS NOT NULL"),
+            postgresql_where=text("correlation_value IS NOT NULL"),
+        ),
+    )
+
+
+class EventLog(Base):
+    """A persisted inbound event envelope; ``(evt_source, evt_id)`` is the dedup key.
+
+    FK-only model: relationships deferred to the milestone that needs them.
+    """
+
+    __tablename__ = "event_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    evt_id: Mapped[str] = mapped_column(String(255), nullable=False)  # envelope id = dedup key
+    evt_source: Mapped[str] = mapped_column(String(767), nullable=False)
+    evt_type: Mapped[str] = mapped_column(String(255), nullable=False)  # reverse-DNS type
+    evt_subject: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    evt_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    gateway_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("gateways.id", ondelete="CASCADE"), index=True, nullable=True)
+    provider_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    data: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    raw_headers: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("evt_source", "evt_id", name="uq_event_log_source_id"),
+        Index("ix_event_log_gw_type_time", "gateway_id", "evt_type", "received_at"),
+    )
+
+
+class DeliveryAttempt(Base):
+    """A single delivery attempt of an event to a subscription.
+
+    FK-only model: relationships deferred to the milestone that needs them.
+    """
+
+    __tablename__ = "delivery_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    event_id: Mapped[str] = mapped_column(String(36), ForeignKey("event_log.id", ondelete="CASCADE"), index=True, nullable=False)
+    subscription_id: Mapped[str] = mapped_column(String(36), ForeignKey("event_subscriptions.id", ondelete="CASCADE"), index=True, nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # pending|delivered|retrying|failed
+    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    __table_args__ = (
+        Index("ix_delivery_attempts_event_sub", "event_id", "subscription_id"),
+        Index("ix_delivery_attempts_retry", "status", "next_retry_at"),
+        UniqueConstraint("event_id", "subscription_id", "attempt_no", name="uq_delivery_attempt_event_sub_no"),
+    )
+
+
+class DeadLetter(Base):
+    """An event/subscription pair that exhausted retries and was parked.
+
+    FK-only model: relationships deferred to the milestone that needs them.
+    """
+
+    __tablename__ = "dead_letters"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    event_id: Mapped[str] = mapped_column(String(36), ForeignKey("event_log.id", ondelete="CASCADE"), index=True, nullable=False)
+    subscription_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("event_subscriptions.id", ondelete="SET NULL"), index=True, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    payload_snapshot: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class A2AAgent(Base):

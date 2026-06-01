@@ -363,6 +363,20 @@ class Settings(BaseSettings):
     mcpgateway_a2a_max_retries: int = 3
     mcpgateway_a2a_metrics_enabled: bool = True
 
+    # Triggers & Events Feature Flags (FRD §11.3 - disabled by default)
+    mcpgateway_events_enabled: bool = Field(default=False, description="Master switch for MCP triggers/events; all events functionality is gated on this flag")
+    mcpgateway_events_redis_stream_prefix: str = Field(default="mcpgw:events", description="Key prefix for the L2 Redis Streams used to durably buffer events")
+    mcpgateway_events_dedup_ttl_seconds: int = Field(default=86400, description="Deduplication window in seconds; must be >= the longest upstream provider retry window")
+    mcpgateway_events_max_delivery_attempts: int = Field(default=8, description="Maximum egress delivery attempts before an event is routed to the dead-letter queue")
+    mcpgateway_events_max_body_bytes: int = Field(default=26214400, description="Hard cap (25 MiB) on the size of an inbound webhook request body")
+    mcpgateway_events_signature_tolerance_seconds: int = Field(default=300, description="Replay window in seconds for hmac_timestamped signature verification recipes")
+    mcpgateway_events_correlation_sweep_enabled: bool = Field(default=False, description="Enable the periodic TTL sweep that expires abandoned correlate waiters (off by default)")
+    mcpgateway_events_correlation_sweep_interval_seconds: int = Field(default=60, description="Seconds between correlate-waiter TTL sweeps when the sweep is enabled")
+    mcpgateway_events_egress_allow_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="Hostnames whose egress callbacks bypass the private-IP SSRF denial and may use http (e.g. in-cluster ClusterIP receivers like bud-budprompt). Exact hostname match, case-insensitive. CSV or JSON list.",
+    )
+
     # gRPC Support Configuration (EXPERIMENTAL - disabled by default)
     mcpgateway_grpc_enabled: bool = Field(default=False, description="Enable gRPC to MCP translation support (experimental feature)")
     mcpgateway_grpc_reflection_enabled: bool = Field(default=True, description="Enable gRPC server reflection by default")
@@ -633,10 +647,10 @@ class Settings(BaseSettings):
             if violations:
                 for name in violations:
                     logger.error(
-                        "FATAL: Default credential detected for %s in production environment. " "You MUST set a strong, unique value before running in production.",
+                        "FATAL: Default credential detected for %s in production environment. You MUST set a strong, unique value before running in production.",
                         name,
                     )
-                logger.error("FATAL: Refusing to start with default credentials in production. " "Set the above environment variables to secure values and restart.")
+                logger.error("FATAL: Refusing to start with default credentials in production. Set the above environment variables to secure values and restart.")
                 raise SystemExit(1)
 
         # Check for dangerous combinations - only log warnings, don't raise errors
@@ -1155,6 +1169,7 @@ Disallow: /
         "sso_auto_admin_domains",
         "sso_github_admin_orgs",
         "sso_google_admin_domains",
+        "mcpgateway_events_egress_allow_hosts",
         mode="before",
     )
     @classmethod
@@ -1502,7 +1517,9 @@ Disallow: /
     # when the gateway runs on the host directly. Set to 0.0.0.0 when the gateway runs
     # in a container and needs to reach the deployed port via the docker bridge — the
     # host firewall MUST then block the deploy port range from the public internet.
-    mcpgateway_deploy_bind_host: str = Field(default="127.0.0.1", description="Host interface to publish deployed container ports on (127.0.0.1 for host-installed gateway, 0.0.0.0 for containerized gateway)")
+    mcpgateway_deploy_bind_host: str = Field(
+        default="127.0.0.1", description="Host interface to publish deployed container ports on (127.0.0.1 for host-installed gateway, 0.0.0.0 for containerized gateway)"
+    )
     # Hostname the gateway uses to reach the deployed container's published port.
     # 127.0.0.1 (default) works when the gateway runs on the host. Set to
     # host.docker.internal when the gateway runs in a container; on Linux Docker also

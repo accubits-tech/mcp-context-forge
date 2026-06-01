@@ -301,7 +301,7 @@ class GatewayDuplicateConflictError(GatewayError):
         status = "active" if self.enabled else "inactive"
 
         # Construct error message
-        message = f"The Server already exists in {scope_desc} " f"(Name: {self.name}, Status: {status})"
+        message = f"The Server already exists in {scope_desc} (Name: {self.name}, Status: {status})"
 
         # Add helpful hint for inactive gateways
         if not self.enabled:
@@ -965,15 +965,9 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                 from mcpgateway.config import settings as _deploy_settings  # pylint: disable=import-outside-toplevel
 
                 if team_id:
-                    existing = (
-                        db.query(DbGateway)
-                        .filter(DbGateway.team_id == team_id, DbGateway.deployment_source.isnot(None))
-                        .count()
-                    )
+                    existing = db.query(DbGateway).filter(DbGateway.team_id == team_id, DbGateway.deployment_source.isnot(None)).count()
                     if existing >= _deploy_settings.mcpgateway_deploy_max_per_team:
-                        raise RuntimeError(
-                            f"deployment quota reached for team (max {_deploy_settings.mcpgateway_deploy_max_per_team})"
-                        )
+                        raise RuntimeError(f"deployment quota reached for team (max {_deploy_settings.mcpgateway_deploy_max_per_team})")
                 # Archive ingress happens out-of-band via upload endpoint; the spec carries a token
                 # resolved to a local archive path by the admin route before register_gateway is called.
                 from mcpgateway.services.security.errors import SecurityGateError  # pylint: disable=import-outside-toplevel
@@ -1009,10 +1003,7 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
                     except Exception as commit_err:  # noqa: BLE001 - best effort, log and continue
                         db.rollback()
                         logger.warning("could not commit security-scan findings for gateway %s: %s", pre_generated_id, commit_err)
-                    raise RuntimeError(
-                        f"security gate blocked deploy at {gate_err.stage}: "
-                        f"{gate_err.report.summary.blocking_findings_count} blocking finding(s)"
-                    ) from gate_err
+                    raise RuntimeError(f"security gate blocked deploy at {gate_err.stage}: {gate_err.report.summary.blocking_findings_count} blocking finding(s)") from gate_err
                 normalized_url = f"http://{settings.mcpgateway_deploy_bridge_host}:{host_port}/mcp"
                 effective_transport = "STREAMABLEHTTP"
                 scan_report = deployment_runtime_service.consume_scan_report(pre_generated_id)
@@ -2116,6 +2107,104 @@ class GatewayService:  # pylint: disable=too-many-instance-attributes
             return GatewayRead.model_validate(self._prepare_gateway_for_read(gateway)).masked()
 
         raise GatewayNotFoundError(f"Gateway not found: {gateway_id}")
+
+    async def enable_events(
+        self,
+        db: Session,
+        gateway_id: str,
+        descriptor_ref: str,
+        webhook_signing_secret: str,
+        user_email: Optional[str] = None,
+    ) -> GatewayRead:
+        """Make an existing gateway events-ready (set descriptor + inbound signing secret).
+
+        Folds the non-secret ``capabilities.events`` block (descriptor_ref +
+        ``webhooksSupported``) onto the row, stores the inbound webhook signing
+        secret ENCRYPTED in the dedicated ``webhook_signing_secret`` column only
+        (never plaintext, never under capabilities), records the descriptor's
+        verify strategy in ``webhook_secret_algo``, and flips ``events_enabled``.
+
+        This is the API-driven equivalent of the catalog events-persistence path
+        (:func:`mcpgateway.services.catalog_service._build_events_capability` /
+        ``_events_persistence_fields``), so the ingress pipeline can verify
+        inbound webhooks. It lets budapp provision triggers on a per-agent
+        connector gateway without a direct DB write. Idempotent: re-invoking
+        rotates the signing secret and re-affirms the capability.
+
+        Args:
+            db: Active SQLAlchemy session.
+            gateway_id: ID of the gateway to make events-ready.
+            descriptor_ref: Provider descriptor ref (e.g. ``"slack"``).
+            webhook_signing_secret: Inbound webhook signing secret (write-only).
+            user_email: When set, enforces per-resource ownership (BOLA).
+
+        Returns:
+            The updated, masked :class:`GatewayRead` (never exposes the secret).
+
+        Raises:
+            GatewayNotFoundError: If the gateway does not exist.
+            PermissionError: If ``user_email`` is set and is not the owner.
+            GatewayError: If ``descriptor_ref`` is unknown (mapped to 422).
+        """
+        gateway = db.get(DbGateway, gateway_id)
+        if not gateway:
+            raise GatewayNotFoundError(f"Gateway not found: {gateway_id}")
+
+        if user_email:
+            # First-Party
+            from mcpgateway.services.permission_service import PermissionService  # pylint: disable=import-outside-toplevel
+
+            permission_service = PermissionService(db)
+            if not await permission_service.check_resource_ownership(user_email, gateway):
+                raise PermissionError("Only the owner can enable events on this gateway")
+
+        # First-Party
+        from mcpgateway.services.events.descriptors import get_descriptor  # pylint: disable=import-outside-toplevel
+
+        descriptor = get_descriptor(descriptor_ref)
+        if descriptor is None:
+            raise GatewayError(f"Unknown events descriptor: {descriptor_ref}")
+
+        # Reuse the catalog capability builder so the persisted shape matches the
+        # ingress pipeline + GatewayRead exactly. Lazy import avoids a circular
+        # dependency (catalog_service imports GatewayService).
+        # First-Party
+        from mcpgateway.services.catalog_service import _build_events_capability  # pylint: disable=import-outside-toplevel
+
+        events_capability = _build_events_capability({"ingress": {"descriptor_ref": descriptor_ref}, "webhooksSupported": True})
+
+        # Build the secret blob. On rotation, carry the prior secret into
+        # ``secret_prev`` so the ingress verifier (which decodes both current and
+        # previous) keeps accepting in-flight webhooks signed with the old secret
+        # — a graceful rotation window rather than a hard fail-closed cutover.
+        secret_blob: Dict[str, Any] = {"secret": webhook_signing_secret}
+        existing_secret_blob = gateway.webhook_signing_secret
+        if existing_secret_blob:
+            try:
+                decoded = decode_auth(existing_secret_blob)
+                prev_secret = decoded.get("secret") if isinstance(decoded, dict) else None
+                if prev_secret and prev_secret != webhook_signing_secret:
+                    secret_blob["secret_prev"] = prev_secret
+            except Exception:  # pragma: no cover - defensive; a bad/legacy blob just means no grace window
+                logger.warning(f"Could not decode prior signing secret for gateway {gateway_id}; rotating without a grace window")
+
+        try:
+            existing_caps = dict(gateway.capabilities or {})
+            existing_caps["events"] = events_capability
+            gateway.capabilities = existing_caps
+            gateway.webhook_signing_secret = encode_auth(secret_blob)
+            gateway.webhook_secret_algo = descriptor.verify.get("strategy")
+            gateway.events_enabled = True
+            gateway.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(gateway)
+        except Exception as exc:
+            db.rollback()
+            raise GatewayError(f"Failed to enable events on gateway {gateway_id}: {exc}") from exc
+
+        logger.info(f"Enabled events on gateway {gateway_id} (descriptor_ref={descriptor_ref})")
+        gateway.team = self._get_team_name(db, getattr(gateway, "team_id", None))
+        return GatewayRead.model_validate(self._prepare_gateway_for_read(gateway)).masked()
 
     async def toggle_gateway_status(self, db: Session, gateway_id: str, activate: bool, reachable: bool = True, only_update_reachable: bool = False, user_email: Optional[str] = None) -> GatewayRead:
         """

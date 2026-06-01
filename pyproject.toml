@@ -108,6 +108,7 @@ dev = [
     "darglint>=1.8.1",
     "dlint>=0.16.0",
     "dodgy>=0.2.1",
+    "fakeredis>=2.36.0",
     "fawltydeps>=0.20.0",
     "flake8>=7.3.0",
     "gprof2dot>=2025.4.14",
@@ -228,6 +229,13 @@ asyncpg = [
 # Agent Lifecycle Toolkit(optional)
 altk = [
     "agent-lifecycle-toolkit>=0.4.1",
+]
+
+# MCP server-initiated events/triggers (optional)
+# CEL filter evaluation is only needed when events are enabled.
+# Install with: pip install mcp-contextforge-gateway[events]
+events = [
+    "cel-python>=0.5.0",
 ]
 
 # gRPC Support (EXPERIMENTAL - optional, disabled by default)
@@ -597,6 +605,7 @@ ignore_unused = [
   "coverage",
   "coverage-badge",
   "darglint",
+  "fakeredis",
   "flake8",
   "fawltydeps",
   "gprof2dot",
