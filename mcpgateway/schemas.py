@@ -2981,7 +2981,11 @@ class GatewayEnableEventsRequest(BaseModel):
     """
 
     descriptor_ref: str = Field(..., description="Events provider descriptor ref (e.g. 'slack', 'github', 'stripe')")
-    webhook_signing_secret: str = Field(..., description="Inbound webhook signing secret (write-only; stored encrypted, never returned)")
+    webhook_signing_secret: str = Field(
+        ...,
+        min_length=1,
+        description=("Inbound webhook signing secret (write-only; stored encrypted, never returned). Must be non-empty — an empty secret defeats inbound signature verification."),
+    )
 
 
 class TargetRef(BaseModel):
